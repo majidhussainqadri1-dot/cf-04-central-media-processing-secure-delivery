@@ -4,6 +4,7 @@
   "status": "source_inventory_complete_operational_inventory_pending",
   "runtime_authorized": false,
   "founder_source_freeze_approved": false,
+  "privacy_class_mapping_approved": false,
   "scope": [
     "file-10",
     "file-11",
@@ -20,6 +21,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "pending_domain_owner_and_file24_approval",
       "binary_role": "current_wordpress_media_source_owner",
       "storage_families": [
         "wordpress_media",
@@ -42,6 +44,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "pending_domain_owner_and_file24_approval",
       "binary_role": "consumer_of_file_10_video_assets",
       "storage_families": [
         "file_10_wordpress_media",
@@ -64,6 +67,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "pending_domain_owner_and_file24_approval",
       "binary_role": "encrypted_pdf_source_owner_and_cover_consumer",
       "storage_families": [
         "private_encrypted_filesystem",
@@ -86,6 +90,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "canonical_main_merge_for_reviewed_2_0_0",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "pending_domain_owner_and_file24_approval",
       "binary_role": "private_attachment_record_and_byte_owner",
       "storage_families": [
         "private_hashed_filesystem_with_owner_table"
@@ -109,6 +114,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "canonical_main_merge_after_public_rendering_correction",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "pending_domain_owner_and_file24_approval",
       "binary_role": "wordpress_media_upload_and_attachment_owner_for_publication",
       "storage_families": [
         "wordpress_media"
@@ -133,6 +139,7 @@
       "evidence_ref_immutable": true,
       "ref_status": "canonical_main_0_3_0_with_open_r8_diagnostic_candidate",
       "founder_accepted_source_ref": false,
+      "privacy_mapping_status": "not_a_media_authority_owner_mapping_required_from_native_domain",
       "binary_role": "orchestration_only",
       "storage_families": [],
       "media_classes": [],
@@ -205,10 +212,17 @@
       "severity": "critical_for_future_migration",
       "title": "File 12 key migration requires a separate security ceremony",
       "status": "blocked"
+    },
+    {
+      "id": "C4A-F-007",
+      "severity": "high",
+      "title": "Storage or publication state cannot silently determine CF-04 privacy class",
+      "status": "blocked_pending_mapping_approval"
     }
   ],
   "pending_evidence": [
     "founder_approved_exact_source_reference_freeze",
+    "domain_and_file24_approved_privacy_class_mapping",
     "staging_database_and_filesystem_aggregate_inventory",
     "orphan_duplicate_missing_and_corrupt_reconciliation",
     "anonymous_and_unauthorized_raw_url_matrix",
