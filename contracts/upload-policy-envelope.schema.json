@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabrihomeopathy.com/contracts/cf-04/upload-policy-envelope/0.1.0",
+  "title": "CF-04 Upload Policy Envelope",
+  "description": "Pre-activation draft describing the domain-authorized technical boundaries for one upload purpose.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "policy_id",
+    "policy_version",
+    "domain",
+    "purpose",
+    "privacy_class",
+    "quarantine_required",
+    "allowed_media_classes",
+    "allowed_mime_types",
+    "max_size_bytes",
+    "delivery_modes",
+    "retention_rule_id"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "0.1.0"
+    },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "policy_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "privacy_class": {
+      "type": "string",
+      "enum": ["C1", "C2", "C3", "C4", "C5"]
+    },
+    "quarantine_required": {
+      "const": true
+    },
+    "allowed_media_classes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["image", "audio", "video", "document", "attachment"]
+      }
+    },
+    "allowed_mime_types": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 127
+      }
+    },
+    "max_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_duration_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_pages": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_width_pixels": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_height_pixels": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "required_scans": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "hash",
+          "magic",
+          "mime",
+          "container",
+          "malware",
+          "archive",
+          "polyglot",
+          "decompression_bomb",
+          "metadata"
+        ]
+      }
+    },
+    "derivative_presets": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9._-]*$"
+      }
+    },
+    "delivery_modes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["public_immutable", "signed_url", "signed_cookie", "token_endpoint", "internal_only"]
+      }
+    },
+    "download_allowed": {
+      "type": "boolean"
+    },
+    "range_requests_allowed": {
+      "type": "boolean"
+    },
+    "default_grant_ttl_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "retention_rule_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "rights_version_required": {
+      "type": "boolean"
+    },
+    "consent_version_required": {
+      "type": "boolean"
+    },
+    "metadata_policy": {
+      "type": "string",
+      "enum": ["preserve_private", "strip_public_derivatives", "strip_all_derivatives"]
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
