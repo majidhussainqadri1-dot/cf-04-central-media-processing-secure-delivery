@@ -16,8 +16,11 @@
     "allowed_media_classes",
     "allowed_mime_types",
     "max_size_bytes",
+    "required_scans",
+    "derivative_presets",
     "delivery_modes",
-    "retention_rule_id"
+    "retention_rule_id",
+    "enabled"
   ],
   "properties": {
     "contract_version": {
@@ -93,6 +96,7 @@
     },
     "required_scans": {
       "type": "array",
+      "minItems": 4,
       "uniqueItems": true,
       "items": {
         "type": "string",
@@ -107,7 +111,13 @@
           "decompression_bomb",
           "metadata"
         ]
-      }
+      },
+      "allOf": [
+        {"contains": {"const": "hash"}},
+        {"contains": {"const": "magic"}},
+        {"contains": {"const": "mime"}},
+        {"contains": {"const": "malware"}}
+      ]
     },
     "derivative_presets": {
       "type": "array",
@@ -155,8 +165,91 @@
       "enum": ["preserve_private", "strip_public_derivatives", "strip_all_derivatives"]
     },
     "enabled": {
-      "type": "boolean",
-      "default": false
+      "description": "Draft 0.1.0 policies are documentation-only and cannot activate runtime behavior.",
+      "const": false
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "privacy_class": {
+            "enum": ["C2", "C3", "C4", "C5"]
+          }
+        },
+        "required": ["privacy_class"]
+      },
+      "then": {
+        "properties": {
+          "delivery_modes": {
+            "not": {
+              "contains": {
+                "const": "public_immutable"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "delivery_modes": {
+            "contains": {
+              "enum": ["signed_url", "signed_cookie", "token_endpoint"]
+            }
+          }
+        },
+        "required": ["delivery_modes"]
+      },
+      "then": {
+        "required": ["default_grant_ttl_seconds"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "allowed_media_classes": {
+            "contains": {
+              "enum": ["audio", "video"]
+            }
+          }
+        },
+        "required": ["allowed_media_classes"]
+      },
+      "then": {
+        "required": ["max_duration_seconds"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "allowed_media_classes": {
+            "contains": {
+              "const": "document"
+            }
+          }
+        },
+        "required": ["allowed_media_classes"]
+      },
+      "then": {
+        "required": ["max_pages"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "allowed_media_classes": {
+            "contains": {
+              "const": "image"
+            }
+          }
+        },
+        "required": ["allowed_media_classes"]
+      },
+      "then": {
+        "required": ["max_width_pixels", "max_height_pixels"]
+      }
+    }
+  ]
 }
