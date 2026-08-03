@@ -9,7 +9,7 @@ This register establishes stable Phase C4-A identifiers. Runtime development, ex
 | CF04-A-003 | Inventory File 10/11/12/17/21/22 binaries, providers and routes | Domain owners | Cross-repository source audit, machine-readable inventory and staging evidence plan | Source architecture inventory complete; real-environment/provider evidence pending |
 | CF04-A-004 | Draft and version canonical asset-reference and policy-envelope contracts before development authorization | CF-04 + domain owners | Draft 0.1.0 JSON schemas | Draft implemented; domain-owner acceptance pending |
 | CF04-A-005 | Prove volume, reliability and cost justification | Founder/operations | Staging evidence collection plan | Pending measured evidence |
-| CF04-A-006 | Approve preliminary threat model, data flow, privacy classes, retention and migration architecture | Security/privacy/domain owners | Development Gate D | Pending |
+| CF04-A-006 | Approve preliminary threat model, data flow, privacy classes, retention and migration architecture | Security/privacy/domain owners | Development Gate D and privacy-class mapping gate | Privacy inference defect closed in docs; definitions and domain mappings remain pending approval |
 | CF04-A-007 | Define idempotent migration, shadow, reconciliation and rollback before development; prove them before extraction | CF-04 + domain owners | Development Gate D / Release Gate F | Pending |
 | CF04-A-008 | Independently test quarantine, parser, worker, delivery, deletion, restore and provider-exit controls before extraction/release | Security operator | Release Gate G | Future implementation evidence required |
 | CF04-A-009 | Assign service ownership, on-call, SLO, support and release responsibilities | Founder/operations | Release Gate H | Pending |
