@@ -4,7 +4,12 @@ This file records evidence references without exposing secrets or restricted dat
 
 | Evidence ID | Requirement/decision | Artifact type | Environment/version | Public-safe location | Private evidence custodian | Reviewer/date | Result |
 |---|---|---|---|---|---|---|---|
-| CF04-EV-001 | CF04-A-001 | Repository governance baseline | Phase C4-A | README, charter, activation gates | N/A | Pending PR review | Pending |
+| CF04-EV-001 | CF04-A-001 | Repository governance baseline | Phase C4-A foundation | README, charter and activation gates | N/A | Reviewed before PR #1 merge | Accepted within bounded documentation scope |
+| CF04-EV-002 | CF04-A-003 / CF04-A-011 | Cross-repository source architecture inventory | Files 10/11/12 candidate refs; Files 17/21/22 canonical refs | `docs/audits/C4-A-CROSS-REPOSITORY-INVENTORY-AUDIT-2026-08-04.md` | Domain owners retain operational evidence | Review pending in current PR | Source inventory complete; operational evidence pending |
+| CF04-EV-003 | CF04-A-003 | Machine-readable source inventory | Schema 0.1.0 | `inventory/source-inventory-v0.1.json` | N/A | Review pending in current PR | Draft evidence |
+| CF04-EV-004 | CF04-A-003 / CF04-A-005 | Staging evidence collection plan | Controlled staging only | `docs/audits/C4-A-STAGING-EVIDENCE-COLLECTION-PLAN.md` | Founder-designated staging operator | Review pending in current PR | Plan drafted; execution pending |
+| CF04-EV-005 | CF04-A-004 | Media asset reference contract | Draft 0.1.0 | `contracts/media-asset-reference.schema.json` | Domain owners | Domain acceptance pending | Draft only |
+| CF04-EV-006 | CF04-A-004 | Upload policy envelope contract | Draft 0.1.0 | `contracts/upload-policy-envelope.schema.json` | Domain owners | Domain acceptance pending | Draft only |
 
 ## Required evidence families
 
