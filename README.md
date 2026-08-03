@@ -47,18 +47,26 @@ CF-04 must not create a second content database, player, feed, reader, live-even
 
 ## Activation law
 
-Runtime extraction or implementation starts only after all mandatory gates are evidenced, including:
+Activation is deliberately split into two gates so that security testing does not become circular:
 
-1. Founder-approved change-control record and canonical ownership transfer charter.
-2. Current File 10/11/12/17/21/22 binary inventory and reconciliation.
-3. Versioned domain asset-reference and policy-envelope contracts.
-4. Threat model, data-flow map, retention schedule, provider register and abuse-case review.
-5. Migration, dual-read/shadow, reconciliation, cutover and rollback proof.
-6. Independent sandbox, malware/polyglot/bomb, SSRF, authorization, encryption, CDN purge and provider-exit tests.
-7. Representative volume, reliability and cost evidence proving that extraction is justified.
-8. Founder, domain-owner and security acceptance.
+### Gate 1 — authorization for bounded implementation
 
-Until then, this repository contains planning, evidence templates and non-runtime governance scaffolding only.
+Only a Founder-approved C4-A change-control record may authorize isolated development of C4-B onward. Before that approval, work is limited to inventory, contracts, threat modeling, migration design, evidence templates and non-runtime repository quality.
+
+Gate 1 requires at minimum:
+
+1. canonical ownership-transfer charter;
+2. current File 10/11/12/17/21/22 binary and route inventory;
+3. versioned asset-reference and policy-envelope drafts;
+4. preliminary threat, privacy, retention, provider, migration and rollback design;
+5. representative volume, reliability and cost evidence showing that extraction is justified;
+6. Founder, affected domain-owner and security approval for bounded development.
+
+### Gate 2 — authorization for extraction, cutover or live activation
+
+No real-data migration, provider cutover, runtime route activation, staging acceptance or production deployment may occur until the remaining mandatory evidence is complete, including independent sandbox, malware/polyglot/bomb, SSRF, authorization, encryption, CDN purge, deletion, restore and provider-exit tests; successful reconciliation and rollback proof; operational ownership; and final Founder/domain/security acceptance.
+
+Until Gate 1 is approved, this repository contains planning, evidence templates and non-runtime governance scaffolding only.
 
 ## Planned API surfaces
 
