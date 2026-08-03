@@ -144,7 +144,7 @@ File 17 already implements a substantial private attachment service:
 
 ### 6.2 Current allowed classes
 
-The source distinguishes image and document attachments. Documents require an approved scanner result; images are normalized and dimension-bounded before hashing and storage.
+The source allows image, video, audio and document attachments. Documents require an approved scanner result; images are normalized and dimension-bounded before hashing and storage. Video and audio remain privately stored after MIME/extension validation and the applicable scanning-policy decision.
 
 ### 6.3 CF-04 classification
 
