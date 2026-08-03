@@ -3,6 +3,7 @@
   "generated_at": "2026-08-04T01:43:00+05:00",
   "status": "source_inventory_complete_operational_inventory_pending",
   "runtime_authorized": false,
+  "founder_source_freeze_approved": false,
   "scope": [
     "file-10",
     "file-11",
@@ -16,8 +17,9 @@
       "file": "10",
       "repository": "majidhussainqadri1-dot/10-video-wall-and-educational-broadcasting-foundation",
       "inspected_ref": "40a278da9d28a20ec89377c939f1fffca8d6b3fc",
+      "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
-      "canonical_ref_frozen": false,
+      "founder_accepted_source_ref": false,
       "binary_role": "current_wordpress_media_source_owner",
       "storage_families": [
         "wordpress_media",
@@ -37,8 +39,9 @@
       "file": "11",
       "repository": "majidhussainqadri1-dot/11-reels-and-short-video-discovery-foundation",
       "inspected_ref": "601117b3f3be8dc582dbe823bf9f1c8968a2e6b9",
+      "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
-      "canonical_ref_frozen": false,
+      "founder_accepted_source_ref": false,
       "binary_role": "consumer_of_file_10_video_assets",
       "storage_families": [
         "file_10_wordpress_media",
@@ -58,8 +61,9 @@
       "file": "12",
       "repository": "majidhussainqadri1-dot/12-pdf-library-and-digital-reading-foundation",
       "inspected_ref": "1ddc48e0271c896f32dbaa6d53a41711c22031ed",
+      "evidence_ref_immutable": true,
       "ref_status": "open_unmerged_corrective_candidate",
-      "canonical_ref_frozen": false,
+      "founder_accepted_source_ref": false,
       "binary_role": "encrypted_pdf_source_owner_and_cover_consumer",
       "storage_families": [
         "private_encrypted_filesystem",
@@ -79,8 +83,9 @@
       "file": "17",
       "repository": "majidhussainqadri1-dot/17-sabri-network",
       "inspected_ref": "381ab03d68f3afa9cd03e507a6f769841b709968",
+      "evidence_ref_immutable": true,
       "ref_status": "canonical_main_merge_for_reviewed_2_0_0",
-      "canonical_ref_frozen": true,
+      "founder_accepted_source_ref": false,
       "binary_role": "private_attachment_record_and_byte_owner",
       "storage_families": [
         "private_hashed_filesystem_with_owner_table"
@@ -101,8 +106,9 @@
       "file": "21",
       "repository": "majidhussainqadri1-dot/sabri-complete-home-news-feed",
       "inspected_ref": "498122bd88136fd74a8386bddc67f915126f35d1",
+      "evidence_ref_immutable": true,
       "ref_status": "canonical_main_merge_after_public_rendering_correction",
-      "canonical_ref_frozen": true,
+      "founder_accepted_source_ref": false,
       "binary_role": "wordpress_media_upload_and_attachment_owner_for_publication",
       "storage_families": [
         "wordpress_media"
@@ -124,8 +130,9 @@
       "repository": "majidhussainqadri1-dot/sabri-universal-post-composer",
       "inspected_ref": "1274e380268c2ab235c66fd21906cf4b1bcadf9a",
       "additional_candidate_ref": "3cfa75e5ded61d5c60ade97b2e26d72395167e31",
+      "evidence_ref_immutable": true,
       "ref_status": "canonical_main_0_3_0_with_open_r8_diagnostic_candidate",
-      "canonical_ref_frozen": true,
+      "founder_accepted_source_ref": false,
       "binary_role": "orchestration_only",
       "storage_families": [],
       "media_classes": [],
