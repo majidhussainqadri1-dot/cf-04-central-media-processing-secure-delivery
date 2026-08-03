@@ -11,10 +11,14 @@
     "asset_version",
     "domain",
     "domain_object_id",
+    "domain_object_version",
     "purpose",
     "privacy_class",
     "state",
-    "policy_version"
+    "policy_id",
+    "policy_version",
+    "created_at",
+    "updated_at"
   ],
   "properties": {
     "contract_version": {
@@ -38,6 +42,10 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 191
+    },
+    "domain_object_version": {
+      "type": "integer",
+      "minimum": 1
     },
     "purpose": {
       "type": "string",
@@ -69,6 +77,12 @@
         "deleted"
       ]
     },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
     "policy_version": {
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
@@ -76,7 +90,7 @@
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["size_bytes", "media_class"],
+      "required": ["size_bytes", "media_class", "detected_mime", "sha256"],
       "properties": {
         "media_class": {
           "type": "string",
@@ -88,6 +102,7 @@
         },
         "detected_mime": {
           "type": "string",
+          "minLength": 3,
           "maxLength": 127
         },
         "size_bytes": {
@@ -129,5 +144,22 @@
       "type": "string",
       "format": "date-time"
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "not": {
+              "enum": ["reserved", "uploading"]
+            }
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "required": ["source"]
+      }
+    }
+  ]
 }
