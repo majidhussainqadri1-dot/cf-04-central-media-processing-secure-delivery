@@ -13,6 +13,12 @@
 - [ ] C4-G
 - [ ] C4-H
 
+## Authorization gate
+
+- Development authorization status:
+- Extraction/release authorization status:
+- Founder change-control reference:
+
 ## Requirement IDs
 
 <!-- List stable requirement IDs. -->
@@ -21,13 +27,14 @@
 
 - Canonical owner affected:
 - Domain modules affected:
-- New direct-write path introduced: **No**
-- Duplicate source of truth introduced: **No**
+- New direct-write path introduced: **No / Yes — explain**
+- Duplicate source of truth introduced: **No / Yes — explain**
+- Domain truth transferred: **No / Yes — cite approved migration charter**
 
 ## Data, privacy and security
 
 - Highest data class affected:
-- Secrets introduced: **No**
+- Secrets introduced: **No / Yes — explain protected handling**
 - Authorization impact:
 - Retention/deletion impact:
 - Threat-model impact:
