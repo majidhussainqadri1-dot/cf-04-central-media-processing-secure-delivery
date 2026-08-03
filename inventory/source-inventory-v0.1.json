@@ -78,8 +78,8 @@
     {
       "file": "17",
       "repository": "majidhussainqadri1-dot/17-sabri-network",
-      "inspected_ref": "main",
-      "ref_status": "canonical_main_after_reviewed_2_0_0_merge",
+      "inspected_ref": "381ab03d68f3afa9cd03e507a6f769841b709968",
+      "ref_status": "canonical_main_merge_for_reviewed_2_0_0",
       "canonical_ref_frozen": true,
       "binary_role": "private_attachment_record_and_byte_owner",
       "storage_families": [
@@ -100,8 +100,8 @@
     {
       "file": "21",
       "repository": "majidhussainqadri1-dot/sabri-complete-home-news-feed",
-      "inspected_ref": "main",
-      "ref_status": "canonical_main",
+      "inspected_ref": "498122bd88136fd74a8386bddc67f915126f35d1",
+      "ref_status": "canonical_main_merge_after_public_rendering_correction",
       "canonical_ref_frozen": true,
       "binary_role": "wordpress_media_upload_and_attachment_owner_for_publication",
       "storage_families": [
@@ -122,9 +122,9 @@
     {
       "file": "22",
       "repository": "majidhussainqadri1-dot/sabri-universal-post-composer",
-      "inspected_ref": "main",
+      "inspected_ref": "1274e380268c2ab235c66fd21906cf4b1bcadf9a",
       "additional_candidate_ref": "3cfa75e5ded61d5c60ade97b2e26d72395167e31",
-      "ref_status": "canonical_main_with_open_r8_diagnostic_candidate",
+      "ref_status": "canonical_main_0_3_0_with_open_r8_diagnostic_candidate",
       "canonical_ref_frozen": true,
       "binary_role": "orchestration_only",
       "storage_families": [],
