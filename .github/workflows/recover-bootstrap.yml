@@ -1,0 +1,68 @@
+name: CF-04 Recover Historical Bootstrap
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-runtime-final
+    paths:
+      - .github/workflows/recover-bootstrap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Recover historical source bundle fragments
+        shell: bash
+        run: |
+          set -u
+          mkdir -p /tmp/cf04-bootstrap/parts /tmp/cf04-bootstrap/out
+          git fetch origin codex/cf04-complete-runtime-1.0.0
+
+          for p in 01 02 04 06; do
+            git show "origin/codex/cf04-complete-runtime-1.0.0:.bootstrap/source.part${p}" > "/tmp/cf04-bootstrap/parts/source.part${p}"
+          done
+
+          cat \
+            /tmp/cf04-bootstrap/parts/source.part01 \
+            /tmp/cf04-bootstrap/parts/source.part02 \
+            /tmp/cf04-bootstrap/parts/source.part04 \
+            /tmp/cf04-bootstrap/parts/source.part06 \
+            > /tmp/cf04-bootstrap/source.partial.b64
+          tr -d '\r\n\t ' < /tmp/cf04-bootstrap/source.partial.b64 > /tmp/cf04-bootstrap/source.partial.flat.b64
+          base64 --decode --ignore-garbage /tmp/cf04-bootstrap/source.partial.flat.b64 > /tmp/cf04-bootstrap/source.partial.zip || true
+
+          echo "partial-zip-bytes=$(wc -c < /tmp/cf04-bootstrap/source.partial.zip)" | tee /tmp/cf04-bootstrap/summary.txt
+          echo "partial-zip-sha256=$(sha256sum /tmp/cf04-bootstrap/source.partial.zip | awk '{print $1}')" | tee -a /tmp/cf04-bootstrap/summary.txt
+          file /tmp/cf04-bootstrap/source.partial.zip | tee -a /tmp/cf04-bootstrap/summary.txt
+
+          unzip -o /tmp/cf04-bootstrap/source.partial.zip -d /tmp/cf04-bootstrap/out > /tmp/cf04-bootstrap/unzip.log 2>&1 || true
+          yes | zip -FF /tmp/cf04-bootstrap/source.partial.zip --out /tmp/cf04-bootstrap/source.fixed.zip > /tmp/cf04-bootstrap/zip-ff.log 2>&1 || true
+          if [[ -s /tmp/cf04-bootstrap/source.fixed.zip ]]; then
+            unzip -o /tmp/cf04-bootstrap/source.fixed.zip -d /tmp/cf04-bootstrap/out >> /tmp/cf04-bootstrap/unzip.log 2>&1 || true
+          fi
+
+          for p in 01 02 04 06; do
+            tr -d '\r\n\t ' < "/tmp/cf04-bootstrap/parts/source.part${p}" > "/tmp/cf04-bootstrap/parts/source.part${p}.flat"
+            base64 --decode --ignore-garbage "/tmp/cf04-bootstrap/parts/source.part${p}.flat" > "/tmp/cf04-bootstrap/parts/source.part${p}.bin" || true
+            strings -a "/tmp/cf04-bootstrap/parts/source.part${p}.bin" | grep -E 'sabri-central-media|class-scm-|tests/|tools/' > "/tmp/cf04-bootstrap/parts/source.part${p}.strings" || true
+          done
+
+          echo "recovered-files=$(find /tmp/cf04-bootstrap/out -type f | wc -l)" | tee -a /tmp/cf04-bootstrap/summary.txt
+          find /tmp/cf04-bootstrap/out -type f | sort | tee /tmp/cf04-bootstrap/recovered-paths.txt
+          cat /tmp/cf04-bootstrap/summary.txt
+
+      - name: Upload recovered historical evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-historical-bootstrap-recovery
+          path: /tmp/cf04-bootstrap
+          if-no-files-found: error
+          retention-days: 30
