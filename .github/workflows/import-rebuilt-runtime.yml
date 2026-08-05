@@ -41,7 +41,7 @@ jobs:
           test -f /tmp/cf04-source/tests/review-round-8-three-plan-adversarial.php
           test -f /tmp/cf04-source/tools/quality-check.sh
 
-          rsync -a --delete --exclude='.git/' /tmp/cf04-source/ ./
+          rsync -a --delete --exclude='.git/' --exclude='.github/' /tmp/cf04-source/ ./
           chmod +x tools/quality-check.sh
           bash tools/quality-check.sh
 
