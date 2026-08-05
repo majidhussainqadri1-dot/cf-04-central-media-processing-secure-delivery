@@ -1,0 +1,22 @@
+<?php
+declare(strict_types=1);
+$root=dirname(__DIR__);
+$read=static fn(string $path): string=>(string)file_get_contents($root.'/'.$path);
+$assert=static function(bool $condition,string $message): void { if(!$condition){fwrite(STDERR,"ROUND 9 FAIL: $message\n");exit(1);}echo "ROUND 9 PASS: $message\n"; };
+$main=$read('sabri-central-media/sabri-central-media.php');
+$auth=$read('sabri-central-media/includes/class-scm-auth.php');
+$delivery=$read('sabri-central-media/includes/class-scm-delivery-service.php');
+$deletion=$read('sabri-central-media/includes/class-scm-deletion-service.php');
+$audit=$read('sabri-central-media/includes/class-scm-audit.php');
+$provider=$read('sabri-central-media/includes/class-scm-provider-registry.php');
+$upload=$read('sabri-central-media/includes/class-scm-upload-service.php');
+$record=$read('sabri-central-media/includes/class-scm-record-store.php');
+$assert(str_contains($main,"Version: 1.1.0-rc.3")&&str_contains($main,"define('SCM_RUNTIME_ENABLED', false)"),'runtime version aligned and disabled by default');
+$assert(!str_contains($auth,"['verified'=>true")&&str_contains($auth,'verified_transfer_assertion_unavailable'),'File 00 identity assertion has no permissive fallback');
+$assert(str_contains($delivery,"RecordStore::put('grant'")&&str_contains($delivery,"RecordStore::get('grant'")&&!preg_match("/Crypto::sign\(\[[^\]]*object_key/s",$delivery),'delivery grants are persisted and do not expose object keys in signed claims');
+$assert(!str_contains($deletion,"'cdn_purged'=>true")&&str_contains($deletion,'cdn_purge_status'),'deletion does not claim unperformed CDN purge');
+$assert(str_contains($audit,"Db::table('audit')")&&str_contains($audit,'audit_write_failed'),'audit evidence persists and fails closed in runtime');
+$assert(str_contains($provider,'storage_provider_unavailable')&&str_contains($provider,'storage_provider_unhealthy'),'runtime storage fallback is fail closed');
+$assert(str_contains($upload,'streaming_assembly_provider_required')&&str_contains($upload,'max_part_size_bytes'),'large local assembly and upload parts are bounded');
+$assert(str_contains($record,"'version'=>$previousVersion")&&str_contains($record,'record_version_conflict'),'persistent record updates use compare-and-swap');
+echo "REVIEW ROUND 9 SOURCE AUDIT PASSED\n";
