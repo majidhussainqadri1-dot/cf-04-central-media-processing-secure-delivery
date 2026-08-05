@@ -1,0 +1,96 @@
+name: CF-04 Publish Three-Plan Complete Source
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-complete-1.2.0
+    paths:
+      - .cf04-complete-import/part-00
+      - .cf04-complete-import/part-01
+      - .cf04-complete-import/part-02
+      - .cf04-complete-import/part-03
+      - .github/workflows/import-complete-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout protected implementation branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and verify complete source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          for part in 00 01 02 03; do
+            test -s ".cf04-complete-import/part-${part}"
+          done
+          cat \
+            .cf04-complete-import/part-00 \
+            .cf04-complete-import/part-01 \
+            .cf04-complete-import/part-02 \
+            .cf04-complete-import/part-03 \
+            > /tmp/cf04-complete.tar.xz.b64
+          base64 --decode /tmp/cf04-complete.tar.xz.b64 > /tmp/cf04-complete.tar.xz
+
+          expected='63a19fd4ac9679fa50b0a8b946d8609044b634924db1e5c4b8d2f3fda98134c0'
+          actual="$(sha256sum /tmp/cf04-complete.tar.xz | awk '{print $1}')"
+          test "$actual" = "$expected" || {
+            echo "::error title=CF-04 complete-source checksum mismatch::Expected ${expected}; reconstructed ${actual}"
+            exit 1
+          }
+          xz --test /tmp/cf04-complete.tar.xz
+
+      - name: Extract and execute full quality gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/cf04-complete-source
+          mkdir -p /tmp/cf04-complete-source
+          tar -xJf /tmp/cf04-complete.tar.xz -C /tmp/cf04-complete-source
+          test -f /tmp/cf04-complete-source/sabri-central-media/sabri-central-media.php
+          test -f /tmp/cf04-complete-source/docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md
+          test -x /tmp/cf04-complete-source/tools/quality-check.sh
+          (
+            cd /tmp/cf04-complete-source
+            bash tools/quality-check.sh
+          )
+
+      - name: Publish clean source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/cf04-complete-source/dist
+          mkdir -p /tmp/cf04-complete-source/dist
+          : > /tmp/cf04-complete-source/dist/.gitkeep
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            /tmp/cf04-complete-source/ ./
+
+          rm -rf \
+            .cf04-complete-import \
+            .cf04-import-xz \
+            .cf04-import \
+            .bootstrap \
+            .cf04-final-import \
+            .cf04-three-plan-patch
+          rm -f \
+            .github/workflows/import-complete-source.yml \
+            .github/workflows/import-rc5-source.yml \
+            .github/workflows/import-three-plan-runtime.yml \
+            .github/workflows/import-runtime.yml
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'CF-04: publish three-plan source-complete 1.2.0-rc.1 candidate'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
