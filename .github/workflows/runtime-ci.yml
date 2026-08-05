@@ -3,26 +3,56 @@ name: CF-04 Runtime CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: cf04-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
+    name: quality (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         php: ['8.1', '8.3']
     steps:
-      - uses: actions/checkout@v5
-      - uses: shivammathur/setup-php@v2
+      - name: Checkout exact source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-      - name: Quality gate
+          extensions: openssl, fileinfo
+          ini-file: production
+          coverage: none
+
+      - name: Quality, security and deterministic package gate
         run: bash tools/quality-check.sh
-      - uses: actions/upload-artifact@v4
-        if: matrix.php == '8.3'
+
+      - name: Publish release evidence summary
+        if: success()
+        shell: bash
+        run: |
+          echo "### CF-04 1.1.0-rc.3 — PHP ${{ matrix.php }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/RELEASE-EVIDENCE.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deterministic release evidence
+        uses: actions/upload-artifact@v4
+        if: success() && matrix.php == '8.3'
         with:
-          name: cf-04-sabri-central-media-1.1.0-rc.2
+          name: cf-04-sabri-central-media-1.1.0-rc.3-${{ github.sha }}
           path: dist/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
