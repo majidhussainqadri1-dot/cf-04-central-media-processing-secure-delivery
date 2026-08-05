@@ -1,24 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sabrihomeopathy.com/contracts/cf-04/media-asset-reference/1.3.1",
-  "title": "CF-04 Media Asset Reference",
+  "$id": "https://sabrihomeopathy.com/contracts/cf-04/delivery-grant/1.3.1",
+  "title": "CF-04 Delivery Grant",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "contract_version",
+    "grant_id",
     "asset_id",
     "owner_domain",
     "owner_object",
     "object_version",
     "privacy_class",
-    "status"
+    "expires_at"
   ],
   "properties": {
     "contract_version": {
       "const": "1.3.1"
     },
+    "grant_id": {
+      "type": "string",
+      "minLength": 8
+    },
     "asset_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 8
     },
     "owner_domain": {
       "type": "string"
@@ -39,19 +45,10 @@
         "C5"
       ]
     },
-    "status": {
-      "enum": [
-        "uploading",
-        "quarantined",
-        "scanning",
-        "processing",
-        "ready",
-        "restricted",
-        "revoked",
-        "deleted"
-      ]
+    "expires_at": {
+      "type": "integer"
     },
-    "sha256": {
+    "audience_hash": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     }

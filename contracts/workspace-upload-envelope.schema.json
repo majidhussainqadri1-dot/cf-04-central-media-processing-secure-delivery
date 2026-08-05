@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabrihomeopathy.com/contracts/cf-04/workspace-upload-envelope/1.3.1",
+  "title": "Workspace Upload Envelope",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "source",
+        "strip_location_metadata"
+      ],
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "source": {
+          "type": "string"
+        },
+        "strip_location_metadata": {
+          "const": true
+        },
+        "rotation_degrees": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "compression_quality": {
+          "type": "integer",
+          "minimum": 40,
+          "maximum": 95
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "source",
+        "waveform_required"
+      ],
+      "properties": {
+        "type": {
+          "const": "audio"
+        },
+        "source": {
+          "type": "string"
+        },
+        "waveform_required": {
+          "const": true
+        },
+        "transcript_requested": {
+          "type": "boolean"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sabrihomeopathy.com/contracts/cf-04/verified-transfer-envelope/1.3.1",
+  "title": "Verified User Transfer Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "native_transfer_id",
+    "native_transfer_version",
+    "sender_user_id",
+    "recipient_type",
+    "recipient_ref_hash",
+    "expected_size",
+    "media_class",
+    "declared_name"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.3.1"
+    },
+    "native_transfer_id": {
+      "type": "string"
+    },
+    "native_transfer_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sender_user_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recipient_type": {
+      "enum": [
+        "user",
+        "group"
+      ]
+    },
+    "recipient_ref_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "expected_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1073741824
+    },
+    "media_class": {
+      "type": "string"
+    },
+    "declared_name": {
+      "type": "string"
+    }
+  }
+}
