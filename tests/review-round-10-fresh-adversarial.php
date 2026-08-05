@@ -1,0 +1,28 @@
+<?php
+declare(strict_types=1);
+require __DIR__.'/bootstrap.php';
+use Sabri\CentralMedia\{Crypto,DeliveryService,DomainRegistry,Idempotency,LocalObjectStore,ProviderRegistry,RecordStore,UploadService};
+RecordStore::resetMemory();
+ProviderRegistry::reset();
+DomainRegistry::reset();
+err(fn()=>ProviderRegistry::store(),'storage_provider_unavailable','runtime refuses implicit storage provider');
+$store=new LocalObjectStore(SCM_PRIVATE_ROOT.'-r10');
+ProviderRegistry::register('local-private',$store);
+$key=str_repeat('b',64);
+$store->put($key,'round-ten');
+RecordStore::put('asset','r10',['actor_id'=>11,'asset_id'=>'r10','owner_domain'=>'file17','owner_object'=>'object-r10','object_version'=>1,'object_key'=>$key,'content_sha256'=>hash('sha256','round-ten'),'size'=>9,'privacy_class'=>'C3','mime'=>'application/pdf','required_scans'=>['hash'],'status'=>'ready','scan_status'=>'passed']);
+DomainRegistry::register('file17','1.0.0',['authorize_delivery'=>fn(array $context)=>['authorized'=>true,'allowed'=>true,'object_version'=>2]]);
+err(fn()=>DeliveryService::issue(['asset_id'=>'r10'],['user_id'=>12],60),'domain_object_version_stale','stale native-owner decision blocks grant');
+DomainRegistry::reset();
+DomainRegistry::register('file17','1.0.0',['authorize_delivery'=>fn(array $context)=>['authorized'=>true,'allowed'=>true,'object_version'=>1],'authorize_upload'=>fn(array $context)=>['authorized'=>true,'allowed'=>true,'object_version'=>1]]);
+$token=DeliveryService::issue(['asset_id'=>'r10'],['user_id'=>12,'roles'=>['member']],60);
+$claims=Crypto::verify($token);
+ok(!isset($claims['object_key'])&&RecordStore::get('grant',(string)$claims['grant_id'])!==null,'grant hides storage key and has persistent record');
+$fingerprint=hash('sha256','round-ten-request');
+Idempotency::claim('round-ten','active-key',$fingerprint);
+err(fn()=>Idempotency::claim('round-ten','active-key',$fingerprint),'idempotency_in_progress','concurrent identical request is rejected');
+$largeSize=SCM_MAX_IN_MEMORY_ASSEMBLY_BYTES+1;
+$largePolicy=policy('document',$largeSize);
+RecordStore::put('upload','large-upload',['actor_id'=>11,'actor'=>11,'meta'=>['name'=>'large.pdf','size'=>$largeSize,'mime'=>'application/pdf','sha256'=>'','media_class'=>'document'],'policy'=>$largePolicy,'policy_hash'=>Sabri\CentralMedia\Policy::fingerprint($largePolicy),'owner_object_version'=>1,'parts'=>[],'received'=>$largeSize,'status'=>'uploading','expires_at'=>time()+3600]);
+err(fn()=>UploadService::complete('large-upload',11,'large-complete-key'),'streaming_assembly_provider_required','large object fails closed without streaming provider');
+echo "REVIEW ROUND 10 FRESH ADVERSARIAL PASSED\n";
