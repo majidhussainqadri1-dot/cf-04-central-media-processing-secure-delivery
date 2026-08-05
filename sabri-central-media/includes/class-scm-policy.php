@@ -14,8 +14,9 @@ final class Policy {
         if(!in_array($p['privacy_class'],self::PRIVACY,true)) throw new Error('policy_privacy_invalid','Unknown privacy classification.',503);
         $p['max_size_bytes']=(int)$p['max_size_bytes'];
         if($p['max_size_bytes']<1 || $p['max_size_bytes']>1073741824) throw new Error('policy_size_invalid','Invalid policy size ceiling.',503);
-        $p['max_part_size_bytes']=(int)($p['max_part_size_bytes']??8388608);
-        if($p['max_part_size_bytes']<65536 || $p['max_part_size_bytes']>67108864 || $p['max_part_size_bytes']>$p['max_size_bytes']) throw new Error('policy_part_size_invalid','Invalid upload part size ceiling.',503);
+        $defaultPart=min(8388608,$p['max_size_bytes']);
+        $p['max_part_size_bytes']=(int)($p['max_part_size_bytes']??$defaultPart);
+        if($p['max_part_size_bytes']<1 || $p['max_part_size_bytes']>67108864 || $p['max_part_size_bytes']>$p['max_size_bytes']) throw new Error('policy_part_size_invalid','Invalid upload part size ceiling.',503);
         $p['allowed_mime_types']=array_values(array_unique(array_filter(array_map(fn($v)=>Validator::canonicalMime((string)$v),(array)($p['allowed_mime_types']??[])))));
         if($strict && !$p['allowed_mime_types']) throw new Error('policy_mime_allowlist_required','A MIME allowlist is required.',503);
         $p['required_scans']=array_values(array_unique(array_filter(array_map(fn($v)=>Utils::key((string)$v,48),(array)($p['required_scans']??[])))));
