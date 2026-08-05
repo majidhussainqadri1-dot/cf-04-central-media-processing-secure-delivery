@@ -3,9 +3,10 @@ name: CF-04 Import Three-Plan Runtime
 on:
   push:
     branches:
-      - codex/cf04-three-plan-runtime-1.1.0-rc.1
+      - codex/cf04-three-plan-runtime-final
     paths:
       - .cf04-final-import/READY
+      - .github/workflows/import-three-plan-runtime.yml
   workflow_dispatch:
 
 permissions:
@@ -16,7 +17,7 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -26,7 +27,7 @@ jobs:
           set -euo pipefail
 
           cat .cf04-final-import/part-* > /tmp/cf04-runtime.tar.xz.b64
-          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz || true
+          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz
           actual="$(sha256sum /tmp/cf04-runtime.tar.xz | awk '{print $1}')"
           expected="9d45f04d54ec81e4a31e6dfaa51d13f4cd86d023eb531f7d98a1b8827b1ba469"
           if [[ "$actual" != "$expected" ]]; then
@@ -34,6 +35,7 @@ jobs:
             exit 1
           fi
 
+          xz --test /tmp/cf04-runtime.tar.xz
           mkdir -p /tmp/cf04-runtime
           tar -xJf /tmp/cf04-runtime.tar.xz -C /tmp/cf04-runtime
           test -f /tmp/cf04-runtime/README.md
