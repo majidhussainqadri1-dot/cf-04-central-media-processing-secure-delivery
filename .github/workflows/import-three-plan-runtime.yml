@@ -5,9 +5,6 @@ on:
     branches:
       - codex/cf04-three-plan-runtime-final
     paths:
-      - .cf04-import-xz/part-000
-      - .cf04-import-xz/part-001
-      - .cf04-import-xz/part-002
       - .github/workflows/import-three-plan-runtime.yml
   workflow_dispatch:
 
@@ -23,40 +20,55 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reconstruct verified complete source and commit clean tree
+      - name: Reconstruct verified runtime from immutable source blobs
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          cat \
-            .cf04-import-xz/part-000 \
-            .cf04-import-xz/part-001 \
-            .cf04-import-xz/part-002 \
-            > /tmp/cf04-runtime.tar.xz.b64
-          tr -d '\r\n\t ' < /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz.flat.b64
-          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.flat.b64 > /tmp/cf04-runtime.tar.xz || true
+          mkdir -p /tmp/cf04-parts /tmp/cf04-runtime
+          download_blob() {
+            local name="$1"
+            local sha="$2"
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/blobs/${sha}" \
+              | jq -r '.content' \
+              | tr -d '\r\n' \
+              | base64 --decode > "/tmp/cf04-parts/${name}"
+          }
 
-          actual="$(sha256sum /tmp/cf04-runtime.tar.xz | awk '{print $1}')"
-          expected="9d45f04d54ec81e4a31e6dfaa51d13f4cd86d023eb531f7d98a1b8827b1ba469"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "::error title=CF-04 final archive checksum::Expected ${expected} but reconstructed ${actual}; encoded-bytes=$(wc -c </tmp/cf04-runtime.tar.xz.flat.b64), archive-bytes=$(wc -c </tmp/cf04-runtime.tar.xz)"
-            exit 1
-          fi
+          download_blob part-000 c096ea2b6bfa62ca2f11b154e81707e69cb0f742
+          download_blob part-001 c7c7cd4efb29e8503b18f634602f1cd862d6bc16
+          download_blob part-002 9649b92c65d3f7735b8e78a3cdfa5405834ab6af
+          download_blob part-003 63933d931784cab0e05aa68a8aed212ad8f2b27c
+          download_blob part-004 d5f337dcdedfb6c67cd0c6f90792d2b7fa3f533f
+          download_blob part-005 e6374bd4584209eff65801dcc90c9a84b5890749
+          download_blob part-006 0034d45e08f3358aa1bbc1243682e2514b059917
+          download_blob part-007 3a53ce9585fca68de005db8e4daf372c553e01a8
+          download_blob part-008 61d6640c05154d94ba1916734752d4b341fbc80b
+          download_blob part-009 f5776d3c0aaf062d53f52274cd18445b21f32fef
+          download_blob part-010 1472aadc598c6590b4173c96b6e001bdedea6de5
 
-          xz --test /tmp/cf04-runtime.tar.xz
-          mkdir -p /tmp/cf04-runtime
-          tar -xJf /tmp/cf04-runtime.tar.xz -C /tmp/cf04-runtime
+          cat /tmp/cf04-parts/part-* > /tmp/cf04-clean-source.b64
+          tr -d '\r\n\t ' < /tmp/cf04-clean-source.b64 > /tmp/cf04-clean-source.flat.b64
+          base64 --decode /tmp/cf04-clean-source.flat.b64 > /tmp/cf04-clean-source.tar.xz
+
+          echo "9d45f04d54ec81e4a31e6dfaa51d13f4cd86d023eb531f7d98a1b8827b1ba469  /tmp/cf04-clean-source.tar.xz" | sha256sum -c -
+          xz --test /tmp/cf04-clean-source.tar.xz
+          tar -xJf /tmp/cf04-clean-source.tar.xz -C /tmp/cf04-runtime
+
           test -f /tmp/cf04-runtime/README.md
           test -f /tmp/cf04-runtime/sabri-central-media/sabri-central-media.php
           test -f /tmp/cf04-runtime/tests/review-round-8-three-plan-adversarial.php
+          test -x /tmp/cf04-runtime/tools/quality-check.sh
+          bash /tmp/cf04-runtime/tools/quality-check.sh
 
           rsync -a --delete \
             --exclude='.git/' \
-            --exclude='.cf04-final-import/' \
-            --exclude='.cf04-import-xz/' \
-            --exclude='.cf04-import/' \
-            --exclude='.bootstrap/' \
-            --exclude='.cf04-three-plan-patch/' \
             /tmp/cf04-runtime/ ./
 
           rm -rf .cf04-final-import .cf04-import-xz .cf04-import .bootstrap .cf04-three-plan-patch
@@ -65,5 +77,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "CF-04: complete three-plan runtime 1.1.0-rc.1"
+          git commit -m "CF-04: publish verified three-plan runtime 1.1.0-rc.1"
           git push origin "HEAD:${GITHUB_REF_NAME}"
