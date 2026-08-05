@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__.'/bootstrap.php';
-use Sabri\CentralMedia\{Audit,Auth,Crypto,DeletionService,DeliveryService,DomainRegistry,Error,Idempotency,IntegrationRegistry,LocalObjectStore,Policy,ProcessingService,ProviderRegistry,RecordStore,ScannerRegistry,TransferService,UploadService,Utils,Validator,WorkspaceUploadService};
+use Sabri\CentralMedia\{Audit,Auth,Crypto,DeletionService,DeliveryService,DomainRegistry,Idempotency,IntegrationRegistry,LocalObjectStore,Policy,ProcessingService,ProviderRegistry,RecordStore,ScannerRegistry,TransferService,UploadService,Validator,WorkspaceUploadService};
 
 RecordStore::resetMemory();
 ProviderRegistry::reset();
@@ -25,8 +25,8 @@ $policy=policy();
 ok($policy['max_upload_parts']===10000&&$policy['max_part_size_bytes']===8388608,'policy bounds and part ceiling');
 $bad=$policy;$bad['required_scans']=[];
 err(fn()=>Policy::validate($bad,true),'policy_malware_scan_required','malware scan fails closed');
-$bad=$policy;$bad['max_part_size_bytes']=$bad['max_size_bytes'];$bad['max_upload_parts']=1;
-ok(Policy::validate($bad,true)['max_upload_parts']===1,'single-part policy capacity');
+$single=policy('document',1024);$single['max_upload_parts']=1;
+ok(Policy::validate($single,true)['max_upload_parts']===1,'single-part policy capacity');
 
 $transfer=TransferService::validateEnvelope(['native_transfer_id'=>'smail:1','native_transfer_version'=>1,'sender_user_id'=>11,'recipient_type'=>'user','recipient_reference'=>'12','expected_size'=>TransferService::MAX_FILE_BYTES,'media_class'=>'document','declared_name'=>'../Clinical Notes.pdf']);
 ok($transfer['declared_name']==='Clinical-Notes.pdf'&&strlen($transfer['recipient_ref_hash'])===64,'transfer normalization');
