@@ -18,5 +18,5 @@ $assert(!str_contains($deletion,"'cdn_purged'=>true")&&str_contains($deletion,'c
 $assert(str_contains($audit,"Db::table('audit')")&&str_contains($audit,'audit_write_failed'),'audit evidence persists and fails closed in runtime');
 $assert(str_contains($provider,'storage_provider_unavailable')&&str_contains($provider,'storage_provider_unhealthy'),'runtime storage fallback is fail closed');
 $assert(str_contains($upload,'streaming_assembly_provider_required')&&str_contains($upload,'max_part_size_bytes'),'large local assembly and upload parts are bounded');
-$assert(str_contains($record,"'version'=>$previousVersion")&&str_contains($record,'record_version_conflict'),'persistent record updates use compare-and-swap');
+$assert(str_contains($record,"'version'=>\$previousVersion")&&str_contains($record,'record_version_conflict'),'persistent record updates use compare-and-swap');
 echo "REVIEW ROUND 9 SOURCE AUDIT PASSED\n";
