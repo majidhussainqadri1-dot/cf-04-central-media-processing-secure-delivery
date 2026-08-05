@@ -1,0 +1,1 @@
+Temporary note: the exact source archive is being staged in deterministic, checksum-verified parts because repository text writes are the available authenticated connector surface. This file is removed by the bootstrap import commit.
