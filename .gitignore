@@ -1,46 +1,4 @@
-# Operating-system files
-.DS_Store
-Thumbs.db
-
-# Editors
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Environment and secrets
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-*.p12
-*.pfx
-secrets/
-private/
-
-# PHP / JavaScript dependencies and build output
-/vendor/
-/node_modules/
-/dist/
-/build/
-coverage/
-.phpunit.result.cache
-
-# WordPress/runtime artifacts
+dist/*
+!dist/.gitkeep
 *.log
-*.zip
-uploads/
-wp-content/uploads/
-
-# Temporary media and fixtures
-.tmp/
-tmp/
-quarantine/
-objects/
-derivatives/
-
-# Local tool caches
-.phpcs-cache
-.phpstan.cache
-.eslintcache
+.env
