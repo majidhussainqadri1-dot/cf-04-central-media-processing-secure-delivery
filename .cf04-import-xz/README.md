@@ -1,0 +1,1 @@
+Temporary source-import staging directory. Exact archive SHA-256: 68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399. This directory and bootstrap workflow must self-delete after verified import.
