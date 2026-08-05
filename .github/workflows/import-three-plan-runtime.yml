@@ -34,7 +34,7 @@ jobs:
             .cf04-import-xz/part-002 \
             > /tmp/cf04-runtime.tar.xz.b64
           tr -d '\r\n\t ' < /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz.flat.b64
-          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.flat.b64 > /tmp/cf04-runtime.tar.xz
+          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.flat.b64 > /tmp/cf04-runtime.tar.xz || true
 
           actual="$(sha256sum /tmp/cf04-runtime.tar.xz | awk '{print $1}')"
           expected="9d45f04d54ec81e4a31e6dfaa51d13f4cd86d023eb531f7d98a1b8827b1ba469"
