@@ -48,7 +48,7 @@ final class UploadService {
         Utils::requireRuntime();
         $session=self::session($id);
         self::assertActor($session,$actor);
-        $fingerprint=hash('sha256',Utils::canonicalJson([$id,$actor,(string)$session['policy_hash'],(int)$session['version']]));
+        $fingerprint=hash('sha256',Utils::canonicalJson([$id,$actor,(string)$session['policy_hash'],(int)$session['meta']['size'],(string)$session['meta']['sha256']]));
         $claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);
         if($claim['replay']) return self::replay((array)$claim['record'],'upload');
         try {
@@ -64,11 +64,12 @@ final class UploadService {
                 if((int)$partNumber!==$expectedPart++) throw new Error('upload_parts_noncontiguous','Upload parts are not contiguous.',409);
                 if((int)($part['size']??0)<1 || (int)$part['size']>(int)$session['policy']['max_part_size_bytes']) throw new Error('upload_part_manifest_invalid','Upload part manifest is invalid.',500);
             }
+            $partsForCleanup=$session['parts'];
             $limit=defined('SCM_MAX_IN_MEMORY_ASSEMBLY_BYTES')?(int)SCM_MAX_IN_MEMORY_ASSEMBLY_BYTES:self::DEFAULT_MEMORY_ASSEMBLY_LIMIT;
             $limit=max(1048576,min(self::DEFAULT_MEMORY_ASSEMBLY_LIMIT,$limit));
             if((int)$session['meta']['size']>$limit) throw new Error('streaming_assembly_provider_required','This object requires an approved streaming assembly and scanning provider.',503,['declared_size'=>(int)$session['meta']['size'],'safe_local_limit'=>$limit]);
             $bytes='';
-            foreach($session['parts'] as $part) $bytes.=PartStore::get($part);
+            foreach($partsForCleanup as $part) $bytes.=PartStore::get($part);
             if(strlen($bytes)!==(int)$session['meta']['size']) throw new Error('upload_incomplete','Uploaded byte count is incomplete.',409);
             $contentHash=hash('sha256',$bytes);
             if($session['meta']['sha256']!==''&&!hash_equals((string)$session['meta']['sha256'],$contentHash)) throw new Error('upload_checksum_invalid','Completed upload checksum mismatch.',422);
@@ -88,18 +89,20 @@ final class UploadService {
                 $session['scan_status']='pending';
                 $session['parts']=[];
                 $session=RecordStore::put('upload',$id,$session,(int)$session['version']);
-            } catch(Error $error){ $store->delete($objectKey); RecordStore::delete('asset',$id); throw $error; }
+            } catch(Error $error){ $store->delete($objectKey);RecordStore::delete('asset',$id);throw $error; }
             $cleanupPending=[];
-            foreach($sessionParts=self::sessionPartsBeforeCleanup($id) as $part){ try{PartStore::delete($part);}catch(Error $error){$cleanupPending[]=(string)($part['object_key']??'');} }
-            if($cleanupPending){ $session['cleanup_pending_hashes']=array_map([Utils::class,'hashReference'],$cleanupPending);$session=RecordStore::put('upload',$id,$session,(int)$session['version']);Audit::record('upload_part_cleanup_deferred',['upload_id'=>$id,'count'=>count($cleanupPending)]); }
+            foreach($partsForCleanup as $part){ try{PartStore::delete($part);}catch(Error $error){$cleanupPending[]=(string)($part['object_key']??'');} }
+            if($cleanupPending){
+                $session['cleanup_pending_hashes']=array_map([Utils::class,'hashReference'],$cleanupPending);
+                $session=RecordStore::put('upload',$id,$session,(int)$session['version']);
+                Audit::record('upload_part_cleanup_deferred',['upload_id'=>$id,'count'=>count($cleanupPending)]);
+            }
             Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,'upload',$id);
             Audit::record('upload_quarantined',['upload_id'=>$id,'actor_id'=>$actor,'asset_id'=>$asset['asset_id'],'content_sha256'=>$contentHash]);
             return self::public($session);
         } catch(Error $error){ Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$error->errorCode); throw $error; }
         catch(\Throwable $error){ Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'unexpected'); throw new Error('upload_completion_failed','Upload completion failed.',500); }
     }
-    private static array $cleanupParts=[];
-    private static function sessionPartsBeforeCleanup(string $id): array { $parts=self::$cleanupParts[$id]??[];unset(self::$cleanupParts[$id]);return $parts; }
     private static function temp(string $bytes): string { $path=tempnam(sys_get_temp_dir(),'scm');if($path===false||file_put_contents($path,$bytes,LOCK_EX)===false)throw new Error('upload_temp_failed','Upload validation file could not be created.',500);register_shutdown_function(static fn()=>@unlink($path));return $path; }
     private static function session(string $id): array { $session=RecordStore::get('upload',$id);if(!$session)throw new Error('upload_not_found','Upload not found.',404);return $session; }
     private static function assertActor(array $session,int $actor): void { if($actor<1||(int)$session['actor']!==$actor)throw new Error('upload_actor_denied','Upload actor mismatch.',403); }
