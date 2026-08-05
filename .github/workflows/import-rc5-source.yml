@@ -33,12 +33,16 @@ jobs:
             .cf04-import-xz/part-001 \
             .cf04-import-xz/part-002 \
             > /tmp/cf04-source.tar.xz.b64
-          tr -d '\r\n\t ' < /tmp/cf04-source.tar.xz.b64 > /tmp/cf04-source.tar.xz.flat.b64
-          rem=$(( $(wc -c < /tmp/cf04-source.tar.xz.flat.b64) % 4 ))
-          if [[ "$rem" -eq 2 ]]; then printf '==' >> /tmp/cf04-source.tar.xz.flat.b64; fi
-          if [[ "$rem" -eq 3 ]]; then printf '=' >> /tmp/cf04-source.tar.xz.flat.b64; fi
-          if [[ "$rem" -eq 1 ]]; then echo '::error::Invalid base64 transport length'; exit 1; fi
-          base64 --decode /tmp/cf04-source.tar.xz.flat.b64 > /tmp/cf04-source.tar.xz
+
+          python3 - <<'PY'
+          import base64, pathlib, re
+          source = pathlib.Path('/tmp/cf04-source.tar.xz.b64').read_bytes()
+          cleaned = re.sub(rb'[^A-Za-z0-9+/=]', b'', source)
+          cleaned = cleaned.rstrip(b'=')
+          cleaned += b'=' * ((4 - len(cleaned) % 4) % 4)
+          pathlib.Path('/tmp/cf04-source.tar.xz').write_bytes(base64.b64decode(cleaned, validate=False))
+          print(f'encoded-bytes={len(source)} cleaned-bytes={len(cleaned)} decoded-bytes={pathlib.Path("/tmp/cf04-source.tar.xz").stat().st_size}')
+          PY
 
           expected='68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399'
           actual="$(sha256sum /tmp/cf04-source.tar.xz | awk '{print $1}')"
