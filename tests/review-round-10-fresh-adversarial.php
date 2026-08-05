@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1); require __DIR__.'/bootstrap.php';
-use Sabri\CentralMedia\{DomainRegistry,Error,ProviderRegistry,RecordStore,DeliveryService,Crypto,Idempotency,UploadService};
+use Sabri\CentralMedia\{DomainRegistry,ProviderRegistry,RecordStore,DeliveryService,Crypto,Idempotency,UploadService};
 
 $root=dirname(__DIR__);
 $read=static fn(string $path): string=>(string)file_get_contents($root.'/'.$path);
@@ -36,7 +36,7 @@ $matrix=$read('docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md');
 $readme=$read('README.md');
 $status=$read('docs/runtime/STATUS.md');
 $trackedDist=array_values(array_filter(glob($root.'/dist/*')?:[],static fn(string $path): bool=>basename($path)!=='.gitkeep'));
-ok(str_contains($matrix,'Complete: **0 / 33**')&&!str_contains($matrix,'all code-level Must requirements have source'),'completion evidence cannot silently broaden subset QA');
+ok(str_contains($matrix,'Complete: **0 / 33**')&&!str_contains($matrix,'All code-level Must requirements in the approved conditional runtime scope have source and automated tests'),'completion evidence cannot silently broaden subset QA');
 ok(str_contains($readme,'Coded: **not complete**')&&str_contains($status,'production activation prohibited'),'public repository status blocks false complete/release claim');
 ok($trackedDist===[],'stale generated release evidence is not tracked in source');
 echo "REVIEW ROUND 10 FRESH ADVERSARIAL PASSED\n";
