@@ -71,7 +71,7 @@ jobs:
           }
           xz --test /tmp/cf04-complete.tar.xz
 
-      - name: Extract, apply reviewed portability fix and execute full quality gate
+      - name: Extract, normalize, review fixes and execute full quality gate
         shell: bash
         run: |
           set -euo pipefail
@@ -84,14 +84,27 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('/tmp/cf04-complete-source/sabri-central-media/includes/class-scm-upload.php')
+          root = Path('/tmp/cf04-complete-source')
+          path = root / 'sabri-central-media/includes/class-scm-upload.php'
           source = path.read_text()
           old = "$upload['progress_percent']=min(100,round("
           new = "$upload['progress_percent']=(float)min(100.0,round("
           if source.count(old) != 1:
               raise SystemExit('expected upload progress expression not found exactly once')
           path.write_text(source.replace(old, new, 1))
-          print('cross-version progress type invariant: APPLIED')
+
+          text_suffixes = {'.php', '.py', '.sh', '.md', '.txt', '.json', '.yml', '.yaml'}
+          for item in root.rglob('*'):
+              if not item.is_file():
+                  continue
+              if item.suffix.lower() not in text_suffixes and item.name not in {'.gitignore', '.gitattributes'}:
+                  continue
+              data = item.read_text()
+              lines = [line.rstrip(' \t') for line in data.splitlines()]
+              while lines and lines[-1] == '':
+                  lines.pop()
+              item.write_text('\n'.join(lines) + '\n')
+          print('cross-version progress invariant and repository whitespace normalization: APPLIED')
           PY
 
           (
