@@ -27,7 +27,7 @@ jobs:
               .cf04-import-xz/part-001 \
               .cf04-import-xz/part-002 > /tmp/cf04-source.b64
           printf '==' >> /tmp/cf04-source.b64
-          base64 --decode --ignore-garbage /tmp/cf04-source.b64 > /tmp/cf04-source.tar.xz
+          base64 --decode --ignore-garbage /tmp/cf04-source.b64 > /tmp/cf04-source.tar.xz || true
           source_actual="$(sha256sum /tmp/cf04-source.tar.xz | awk '{print $1}')"
           if [[ "$source_actual" != "68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399" ]]; then
             echo "::error title=CF-04 source checksum::Expected 68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399 but reconstructed ${source_actual}; encoded-bytes=$(wc -c </tmp/cf04-source.b64), archive-bytes=$(wc -c </tmp/cf04-source.tar.xz)"
@@ -48,10 +48,10 @@ jobs:
           rsync -a "$SRC/" ./
 
           cat .cf04-three-plan-patch/part-* > /tmp/cf04-three-plan.patch.gz.b64
-          base64 --decode --ignore-garbage /tmp/cf04-three-plan.patch.gz.b64 > /tmp/cf04-three-plan.patch.gz
+          base64 --decode --ignore-garbage /tmp/cf04-three-plan.patch.gz.b64 > /tmp/cf04-three-plan.patch.gz || true
           patch_gz_actual="$(sha256sum /tmp/cf04-three-plan.patch.gz | awk '{print $1}')"
           if [[ "$patch_gz_actual" != "198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785" ]]; then
-            echo "::error title=CF-04 patch checksum::Expected 198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785 but reconstructed ${patch_gz_actual}"
+            echo "::error title=CF-04 patch checksum::Expected 198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785 but reconstructed ${patch_gz_actual}; encoded-bytes=$(wc -c </tmp/cf04-three-plan.patch.gz.b64), archive-bytes=$(wc -c </tmp/cf04-three-plan.patch.gz)"
             exit 1
           fi
           gzip -dc /tmp/cf04-three-plan.patch.gz > /tmp/cf04-three-plan.patch
