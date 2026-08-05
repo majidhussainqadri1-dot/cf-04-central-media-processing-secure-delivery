@@ -8,6 +8,7 @@ on:
       - .cf04-complete-import/part-00
       - .cf04-complete-import/part-01
       - .cf04-complete-import/part-02
+      - .cf04-complete-import/part-02-block-17
       - .cf04-complete-import/part-03
       - .github/workflows/import-complete-source.yml
   workflow_dispatch:
@@ -32,50 +33,32 @@ jobs:
           for part in 00 01 02 03; do
             test -s ".cf04-complete-import/part-${part}"
           done
+          test -s .cf04-complete-import/part-02-block-17
 
           python3 - <<'PY'
           from pathlib import Path
           import hashlib
-          expected = [
-              'f666d25cd39baffec906a45860edfef6d934dde805a14f3b6ceaa34376d3010e',
-              '5cf03c84f36805155ae9fa344960dfcc6e195bbc9c43af132d342d82b0ebf546',
-              '64e3670b95210333e6017f910ae9da5ef70cb3c8fc3841e39277ed3118d2ce9b',
-              '9831ddb4105ac1e9e5564ee7ba60a22bb4e4cd23194028e9131bf3437a074100',
-              'bf7cb2af7ac3b2ef50a9c87335c3606662e5ff52653805594d3b44fa8a1978b2',
-              'd341b6f27adf405075a1050c357bfad994197266807d8082dc51d1c21f9a0c1e',
-              '2be9b8cb9bd13da95b3d50b53641b0a2a60a0b37b71cd13c0ed1682d59fa384c',
-              '10eacbce835f150c1ab299c4590ca38767e8305ca06a8fe155a277b4cd8f59e4',
-              'e2c929acb951a799717eecda2e78fb6aa25ee8f4e67909380450344075d05c70',
-              '5d2803e27e87c4203b76087bad76574796465b68f9b62045ac5f0418439e0562',
-              '0f0a23338a1a66f5081d01aa57be07d7d088de91250f7d8dab0b52792e4e4922',
-              '447f4e0d7acfe9f96df6bd29a2837911d1bb31b8782126817e3ea25e38f088dc',
-              '82750ce1366be85e40b8a6cea4ee46ca8135bea6914274fe8d1403d49b447cc9',
-              '59b2c6b8d3a93be7be050357c2380b01599b1c4b5a77eb3554334ccb81a09970',
-              '7b21d1f7843fe6149f46c8581cbce33ea274edd969194dc2b64ca7b1c21624bb',
-              'aa19ccf2f94a46b12d79a30afd7437b112ea08753b07c538acfcfc49dbf38910',
-              '7aa56851c313f38b5dedf0c90f94b5cc28e3c1123f9cee912521db9f1fac9ffe',
-              '88cca3688e6f167ac92ced1b42fde70eeff86691e1028a91d95a8f3135e1006d',
-              'ac32d059d717dc83bdbfcfd1c74b85160f98fb68d8a179005d537c016dfdf5d6',
-          ]
-          data = Path('.cf04-complete-import/part-02').read_bytes()
-          mismatches = []
-          for index, wanted in enumerate(expected):
-              block = data[index * 1000:(index + 1) * 1000]
-              actual = hashlib.sha256(block).hexdigest()
-              if actual != wanted:
-                  mismatches.append((index, actual, wanted))
-          if mismatches:
-              print('PART-02 BLOCK MISMATCHES:')
-              for item in mismatches:
-                  print(*item)
-          else:
-              print('PART-02 BLOCK HASHES: PASS')
+          source = Path('.cf04-complete-import/part-02').read_bytes()
+          correction = Path('.cf04-complete-import/part-02-block-17').read_bytes()
+          if len(source) != 19000 or len(correction) != 1000:
+              raise SystemExit('invalid source transport correction length')
+          wanted = '88cca3688e6f167ac92ced1b42fde70eeff86691e1028a91d95a8f3135e1006d'
+          actual = hashlib.sha256(correction).hexdigest()
+          if actual != wanted:
+              raise SystemExit(f'correction block checksum mismatch: {actual}')
+          corrected = source[:17000] + correction + source[18000:]
+          wanted_full = '03c03d45cf6848a38449c3a96cda22ecea6fcfb8d8f6825ec5513c8ac50a1796'
+          actual_full = hashlib.sha256(corrected).hexdigest()
+          if actual_full != wanted_full:
+              raise SystemExit(f'corrected part-02 checksum mismatch: {actual_full}')
+          Path('/tmp/cf04-part-02.corrected').write_bytes(corrected)
+          print('part-02 transport correction: PASS')
           PY
 
           cat \
             .cf04-complete-import/part-00 \
             .cf04-complete-import/part-01 \
-            .cf04-complete-import/part-02 \
+            /tmp/cf04-part-02.corrected \
             .cf04-complete-import/part-03 \
             > /tmp/cf04-complete.tar.xz.b64
           base64 --decode /tmp/cf04-complete.tar.xz.b64 > /tmp/cf04-complete.tar.xz
