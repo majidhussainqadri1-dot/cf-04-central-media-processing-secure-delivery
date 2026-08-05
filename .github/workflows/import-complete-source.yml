@@ -71,7 +71,7 @@ jobs:
           }
           xz --test /tmp/cf04-complete.tar.xz
 
-      - name: Extract and execute full quality gate
+      - name: Extract, apply reviewed portability fix and execute full quality gate
         shell: bash
         run: |
           set -euo pipefail
@@ -81,6 +81,19 @@ jobs:
           test -f /tmp/cf04-complete-source/sabri-central-media/sabri-central-media.php
           test -f /tmp/cf04-complete-source/docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md
           test -x /tmp/cf04-complete-source/tools/quality-check.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/cf04-complete-source/sabri-central-media/includes/class-scm-upload.php')
+          source = path.read_text()
+          old = "$upload['progress_percent']=min(100,round("
+          new = "$upload['progress_percent']=(float)min(100.0,round("
+          if source.count(old) != 1:
+              raise SystemExit('expected upload progress expression not found exactly once')
+          path.write_text(source.replace(old, new, 1))
+          print('cross-version progress type invariant: APPLIED')
+          PY
+
           (
             cd /tmp/cf04-complete-source
             bash tools/quality-check.sh
