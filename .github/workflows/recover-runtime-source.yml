@@ -19,10 +19,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Inspect every committed recovery payload
+      - name: Decode and forensically recover every committed payload
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           mkdir -p /tmp/cf04-recovery
 
           decode_set() {
@@ -40,26 +40,13 @@ jobs:
             local len rem
             len=$(wc -c < "$flat")
             rem=$((len % 4))
-            if [[ $rem -eq 2 ]]; then printf '==' >> "$flat"; fi
-            if [[ $rem -eq 3 ]]; then printf '=' >> "$flat"; fi
+            [[ $rem -eq 2 ]] && printf '==' >> "$flat"
+            [[ $rem -eq 3 ]] && printf '=' >> "$flat"
             echo "===== ${label}: encoded=${len}, remainder=${rem} ====="
-            base64 --decode --ignore-garbage "$flat" > "$decoded" || true
+            base64 --decode --ignore-garbage "$flat" > "$decoded" 2>"/tmp/cf04-recovery/${label}.base64.err" || true
             echo "decoded=$(wc -c < "$decoded") sha256=$(sha256sum "$decoded" | awk '{print $1}')"
             file "$decoded" || true
             xxd -l 32 "$decoded" || true
-            if xz --test "$decoded" 2>/tmp/cf04-recovery/${label}.xz.err; then
-              echo "${label}: VALID_XZ"
-              mkdir -p "/tmp/cf04-recovery/${label}-out"
-              tar -xJf "$decoded" -C "/tmp/cf04-recovery/${label}-out" || true
-              find "/tmp/cf04-recovery/${label}-out" -maxdepth 3 -type f | sort | head -100
-            else
-              echo "${label}: not xz: $(cat /tmp/cf04-recovery/${label}.xz.err)"
-            fi
-            if unzip -t "$decoded" >/tmp/cf04-recovery/${label}.zip.log 2>&1; then
-              echo "${label}: VALID_ZIP"
-              unzip -l "$decoded" | head -100
-            fi
-            if gzip -t "$decoded" 2>/dev/null; then echo "${label}: VALID_GZIP"; fi
           }
 
           decode_set import_xz '.cf04-import-xz/part-000' '.cf04-import-xz/part-001' '.cf04-import-xz/part-002'
@@ -67,28 +54,97 @@ jobs:
           decode_set old_import '.cf04-import/part-*'
           decode_set three_plan_patch '.cf04-three-plan-patch/part-*'
 
-      - name: Publish source only if a payload is complete and self-verifying
+          recover_xz() {
+            local label="$1"
+            local input="/tmp/cf04-recovery/${label}.bin"
+            local partial="/tmp/cf04-recovery/${label}.partial.tar"
+            local out="/tmp/cf04-recovery/${label}-out"
+            mkdir -p "$out"
+            xz -dc "$input" > "$partial" 2>"/tmp/cf04-recovery/${label}.xz.err" || true
+            echo "===== ${label} partial xz recovery ====="
+            echo "partial-bytes=$(wc -c < "$partial")"
+            file "$partial" || true
+            tar -tf "$partial" > "/tmp/cf04-recovery/${label}.tar-list.txt" 2>"/tmp/cf04-recovery/${label}.tar.err" || true
+            tar -xf "$partial" -C "$out" --ignore-zeros 2>>"/tmp/cf04-recovery/${label}.tar.err" || true
+            echo "recovered-files=$(find "$out" -type f | wc -l)"
+            find "$out" -type f | sort | head -150
+          }
+
+          recover_xz import_xz
+          recover_xz final_import
+
+          echo '===== old ZIP recovery ====='
+          mkdir -p /tmp/cf04-recovery/old_import-out
+          unzip -o /tmp/cf04-recovery/old_import.bin -d /tmp/cf04-recovery/old_import-out > /tmp/cf04-recovery/old_import.unzip.log 2>&1 || true
+          yes | zip -FF /tmp/cf04-recovery/old_import.bin --out /tmp/cf04-recovery/old_import-fixed.zip > /tmp/cf04-recovery/old_import.fix.log 2>&1 || true
+          if [[ -s /tmp/cf04-recovery/old_import-fixed.zip ]]; then
+            unzip -o /tmp/cf04-recovery/old_import-fixed.zip -d /tmp/cf04-recovery/old_import-out >> /tmp/cf04-recovery/old_import.unzip.log 2>&1 || true
+          fi
+          echo "old-zip-recovered-files=$(find /tmp/cf04-recovery/old_import-out -type f | wc -l)"
+          find /tmp/cf04-recovery/old_import-out -type f | sort | head -150
+
+          echo '===== three-plan patch inspection ====='
+          gzip -dc /tmp/cf04-recovery/three_plan_patch.bin > /tmp/cf04-recovery/three-plan.patch 2>/tmp/cf04-recovery/three-plan.gzip.err || true
+          echo "patch-bytes=$(wc -c < /tmp/cf04-recovery/three-plan.patch)"
+          grep '^diff --git ' /tmp/cf04-recovery/three-plan.patch | tee /tmp/cf04-recovery/three-plan-paths.txt || true
+          sed -n '1,160p' /tmp/cf04-recovery/three-plan.patch
+
+      - name: Rebuild candidate trees and apply the complete patch
+        shell: bash
+        run: |
+          set -u
+          mkdir -p /tmp/cf04-recovery/candidates
+          : > /tmp/cf04-recovery/candidate-results.txt
+
+          n=0
+          while IFS= read -r bootstrap; do
+            [[ -f "$bootstrap" ]] || continue
+            root="$(dirname "$(dirname "$bootstrap")")"
+            n=$((n+1))
+            candidate="/tmp/cf04-recovery/candidates/candidate-${n}"
+            mkdir -p "$candidate"
+            rsync -a "$root/" "$candidate/"
+            echo "candidate-${n} source=${root}" | tee -a /tmp/cf04-recovery/candidate-results.txt
+
+            if [[ -s /tmp/cf04-recovery/three-plan.patch ]]; then
+              (cd "$candidate" && git init -q && git add -A && git -c user.name=CF04 -c user.email=cf04@example.invalid commit -qm baseline || true)
+              (cd "$candidate" && git apply --check /tmp/cf04-recovery/three-plan.patch && git apply /tmp/cf04-recovery/three-plan.patch) \
+                >> /tmp/cf04-recovery/candidate-results.txt 2>&1 || \
+              (cd "$candidate" && patch -p1 --forward < /tmp/cf04-recovery/three-plan.patch) \
+                >> /tmp/cf04-recovery/candidate-results.txt 2>&1 || true
+            fi
+
+            if [[ -f "$candidate/sabri-central-media/sabri-central-media.php" ]]; then
+              echo "candidate-${n}: bootstrap=yes" | tee -a /tmp/cf04-recovery/candidate-results.txt
+            fi
+            if [[ -f "$candidate/tools/quality-check.sh" ]]; then
+              echo "candidate-${n}: quality-script=yes" | tee -a /tmp/cf04-recovery/candidate-results.txt
+              (cd "$candidate" && bash tools/quality-check.sh) > "/tmp/cf04-recovery/candidate-${n}.qa.log" 2>&1
+              qa=$?
+              echo "candidate-${n}: qa-exit=${qa}" | tee -a /tmp/cf04-recovery/candidate-results.txt
+              if [[ $qa -eq 0 && -f "$candidate/sabri-central-media/sabri-central-media.php" ]]; then
+                echo "$candidate" > /tmp/cf04-recovery/selected-candidate.txt
+                break
+              fi
+            fi
+          done < <(find \
+            /tmp/cf04-recovery/import_xz-out \
+            /tmp/cf04-recovery/final_import-out \
+            /tmp/cf04-recovery/old_import-out \
+            -type f -path '*/sabri-central-media/sabri-central-media.php' 2>/dev/null | sort -u)
+
+          cat /tmp/cf04-recovery/candidate-results.txt
+          find /tmp/cf04-recovery/candidates -maxdepth 4 -type f | sort | head -250
+
+      - name: Publish only a fully recovered and QA-green source tree
+        if: ${{ hashFiles('/tmp/cf04-recovery/selected-candidate.txt') != '' }}
         shell: bash
         run: |
           set -euo pipefail
-          candidates=(
-            /tmp/cf04-recovery/import_xz-out
-            /tmp/cf04-recovery/final_import-out
-            /tmp/cf04-recovery/old_import-out
-            /tmp/cf04-recovery/three_plan_patch-out
-          )
-          selected=''
-          for dir in "${candidates[@]}"; do
-            if [[ -f "$dir/sabri-central-media/sabri-central-media.php" && -f "$dir/tools/quality-check.sh" ]]; then
-              selected="$dir"
-              break
-            fi
-          done
-          if [[ -z "$selected" ]]; then
-            echo 'No complete self-contained runtime payload was recovered.'
-            exit 1
-          fi
-          bash "$selected/tools/quality-check.sh"
+          selected="$(cat /tmp/cf04-recovery/selected-candidate.txt)"
+          test -f "$selected/sabri-central-media/sabri-central-media.php"
+          test -f "$selected/tools/quality-check.sh"
+          (cd "$selected" && bash tools/quality-check.sh)
           rsync -a --delete --exclude='.git/' "$selected/" ./
           rm -rf .cf04-final-import .cf04-import-xz .cf04-import .bootstrap .cf04-three-plan-patch
           rm -f .github/workflows/import-three-plan-runtime.yml .github/workflows/recover-runtime-source.yml
@@ -97,3 +153,26 @@ jobs:
           git add -A
           git commit -m 'CF-04: recover and publish verified runtime source'
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Upload forensic recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-runtime-recovery-evidence
+          path: |
+            /tmp/cf04-recovery/*.txt
+            /tmp/cf04-recovery/*.log
+            /tmp/cf04-recovery/*.err
+            /tmp/cf04-recovery/three-plan.patch
+            /tmp/cf04-recovery/candidate-*.qa.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail closed when no QA-green candidate exists
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -f /tmp/cf04-recovery/selected-candidate.txt ]]; then
+            echo 'No complete, patchable and QA-green runtime source was recoverable from committed payloads.'
+            exit 1
+          fi
