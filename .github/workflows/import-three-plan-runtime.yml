@@ -5,7 +5,9 @@ on:
     branches:
       - codex/cf04-three-plan-runtime-final
     paths:
-      - .cf04-final-import/READY
+      - .cf04-import-xz/part-000
+      - .cf04-import-xz/part-001
+      - .cf04-import-xz/part-002
       - .github/workflows/import-three-plan-runtime.yml
   workflow_dispatch:
 
@@ -26,12 +28,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          cat .cf04-final-import/part-* > /tmp/cf04-runtime.tar.xz.b64
-          base64 --decode --ignore-garbage /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz
+          cat \
+            .cf04-import-xz/part-000 \
+            .cf04-import-xz/part-001 \
+            .cf04-import-xz/part-002 \
+            > /tmp/cf04-runtime.tar.xz.b64
+          tr -d '\r\n\t ' < /tmp/cf04-runtime.tar.xz.b64 > /tmp/cf04-runtime.tar.xz.flat.b64
+          base64 --decode /tmp/cf04-runtime.tar.xz.flat.b64 > /tmp/cf04-runtime.tar.xz
+
           actual="$(sha256sum /tmp/cf04-runtime.tar.xz | awk '{print $1}')"
           expected="9d45f04d54ec81e4a31e6dfaa51d13f4cd86d023eb531f7d98a1b8827b1ba469"
           if [[ "$actual" != "$expected" ]]; then
-            echo "::error title=CF-04 final archive checksum::Expected ${expected} but reconstructed ${actual}; encoded-bytes=$(wc -c </tmp/cf04-runtime.tar.xz.b64), archive-bytes=$(wc -c </tmp/cf04-runtime.tar.xz)"
+            echo "::error title=CF-04 final archive checksum::Expected ${expected} but reconstructed ${actual}; encoded-bytes=$(wc -c </tmp/cf04-runtime.tar.xz.flat.b64), archive-bytes=$(wc -c </tmp/cf04-runtime.tar.xz)"
             exit 1
           fi
 
