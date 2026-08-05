@@ -1,0 +1,9 @@
+# Generated exact-head release evidence
+/dist/*
+!/dist/.gitkeep
+
+# Local runtime/test state
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
