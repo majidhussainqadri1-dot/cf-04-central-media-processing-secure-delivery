@@ -1,81 +1,57 @@
-## Purpose
-
-<!-- State the bounded change and why it is required. -->
-
-## Roadmap phase
-
-- [ ] C4-A
-- [ ] C4-B
-- [ ] C4-C
-- [ ] C4-D
-- [ ] C4-E
-- [ ] C4-F
-- [ ] C4-G
-- [ ] C4-H
-
-## Authorization gate
-
-- Development authorization status:
-- Extraction/release authorization status:
-- Founder change-control reference:
-
-## Requirement IDs
-
-<!-- List stable requirement IDs. -->
-
-## Ownership and scope
-
-- Canonical owner affected:
-- Domain modules affected:
-- New direct-write path introduced: **No / Yes — explain**
-- Duplicate source of truth introduced: **No / Yes — explain**
-- Domain truth transferred: **No / Yes — cite approved migration charter**
-
-## Data, privacy and security
-
-- Highest data class affected:
-- Secrets introduced: **No / Yes — explain protected handling**
-- Authorization impact:
-- Retention/deletion impact:
-- Threat-model impact:
-
-## Migration and rollback
-
-- Migration required:
-- Reconciliation method:
-- Rollback method:
-- Provider-exit impact:
-
-## Tests and evidence
-
-- Static/unit/contract tests:
-- Security/privacy tests:
-- Accessibility/RTL/browser tests:
-- Load/fault tests:
-- Evidence artifact locations:
-
-## First review and corrections
-
-- Findings:
-- Corrections:
-- Retest result:
-
-## Fresh adversarial review and corrections
-
-- Findings:
-- Corrections:
-- Retest result:
-
-## Completion status
+## Completion level
 
 - [ ] Specified
-- [ ] Coded
-- [ ] Packaged
-- [ ] Automated-QA Green
-- [ ] Staging-Accepted
-- [ ] Live-Deployed
+- [ ] Coded against every Must requirement
+- [ ] Deterministically packaged
+- [ ] Automated QA green for complete scope
+- [ ] Staging accepted
+- [ ] Live deployed
 - [ ] Operational
 
-## Remaining risks
+Do not mark **Coded** merely because a subset is implemented or its tests are green. Link the complete plan requirement matrix.
 
-<!-- None, or list explicit time-bound residual risks and approval. -->
+## Governing plans and traceability
+
+- Definitive Master Plan version:
+- Consolidated Directive Register version:
+- File-level plan version:
+- Requirements affected:
+- Requirement → source → test → evidence links:
+
+## Canonical ownership
+
+- Native truth owner(s):
+- CF-04-owned binary/processing/storage/delivery records:
+- Direct companion writes: none / explain exception:
+- Action-time authorization and object-version recheck:
+
+## Security and privacy
+
+- Data/privacy classes:
+- Sender/recipient/relationship/consent/suspension checks:
+- Scanner/provider fail-closed evidence:
+- Secret, token, object-key and URL redaction:
+- Encryption/key version/rotation evidence:
+- Deletion/retention/hold evidence:
+
+## Four-stage review law
+
+1. Initial review defects and corrections:
+2. Fresh adversarial review defects and corrections:
+3. Retest evidence after corrections:
+4. Residual risks and release blockers:
+
+## Release evidence
+
+- Exact head SHA:
+- Runtime/schema/contract versions:
+- Deterministic package name and SHA-256:
+- Manifest/SBOM/checksum parity:
+- CI run and artifact:
+- Migration/restore/rollback evidence:
+- Browser/accessibility/load/security evidence:
+- Founder acceptance:
+
+## Truthful unresolved gates
+
+List every missing Must requirement, external dependency and non-passing gate. Unknown or unproved status is a blocker, not a pass.
