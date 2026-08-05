@@ -27,8 +27,15 @@ jobs:
               .cf04-import-xz/part-001 \
               .cf04-import-xz/part-002 > /tmp/cf04-source.b64
           printf '==' >> /tmp/cf04-source.b64
-          base64 --decode /tmp/cf04-source.b64 > /tmp/cf04-source.tar.xz
-          echo "68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399  /tmp/cf04-source.tar.xz" | sha256sum -c -
+          if ! base64 --decode /tmp/cf04-source.b64 > /tmp/cf04-source.tar.xz; then
+            echo "::error title=CF-04 source decode::Legacy source archive base64 decoding failed"
+            exit 1
+          fi
+          source_actual="$(sha256sum /tmp/cf04-source.tar.xz | awk '{print $1}')"
+          if [[ "$source_actual" != "68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399" ]]; then
+            echo "::error title=CF-04 source checksum::Expected 68bed9d09cc09b43af155dec6feb6801959dceb847cb2fa9630d4989a8f86399 but reconstructed ${source_actual}; encoded-bytes=$(wc -c </tmp/cf04-source.b64), archive-bytes=$(wc -c </tmp/cf04-source.tar.xz)"
+            exit 1
+          fi
 
           mkdir -p /tmp/cf04-source
           tar -xJf /tmp/cf04-source.tar.xz -C /tmp/cf04-source
@@ -36,7 +43,7 @@ jobs:
           if [[ ! -f "$SRC/README.md" ]]; then
             candidate="$(find "$SRC" -mindepth 1 -maxdepth 1 -type d | head -n1)"
             [[ -n "$candidate" && -f "$candidate/README.md" ]] || {
-              echo "Verified source root unavailable" >&2
+              echo "::error title=CF-04 source root::Verified source root unavailable"
               exit 1
             }
             SRC="$candidate"
@@ -44,12 +51,26 @@ jobs:
           rsync -a "$SRC/" ./
 
           cat .cf04-three-plan-patch/part-* > /tmp/cf04-three-plan.patch.gz.b64
-          base64 --decode /tmp/cf04-three-plan.patch.gz.b64 > /tmp/cf04-three-plan.patch.gz
-          echo "198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785  /tmp/cf04-three-plan.patch.gz" | sha256sum -c -
+          if ! base64 --decode /tmp/cf04-three-plan.patch.gz.b64 > /tmp/cf04-three-plan.patch.gz; then
+            echo "::error title=CF-04 patch decode::Three-plan patch base64 decoding failed"
+            exit 1
+          fi
+          patch_gz_actual="$(sha256sum /tmp/cf04-three-plan.patch.gz | awk '{print $1}')"
+          if [[ "$patch_gz_actual" != "198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785" ]]; then
+            echo "::error title=CF-04 patch checksum::Expected 198ed10b9e60819ad036f618de9aa7071add9568c9cdbc9dffb0aefefd85e785 but reconstructed ${patch_gz_actual}"
+            exit 1
+          fi
           gzip -dc /tmp/cf04-three-plan.patch.gz > /tmp/cf04-three-plan.patch
-          echo "62619b26392c8141ce8d0453bca5b2ed97f5d021e9f37f76118a1649a1d9a094  /tmp/cf04-three-plan.patch" | sha256sum -c -
+          patch_actual="$(sha256sum /tmp/cf04-three-plan.patch | awk '{print $1}')"
+          if [[ "$patch_actual" != "62619b26392c8141ce8d0453bca5b2ed97f5d021e9f37f76118a1649a1d9a094" ]]; then
+            echo "::error title=CF-04 patch identity::Expected 62619b26392c8141ce8d0453bca5b2ed97f5d021e9f37f76118a1649a1d9a094 but reconstructed ${patch_actual}"
+            exit 1
+          fi
 
-          git apply --check /tmp/cf04-three-plan.patch
+          if ! git apply --check /tmp/cf04-three-plan.patch; then
+            echo "::error title=CF-04 patch applicability::Verified patch does not apply to reconstructed source"
+            exit 1
+          fi
           git apply /tmp/cf04-three-plan.patch
 
           rm -rf .cf04-import-xz .cf04-import .bootstrap .cf04-three-plan-patch
