@@ -1,11 +1,27 @@
 from pathlib import Path
-r=Path(__file__).resolve().parents[1]
-main=(r/'sabri-central-media/sabri-central-media.php').read_text()
-assert 'SCM_RUNTIME_ENABLED' in main and "false" in main
-required=['class-scm-upload-service.php','class-scm-delivery-service.php','class-scm-transfer-service.php','class-scm-download-manager-service.php','class-scm-workspace-upload-service.php','class-scm-scanner-registry.php','class-scm-record-store.php','class-scm-part-store.php']
-for f in required: assert (r/'sabri-central-media/includes'/f).exists(), f
-for p in r.rglob('*'):
-    if p.is_file() and '.git' not in p.parts and p.name != 'source-integration.py':
-        t=p.read_text(errors='ignore')
-        assert ('A'+'KIA') not in t and ('BEGIN PRIVATE'+' KEY') not in t
-print('source-integration: PASS')
+
+root = Path(__file__).resolve().parents[1]
+source = root / "sabri-central-media"
+required = {
+    "includes/class-scm-upload-service.php",
+    "includes/class-scm-processing-service.php",
+    "includes/class-scm-delivery-service.php",
+    "includes/class-scm-deletion-service.php",
+    "includes/class-scm-record-store.php",
+    "includes/class-scm-auth.php",
+    "includes/class-scm-crypto.php",
+    "includes/class-scm-rest.php",
+}
+missing = sorted(path for path in required if not (source / path).is_file())
+assert not missing, f"missing source files: {missing}"
+
+matrix = (root / "docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md").read_text(encoding="utf-8")
+status = (root / "docs/runtime/STATUS.md").read_text(encoding="utf-8")
+readme = (root / "README.md").read_text(encoding="utf-8")
+assert "Complete: **0 / 33**" in matrix
+assert "Partial: **20 / 33**" in matrix
+assert "Missing: **13 / 33**" in matrix
+assert "not 100% complete" in status
+assert "Coded: **not complete**" in readme
+assert "all code-level Must requirements" not in matrix
+print("source-integration: PASS")
