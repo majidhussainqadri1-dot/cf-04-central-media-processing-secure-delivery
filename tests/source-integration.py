@@ -23,5 +23,5 @@ assert "Partial: **20 / 33**" in matrix
 assert "Missing: **13 / 33**" in matrix
 assert "not 100% complete" in status
 assert "Coded: **not complete**" in readme
-assert "all code-level Must requirements" not in matrix
+assert "All code-level Must requirements in the approved conditional runtime scope have source and automated tests" not in matrix
 print("source-integration: PASS")
