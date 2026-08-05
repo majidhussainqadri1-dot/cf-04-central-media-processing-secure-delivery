@@ -1,0 +1,99 @@
+name: CF-04 Recover Runtime Source
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-runtime-final
+    paths:
+      - .github/workflows/recover-runtime-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Inspect every committed recovery payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/cf04-recovery
+
+          decode_set() {
+            local label="$1"; shift
+            local combined="/tmp/cf04-recovery/${label}.b64"
+            local flat="/tmp/cf04-recovery/${label}.flat.b64"
+            local decoded="/tmp/cf04-recovery/${label}.bin"
+            : > "$combined"
+            for pattern in "$@"; do
+              for file in $pattern; do
+                [[ -f "$file" ]] && cat "$file" >> "$combined"
+              done
+            done
+            tr -d '\r\n\t ' < "$combined" > "$flat"
+            local len rem
+            len=$(wc -c < "$flat")
+            rem=$((len % 4))
+            if [[ $rem -eq 2 ]]; then printf '==' >> "$flat"; fi
+            if [[ $rem -eq 3 ]]; then printf '=' >> "$flat"; fi
+            echo "===== ${label}: encoded=${len}, remainder=${rem} ====="
+            base64 --decode --ignore-garbage "$flat" > "$decoded" || true
+            echo "decoded=$(wc -c < "$decoded") sha256=$(sha256sum "$decoded" | awk '{print $1}')"
+            file "$decoded" || true
+            xxd -l 32 "$decoded" || true
+            if xz --test "$decoded" 2>/tmp/cf04-recovery/${label}.xz.err; then
+              echo "${label}: VALID_XZ"
+              mkdir -p "/tmp/cf04-recovery/${label}-out"
+              tar -xJf "$decoded" -C "/tmp/cf04-recovery/${label}-out" || true
+              find "/tmp/cf04-recovery/${label}-out" -maxdepth 3 -type f | sort | head -100
+            else
+              echo "${label}: not xz: $(cat /tmp/cf04-recovery/${label}.xz.err)"
+            fi
+            if unzip -t "$decoded" >/tmp/cf04-recovery/${label}.zip.log 2>&1; then
+              echo "${label}: VALID_ZIP"
+              unzip -l "$decoded" | head -100
+            fi
+            if gzip -t "$decoded" 2>/dev/null; then echo "${label}: VALID_GZIP"; fi
+          }
+
+          decode_set import_xz '.cf04-import-xz/part-000' '.cf04-import-xz/part-001' '.cf04-import-xz/part-002'
+          decode_set final_import '.cf04-final-import/part-*'
+          decode_set old_import '.cf04-import/part-*'
+          decode_set three_plan_patch '.cf04-three-plan-patch/part-*'
+
+      - name: Publish source only if a payload is complete and self-verifying
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidates=(
+            /tmp/cf04-recovery/import_xz-out
+            /tmp/cf04-recovery/final_import-out
+            /tmp/cf04-recovery/old_import-out
+            /tmp/cf04-recovery/three_plan_patch-out
+          )
+          selected=''
+          for dir in "${candidates[@]}"; do
+            if [[ -f "$dir/sabri-central-media/sabri-central-media.php" && -f "$dir/tools/quality-check.sh" ]]; then
+              selected="$dir"
+              break
+            fi
+          done
+          if [[ -z "$selected" ]]; then
+            echo 'No complete self-contained runtime payload was recovered.'
+            exit 1
+          fi
+          bash "$selected/tools/quality-check.sh"
+          rsync -a --delete --exclude='.git/' "$selected/" ./
+          rm -rf .cf04-final-import .cf04-import-xz .cf04-import .bootstrap .cf04-three-plan-patch
+          rm -f .github/workflows/import-three-plan-runtime.yml .github/workflows/recover-runtime-source.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'CF-04: recover and publish verified runtime source'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
