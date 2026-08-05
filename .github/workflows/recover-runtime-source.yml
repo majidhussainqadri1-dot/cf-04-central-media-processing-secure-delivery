@@ -19,7 +19,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Decode and forensically recover every committed payload
+      - name: Decode and recover every committed payload
         shell: bash
         run: |
           set -u
@@ -42,11 +42,9 @@ jobs:
             rem=$((len % 4))
             [[ $rem -eq 2 ]] && printf '==' >> "$flat"
             [[ $rem -eq 3 ]] && printf '=' >> "$flat"
-            echo "===== ${label}: encoded=${len}, remainder=${rem} ====="
             base64 --decode --ignore-garbage "$flat" > "$decoded" 2>"/tmp/cf04-recovery/${label}.base64.err" || true
-            echo "decoded=$(wc -c < "$decoded") sha256=$(sha256sum "$decoded" | awk '{print $1}')"
-            file "$decoded" || true
-            xxd -l 32 "$decoded" || true
+            echo "${label}: encoded=${len}; decoded=$(wc -c < "$decoded"); sha256=$(sha256sum "$decoded" | awk '{print $1}')" | tee -a /tmp/cf04-recovery/payload-summary.txt
+            file "$decoded" | tee -a /tmp/cf04-recovery/payload-summary.txt || true
           }
 
           decode_set import_xz '.cf04-import-xz/part-000' '.cf04-import-xz/part-001' '.cf04-import-xz/part-002'
@@ -61,86 +59,94 @@ jobs:
             local out="/tmp/cf04-recovery/${label}-out"
             mkdir -p "$out"
             xz -dc "$input" > "$partial" 2>"/tmp/cf04-recovery/${label}.xz.err" || true
-            echo "===== ${label} partial xz recovery ====="
-            echo "partial-bytes=$(wc -c < "$partial")"
-            file "$partial" || true
             tar -tf "$partial" > "/tmp/cf04-recovery/${label}.tar-list.txt" 2>"/tmp/cf04-recovery/${label}.tar.err" || true
             tar -xf "$partial" -C "$out" --ignore-zeros 2>>"/tmp/cf04-recovery/${label}.tar.err" || true
-            echo "recovered-files=$(find "$out" -type f | wc -l)"
-            find "$out" -type f | sort | head -150
+            echo "${label}: partial-tar=$(wc -c < "$partial"); recovered-files=$(find "$out" -type f | wc -l)" | tee -a /tmp/cf04-recovery/payload-summary.txt
           }
 
           recover_xz import_xz
           recover_xz final_import
 
-          echo '===== old ZIP recovery ====='
           mkdir -p /tmp/cf04-recovery/old_import-out
           unzip -o /tmp/cf04-recovery/old_import.bin -d /tmp/cf04-recovery/old_import-out > /tmp/cf04-recovery/old_import.unzip.log 2>&1 || true
           yes | zip -FF /tmp/cf04-recovery/old_import.bin --out /tmp/cf04-recovery/old_import-fixed.zip > /tmp/cf04-recovery/old_import.fix.log 2>&1 || true
           if [[ -s /tmp/cf04-recovery/old_import-fixed.zip ]]; then
             unzip -o /tmp/cf04-recovery/old_import-fixed.zip -d /tmp/cf04-recovery/old_import-out >> /tmp/cf04-recovery/old_import.unzip.log 2>&1 || true
           fi
-          echo "old-zip-recovered-files=$(find /tmp/cf04-recovery/old_import-out -type f | wc -l)"
-          find /tmp/cf04-recovery/old_import-out -type f | sort | head -150
+          echo "old_import: recovered-files=$(find /tmp/cf04-recovery/old_import-out -type f | wc -l)" | tee -a /tmp/cf04-recovery/payload-summary.txt
 
-          echo '===== three-plan patch inspection ====='
           gzip -dc /tmp/cf04-recovery/three_plan_patch.bin > /tmp/cf04-recovery/three-plan.patch 2>/tmp/cf04-recovery/three-plan.gzip.err || true
-          echo "patch-bytes=$(wc -c < /tmp/cf04-recovery/three-plan.patch)"
-          grep '^diff --git ' /tmp/cf04-recovery/three-plan.patch | tee /tmp/cf04-recovery/three-plan-paths.txt || true
-          sed -n '1,160p' /tmp/cf04-recovery/three-plan.patch
+          grep '^diff --git ' /tmp/cf04-recovery/three-plan.patch > /tmp/cf04-recovery/three-plan-paths.txt || true
+          echo "three_plan_patch: bytes=$(wc -c < /tmp/cf04-recovery/three-plan.patch); paths=$(wc -l < /tmp/cf04-recovery/three-plan-paths.txt)" | tee -a /tmp/cf04-recovery/payload-summary.txt
+          cat /tmp/cf04-recovery/payload-summary.txt
 
-      - name: Rebuild candidate trees and apply the complete patch
+      - name: Build union candidates and apply the complete three-plan patch
         shell: bash
         run: |
           set -u
           mkdir -p /tmp/cf04-recovery/candidates
           : > /tmp/cf04-recovery/candidate-results.txt
 
-          n=0
-          while IFS= read -r bootstrap; do
-            [[ -f "$bootstrap" ]] || continue
-            root="$(dirname "$(dirname "$bootstrap")")"
-            n=$((n+1))
-            candidate="/tmp/cf04-recovery/candidates/candidate-${n}"
+          old_root='/tmp/cf04-recovery/old_import-out/CF-04-GitHub-Source-1.0.0-rc.5'
+          import_root='/tmp/cf04-recovery/import_xz-out'
+          final_root='/tmp/cf04-recovery/final_import-out'
+
+          make_candidate() {
+            local label="$1"; shift
+            local candidate="/tmp/cf04-recovery/candidates/${label}"
+            rm -rf "$candidate"
             mkdir -p "$candidate"
-            rsync -a "$root/" "$candidate/"
-            echo "candidate-${n} source=${root}" | tee -a /tmp/cf04-recovery/candidate-results.txt
+            for root in "$@"; do
+              [[ -d "$root" ]] && rsync -a "$root/" "$candidate/"
+            done
+
+            echo "===== ${label} =====" | tee -a /tmp/cf04-recovery/candidate-results.txt
+            echo "before-files=$(find "$candidate" -type f | wc -l)" | tee -a /tmp/cf04-recovery/candidate-results.txt
 
             if [[ -s /tmp/cf04-recovery/three-plan.patch ]]; then
               (cd "$candidate" && git init -q && git add -A && git -c user.name=CF04 -c user.email=cf04@example.invalid commit -qm baseline || true)
-              (cd "$candidate" && git apply --check /tmp/cf04-recovery/three-plan.patch && git apply /tmp/cf04-recovery/three-plan.patch) \
-                >> /tmp/cf04-recovery/candidate-results.txt 2>&1 || \
-              (cd "$candidate" && patch -p1 --forward < /tmp/cf04-recovery/three-plan.patch) \
+              (cd "$candidate" && git apply --reject --whitespace=nowarn /tmp/cf04-recovery/three-plan.patch) \
+                >> /tmp/cf04-recovery/candidate-results.txt 2>&1 || true
+              (cd "$candidate" && patch -p1 --batch --forward < /tmp/cf04-recovery/three-plan.patch) \
                 >> /tmp/cf04-recovery/candidate-results.txt 2>&1 || true
             fi
 
-            if [[ -f "$candidate/sabri-central-media/sabri-central-media.php" ]]; then
-              echo "candidate-${n}: bootstrap=yes" | tee -a /tmp/cf04-recovery/candidate-results.txt
-            fi
-            if [[ -f "$candidate/tools/quality-check.sh" ]]; then
-              echo "candidate-${n}: quality-script=yes" | tee -a /tmp/cf04-recovery/candidate-results.txt
-              (cd "$candidate" && bash tools/quality-check.sh) > "/tmp/cf04-recovery/candidate-${n}.qa.log" 2>&1
-              qa=$?
-              echo "candidate-${n}: qa-exit=${qa}" | tee -a /tmp/cf04-recovery/candidate-results.txt
-              if [[ $qa -eq 0 && -f "$candidate/sabri-central-media/sabri-central-media.php" ]]; then
+            echo "after-files=$(find "$candidate" -type f | wc -l)" | tee -a /tmp/cf04-recovery/candidate-results.txt
+            echo "rejects=$(find "$candidate" -name '*.rej' -type f | wc -l)" | tee -a /tmp/cf04-recovery/candidate-results.txt
+            [[ -f "$candidate/sabri-central-media/sabri-central-media.php" ]] && echo 'bootstrap=yes' | tee -a /tmp/cf04-recovery/candidate-results.txt
+            [[ -f "$candidate/tools/quality-check.sh" ]] && echo 'quality-script=yes' | tee -a /tmp/cf04-recovery/candidate-results.txt
+
+            if [[ -f "$candidate/sabri-central-media/sabri-central-media.php" && -f "$candidate/tools/quality-check.sh" ]]; then
+              set +e
+              (cd "$candidate" && bash tools/quality-check.sh) > "/tmp/cf04-recovery/${label}.qa.log" 2>&1
+              local qa=$?
+              set -e
+              echo "qa-exit=${qa}" | tee -a /tmp/cf04-recovery/candidate-results.txt
+              if [[ $qa -eq 0 ]]; then
                 echo "$candidate" > /tmp/cf04-recovery/selected-candidate.txt
-                break
+                echo "$label" > /tmp/cf04-recovery/selected-label.txt
+                return 0
               fi
             fi
-          done < <(find \
-            /tmp/cf04-recovery/import_xz-out \
-            /tmp/cf04-recovery/final_import-out \
-            /tmp/cf04-recovery/old_import-out \
-            -type f -path '*/sabri-central-media/sabri-central-media.php' 2>/dev/null | sort -u)
+            return 1
+          }
+
+          make_candidate import-only "$import_root" || true
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || make_candidate old-only "$old_root" || true
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || make_candidate final-only "$final_root" || true
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || make_candidate union-old-final-import "$old_root" "$final_root" "$import_root" || true
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || make_candidate union-final-old-import "$final_root" "$old_root" "$import_root" || true
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || make_candidate union-import-old-final "$import_root" "$old_root" "$final_root" || true
 
           cat /tmp/cf04-recovery/candidate-results.txt
-          find /tmp/cf04-recovery/candidates -maxdepth 4 -type f | sort | head -250
+          find /tmp/cf04-recovery/candidates -name '*.rej' -type f -print | sort > /tmp/cf04-recovery/reject-paths.txt
+          cat /tmp/cf04-recovery/reject-paths.txt
 
       - name: Publish only a fully recovered and QA-green source tree
-        if: ${{ hashFiles('/tmp/cf04-recovery/selected-candidate.txt') != '' }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ -f /tmp/cf04-recovery/selected-candidate.txt ]] || exit 0
           selected="$(cat /tmp/cf04-recovery/selected-candidate.txt)"
           test -f "$selected/sabri-central-media/sabri-central-media.php"
           test -f "$selected/tools/quality-check.sh"
@@ -164,7 +170,7 @@ jobs:
             /tmp/cf04-recovery/*.log
             /tmp/cf04-recovery/*.err
             /tmp/cf04-recovery/three-plan.patch
-            /tmp/cf04-recovery/candidate-*.qa.log
+            /tmp/cf04-recovery/*.qa.log
           if-no-files-found: warn
           retention-days: 30
 
