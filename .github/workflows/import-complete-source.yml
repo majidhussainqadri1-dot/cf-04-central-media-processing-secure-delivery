@@ -112,7 +112,7 @@ jobs:
             bash tools/quality-check.sh
           )
 
-      - name: Publish clean source tree
+      - name: Publish clean source tree without mutating workflow files
         shell: bash
         run: |
           set -euo pipefail
@@ -122,6 +122,7 @@ jobs:
 
           rsync -a --delete \
             --exclude='.git/' \
+            --exclude='.github/workflows/' \
             /tmp/cf04-complete-source/ ./
 
           rm -rf \
@@ -131,11 +132,6 @@ jobs:
             .bootstrap \
             .cf04-final-import \
             .cf04-three-plan-patch
-          rm -f \
-            .github/workflows/import-complete-source.yml \
-            .github/workflows/import-rc5-source.yml \
-            .github/workflows/import-three-plan-runtime.yml \
-            .github/workflows/import-runtime.yml
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
