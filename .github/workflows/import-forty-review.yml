@@ -27,6 +27,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          for part in .cf04-forty-review-import/part-{00,01,02,03,04}; do
+            wc -c "$part"
+            sha256sum "$part"
+          done
           printf '%s  %s\n' '8196128edb3977e9afb4f37cac28cb7db5a31b1ec060cab102577bb0891207f7' '.cf04-forty-review-import/part-00' | sha256sum -c -
           printf '%s  %s\n' '27e134b1ee20aa20a1c6d1ad70975748307f258d54c87284d9b73b7bc47d3ac0' '.cf04-forty-review-import/part-01' | sha256sum -c -
           printf '%s  %s\n' '18a9eca98520adb3a3c3de824e68e9cbc736c943a960475cf6c5e0dae20e716f' '.cf04-forty-review-import/part-02' | sha256sum -c -
