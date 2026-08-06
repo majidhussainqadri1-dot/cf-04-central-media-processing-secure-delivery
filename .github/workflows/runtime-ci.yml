@@ -39,14 +39,14 @@ jobs:
       - name: Publish release evidence summary
         run: |
           cat dist/RELEASE-EVIDENCE.json
-          sha256sum dist/cf-04-sabri-central-media-1.2.0-rc.1.zip
+          sha256sum dist/cf-04-sabri-central-media-1.2.0-rc.2.zip
       - name: Upload deterministic release evidence
         if: matrix.php == '8.4'
         uses: actions/upload-artifact@v4
         with:
-          name: cf-04-sabri-central-media-1.2.0-rc.1-${{ github.sha }}
+          name: cf-04-sabri-central-media-1.2.0-rc.2-${{ github.sha }}
           path: |
-            dist/cf-04-sabri-central-media-1.2.0-rc.1.zip
+            dist/cf-04-sabri-central-media-1.2.0-rc.2.zip
             dist/MANIFEST.json
             dist/SBOM.json
             dist/CHECKSUMS.sha256
