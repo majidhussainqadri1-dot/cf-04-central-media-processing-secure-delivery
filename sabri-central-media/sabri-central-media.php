@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CF-04 Sabri Central Media Processing and Secure Delivery
  * Description: Fail-closed, purpose-bound media ingest, quarantine, validation, processing, encrypted storage, secure delivery, retention, deletion and provider operations for the Sabri Social Homeopathy Platform.
- * Version: 1.2.0-rc.1
+ * Version: 1.2.0-rc.2
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: Dr. Allamah Majid Hussain Sabri
@@ -10,7 +10,7 @@
  */
 declare(strict_types=1);
 if(!defined('ABSPATH'))exit;
-define('SCM_VERSION','1.2.0-rc.1');
+define('SCM_VERSION','1.2.0-rc.2');
 define('SCM_SCHEMA_VERSION','1.4.0');
 define('SCM_CONTRACT_VERSION','1.4.0');
 define('SCM_PLUGIN_FILE',__FILE__);

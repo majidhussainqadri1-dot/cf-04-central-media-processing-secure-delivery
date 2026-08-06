@@ -1,6 +1,8 @@
 # CF-04 — Central Media Processing and Secure Delivery
 
-**Runtime candidate:** `1.2.0-rc.1`
+**Runtime candidate:** `1.2.0-rc.2`
+
+**Forty-pass hardening:** review/fix rounds 15–54 completed with focused and full-suite regression evidence.
 **Schema / contract:** `1.4.0 / 1.4.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.0.
 

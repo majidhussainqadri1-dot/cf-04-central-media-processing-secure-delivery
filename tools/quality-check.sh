@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.2.0-rc.1"
+VERSION="1.2.0-rc.2"
 for command in php python3 zip unzip sha256sum rsync; do command -v "$command" >/dev/null || { echo "missing command: $command" >&2; exit 1; }; done
 find "$ROOT/sabri-central-media" "$ROOT/tests" -type f -name '*.php' -print0 | LC_ALL=C sort -z | xargs -0 -n1 php -l >/dev/null
 python3 "$ROOT/tests/contracts-runtime.py"
@@ -10,6 +10,7 @@ php "$ROOT/tests/run-all.php"
 php "$ROOT/tests/review-round-11-governance.php"
 php "$ROOT/tests/review-round-12-security.php"
 php "$ROOT/tests/review-round-13-adversarial.php"
+php "$ROOT/tests/review-rounds-15-54.php"
 "$ROOT/tools/build-package.sh" >/dev/null
 FIRST="$(mktemp -d)"; trap 'rm -rf "$FIRST"' EXIT
 cp "$ROOT/dist/"* "$FIRST/"

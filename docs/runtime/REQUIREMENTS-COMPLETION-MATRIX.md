@@ -2,7 +2,7 @@
 
 **Governing plans:** Definitive Master Plan 2026 v3.0; Consolidated All-Chats Directive Register; CF-04 Conditional Complete Master Plan v1.0.
 
-**Candidate:** `1.2.0-rc.1`
+**Candidate:** `1.2.0-rc.2`
 
 The matrix records source-code completion and automated source-level acceptance. External staging/provider/live/operational evidence remains separate and is not represented as complete.
 

@@ -2,7 +2,7 @@
 
 ## Candidate
 
-- Runtime: `1.2.0-rc.1`
+- Runtime: `1.2.0-rc.2`
 - Schema: `1.4.0`
 - Contract: `1.4.0`
 - Runtime default: disabled
