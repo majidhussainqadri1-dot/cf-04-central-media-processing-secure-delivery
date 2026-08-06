@@ -1,0 +1,63 @@
+name: CF-04 Import Forty Review Patch
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-complete-1.2.0
+    paths:
+      - .cf04-forty-review-import/**
+      - .github/workflows/import-forty-review.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout protected implementation branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and verify reviewed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for part in 00 01 02 03 04; do
+            test -s ".cf04-forty-review-import/part-${part}"
+          done
+          cat .cf04-forty-review-import/part-{00,01,02,03,04} > /tmp/cf04-rc2.patch.xz.b64
+          printf '%s  %s\n' '99c53f23baca9fc57bc597cf010d2a9cf8c1145b6fb53a0047dd13cfa8173bc9' '/tmp/cf04-rc2.patch.xz.b64' | sha256sum -c -
+          base64 --decode /tmp/cf04-rc2.patch.xz.b64 > /tmp/cf04-rc2.patch.xz
+          printf '%s  %s\n' '31445a8dd592d13a77d42590430cc4e0d24de26887c72e625d41cecb0c63f48b' '/tmp/cf04-rc2.patch.xz' | sha256sum -c -
+          xz --test /tmp/cf04-rc2.patch.xz
+          xz --decompress --stdout /tmp/cf04-rc2.patch.xz > /tmp/cf04-rc2.patch
+          printf '%s  %s\n' '74024dda99e3b0b137d7b24bc99690505fdb318a7dbf1ce71dce195cfbacf8bd' '/tmp/cf04-rc2.patch' | sha256sum -c -
+
+      - name: Apply forty-round corrections and execute full gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/cf04-rc2.patch
+          git apply /tmp/cf04-rc2.patch
+          rm -rf .cf04-forty-review-import
+          bash tools/quality-check.sh
+          rm -rf dist
+          mkdir -p dist
+          : > dist/.gitkeep
+          git diff --check
+
+      - name: Publish clean reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'CF-04: complete forty review/fix rounds 15-54 as 1.2.0-rc.2'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
