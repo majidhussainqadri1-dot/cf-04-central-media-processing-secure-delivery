@@ -44,13 +44,31 @@ jobs:
           xz --decompress --stdout /tmp/cf04-rc2.patch.xz > /tmp/cf04-rc2.patch
           printf '%s  %s\n' '74024dda99e3b0b137d7b24bc99690505fdb318a7dbf1ce71dce195cfbacf8bd' '/tmp/cf04-rc2.patch' | sha256sum -c -
 
-      - name: Apply forty-round corrections and execute full gate
+      - name: Apply, normalize and execute all review gates
         shell: bash
         run: |
           set -euo pipefail
           git apply --check /tmp/cf04-rc2.patch
           git apply /tmp/cf04-rc2.patch
           rm -rf .cf04-forty-review-import
+
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('.')
+          suffixes = {'.php', '.py', '.sh', '.md', '.txt', '.json', '.yml', '.yaml'}
+          for item in root.rglob('*'):
+              if not item.is_file() or '.git' in item.parts:
+                  continue
+              if item.suffix.lower() not in suffixes and item.name not in {'.gitignore', '.gitattributes'}:
+                  continue
+              text = item.read_text()
+              lines = [line.rstrip(' \t') for line in text.splitlines()]
+              while lines and lines[-1] == '':
+                  lines.pop()
+              item.write_text('\n'.join(lines) + '\n')
+          print('repository text hygiene normalization: APPLIED')
+          PY
+
           bash tools/quality-check.sh
           rm -rf dist
           mkdir -p dist
