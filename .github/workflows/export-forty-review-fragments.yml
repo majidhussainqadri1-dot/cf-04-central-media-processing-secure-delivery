@@ -22,4 +22,5 @@ jobs:
           name: cf04-forty-review-fragments-${{ github.sha }}
           path: .cf04-forty-review-import/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 1
