@@ -1,0 +1,25 @@
+name: CF-04 Export Forty Review Fragments
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-complete-1.2.0
+    paths:
+      - .github/workflows/export-forty-review-fragments.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v5
+      - name: Upload exact transport fragments
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-forty-review-fragments-${{ github.sha }}
+          path: .cf04-forty-review-import/
+          if-no-files-found: error
+          retention-days: 1
