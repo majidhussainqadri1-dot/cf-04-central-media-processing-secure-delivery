@@ -27,9 +27,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for part in 00 01 02 03 04; do
-            test -s ".cf04-forty-review-import/part-${part}"
-          done
+          printf '%s  %s\n' '8196128edb3977e9afb4f37cac28cb7db5a31b1ec060cab102577bb0891207f7' '.cf04-forty-review-import/part-00' | sha256sum -c -
+          printf '%s  %s\n' '27e134b1ee20aa20a1c6d1ad70975748307f258d54c87284d9b73b7bc47d3ac0' '.cf04-forty-review-import/part-01' | sha256sum -c -
+          printf '%s  %s\n' '18a9eca98520adb3a3c3de824e68e9cbc736c943a960475cf6c5e0dae20e716f' '.cf04-forty-review-import/part-02' | sha256sum -c -
+          printf '%s  %s\n' '608e7f18463e0ede793ab498a224cc12cba3c05db473c81a9f741c7addf64eec' '.cf04-forty-review-import/part-03' | sha256sum -c -
+          printf '%s  %s\n' '2cef2004973e522f035a5b4890f90155363d7b700ba3ed793391b86f1237fe5b' '.cf04-forty-review-import/part-04' | sha256sum -c -
           cat .cf04-forty-review-import/part-{00,01,02,03,04} > /tmp/cf04-rc2.patch.xz.b64
           printf '%s  %s\n' '99c53f23baca9fc57bc597cf010d2a9cf8c1145b6fb53a0047dd13cfa8173bc9' '/tmp/cf04-rc2.patch.xz.b64' | sha256sum -c -
           base64 --decode /tmp/cf04-rc2.patch.xz.b64 > /tmp/cf04-rc2.patch.xz
