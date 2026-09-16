@@ -9,13 +9,80 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: cf04-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  plan-parity-publish:
+    name: apply current rewritten-plan parity
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/cf04-three-plan-complete-1.2.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect one-time transformer
+        id: parity
+        shell: bash
+        run: |
+          if [[ -f tools/apply-current-plan-parity.py ]]; then
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up PHP
+        if: steps.parity.outputs.apply == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, openssl, fileinfo
+          coverage: none
+      - name: Install deterministic build tools
+        if: steps.parity.outputs.apply == 'true'
+        run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
+      - name: Apply current rewritten-plan source parity
+        if: steps.parity.outputs.apply == 'true'
+        run: python3 tools/apply-current-plan-parity.py
+      - name: Complete review gate then correct-by-failure
+        if: steps.parity.outputs.apply == 'true'
+        run: |
+          set -euo pipefail
+          git diff --check
+          bash tools/quality-check.sh
+      - name: Fresh adversarial plan gate
+        if: steps.parity.outputs.apply == 'true'
+        run: |
+          set -euo pipefail
+          php tests/new-plan-parity.php
+          grep -q "public const PRIVACY=\['C0','C1','C2','C3','C4','C5'\]" sabri-central-media/includes/class-scm-contracts.php
+          grep -q 'CF04-CEN-10' docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md
+          grep -q 'CF04-NJ-06' docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md
+          grep -q 'class-scm-plan-parity.php' sabri-central-media/sabri-central-media.php
+          grep -q '1.3.0-rc.1' sabri-central-media/sabri-central-media.php
+          grep -q "SCM_SCHEMA_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
+          grep -q "SCM_CONTRACT_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
+      - name: Final full regression
+        if: steps.parity.outputs.apply == 'true'
+        run: bash tools/quality-check.sh
+      - name: Remove one-time transport tooling and publish reviewed source
+        if: steps.parity.outputs.apply == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/apply-current-plan-parity.py .github/workflows/apply-current-plan-parity.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'CF-04: complete current rewritten-plan source parity 1.3.0-rc.1'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
   quality:
     name: quality (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
@@ -39,14 +106,18 @@ jobs:
       - name: Publish release evidence summary
         run: |
           cat dist/RELEASE-EVIDENCE.json
-          sha256sum dist/cf-04-sabri-central-media-1.2.0-rc.2.zip
+          if [[ -f dist/cf-04-sabri-central-media-1.3.0-rc.1.zip ]]; then
+            sha256sum dist/cf-04-sabri-central-media-1.3.0-rc.1.zip
+          else
+            sha256sum dist/cf-04-sabri-central-media-1.2.0-rc.2.zip
+          fi
       - name: Upload deterministic release evidence
         if: matrix.php == '8.4'
         uses: actions/upload-artifact@v4
         with:
-          name: cf-04-sabri-central-media-1.2.0-rc.2-${{ github.sha }}
+          name: cf-04-sabri-central-media-${{ github.sha }}
           path: |
-            dist/cf-04-sabri-central-media-1.2.0-rc.2.zip
+            dist/*.zip
             dist/MANIFEST.json
             dist/SBOM.json
             dist/CHECKSUMS.sha256
