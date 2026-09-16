@@ -16,7 +16,7 @@ define('SCM_CONTRACT_VERSION','1.5.0');
 define('SCM_PLUGIN_FILE',__FILE__);
 define('SCM_PLUGIN_DIR',__DIR__.'/');
 if(!defined('SCM_RUNTIME_ENABLED'))define('SCM_RUNTIME_ENABLED',false);
-foreach(['class-scm-core.php','class-scm-persistence.php','class-scm-storage.php','class-scm-contracts.php','class-scm-upload.php','class-scm-validation.php','class-scm-processing.php','class-scm-delivery.php','class-scm-transfer.php','class-scm-lifecycle.php','class-scm-operations.php','class-scm-plan-parity.php','class-scm-rest.php','class-scm-plugin.php'] as $file)require_once SCM_PLUGIN_DIR.'includes/'.$file;
+foreach(['class-scm-core.php','class-scm-persistence.php','class-scm-storage.php','class-scm-contracts.php','class-scm-upload.php','class-scm-validation.php','class-scm-processing.php','class-scm-delivery.php','class-scm-transfer.php','class-scm-lifecycle.php','class-scm-operations.php','class-scm-plan-parity.php','class-scm-future40.php','class-scm-rest.php','class-scm-plugin.php'] as $file)require_once SCM_PLUGIN_DIR.'includes/'.$file;
 register_activation_hook(__FILE__,[Sabri\CentralMedia\Activator::class,'activate']);
 register_deactivation_hook(__FILE__,[Sabri\CentralMedia\Activator::class,'deactivate']);
 Sabri\CentralMedia\Plugin::boot();
