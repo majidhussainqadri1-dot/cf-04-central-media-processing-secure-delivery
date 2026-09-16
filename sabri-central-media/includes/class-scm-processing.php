@@ -74,10 +74,12 @@ final class DerivativeService {
     $old=$asset['active_manifest_id']??null;
     $asset['active_manifest_id']=$manifestId;$asset['manifest_version']=$manifest['manifest_version'];$asset['processing_status']='completed';$asset['status']='ready';$asset['ready_at']=Utils::now();
     unset($asset['reprocess_context']);
-    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
+    $original=$asset;$savedAsset=null;
+    try{$savedAsset=RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
     catch(\Throwable $exception){RecordStore::delete('manifest',$manifestId);throw $exception;}
-    $manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);
-    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}}
+    try{$manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);}
+    catch(\Throwable $exception){try{$current=RecordStore::get('asset',$assetId);if($current&&($current['active_manifest_id']??null)===$manifestId){$rollback=$current;$rollback['active_manifest_id']=$old;$rollback['manifest_version']=$original['manifest_version']??0;$rollback['processing_status']=$original['processing_status']??'pending';$rollback['status']=$original['status']??'quarantined';if(isset($original['ready_at']))$rollback['ready_at']=$original['ready_at'];else unset($rollback['ready_at']);RecordStore::put('asset',$assetId,$rollback,(int)$current['version']);}}catch(\Throwable $rollbackError){Audit::record('manifest_switch_reconciliation_required',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'reason'=>'activation_failed_rollback_failed']);}try{$failed=RecordStore::get('manifest',$manifestId);if($failed){$failed['status']='activation_failed';RecordStore::put('manifest',$manifestId,$failed,(int)$failed['version']);}}catch(\Throwable){}throw $exception;}
+    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){try{$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}catch(\Throwable){Audit::record('manifest_supersede_reconciliation_required',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'previous_manifest'=>$old]);}}}
     Audit::record('manifest_atomically_switched',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'previous_manifest'=>$old,'processing_generation'=>$manifest['processing_generation']]);
     return $manifest;
 }
@@ -169,7 +171,8 @@ final class ProcessingService {
     $generation=max(1,(int)($asset['processing_generation']??0)+1);
     $jobs=JobService::graph($assetId,$asset['policy'],$generation);
     $asset['processing_status']='queued';$asset['processing_generation']=$generation;$asset['job_graph']=$jobs;
-    RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);
+    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
+    catch(\Throwable $exception){$fresh=RecordStore::get('asset',$assetId);$attached=$fresh&&(int)($fresh['processing_generation']??0)===$generation&&(array)($fresh['job_graph']??[])===$jobs;if(!$attached){foreach($jobs as $jobId){$job=RecordStore::get('job',(string)$jobId);if($job&&(int)($job['processing_generation']??0)===$generation&&in_array(($job['status']??''),['queued','retry'],true)){try{RecordStore::delete('job',(string)$jobId);}catch(\Throwable){}}}}throw $exception;}
     Audit::record('processing_graph_created',['asset_id'=>$assetId,'processing_generation'=>$generation,'jobs'=>array_keys($jobs)]);
     return $jobs;
 }
