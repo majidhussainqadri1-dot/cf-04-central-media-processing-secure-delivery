@@ -276,7 +276,7 @@ final class WebhookService {
     if(!hash_equals($expected,$signature))throw new Error('webhook_signature_invalid','Webhook signature invalid.',403);
     $id=hash('sha256',$provider.'|'.$eventId);$existing=RecordStore::get('webhook',$id);
     if($existing){if(!hash_equals((string)$existing['body_hash'],$bodyHash))throw new Error('webhook_replay_conflict','Webhook event identifier was reused with different content.',409);return ['replay'=>true,'record'=>$existing];}
-    $record=RecordStore::put('webhook',$id,['actor_id'=>0,'provider'=>$provider,'event_id'=>$eventId,'body_hash'=>$bodyHash,'status'=>'accepted','created_at'=>Utils::now()]);
-    return ['replay'=>false,'record'=>$record];
+    try{$record=RecordStore::put('webhook',$id,['actor_id'=>0,'provider'=>$provider,'event_id'=>$eventId,'body_hash'=>$bodyHash,'status'=>'accepted','created_at'=>Utils::now()],0);return ['replay'=>false,'record'=>$record];}
+    catch(Error $createError){if($createError->errorCode!=='record_version_conflict')throw $createError;$winner=RecordStore::get('webhook',$id);if(!$winner)throw $createError;if(!hash_equals((string)($winner['body_hash']??''),$bodyHash))throw new Error('webhook_replay_conflict','Webhook event identifier was reused with different content.',409);return ['replay'=>true,'record'=>$winner];}
 }
 }
