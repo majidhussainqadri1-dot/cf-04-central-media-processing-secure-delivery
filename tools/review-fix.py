@@ -6,7 +6,7 @@ upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
 text = upload.read_text()
 
 # This transformer is intentionally staged only after Fresh Review Round 3 completed.
-# Anchor on semantic tokens so formatting changes do not make the correction brittle.
+# Diagnostic-enabled rerun; anchor on semantic tokens so formatting changes do not make the correction brittle.
 claim_anchor = "Idempotency::claim('upload-complete'"
 claim_pos = text.find(claim_anchor)
 if claim_pos < 0:
@@ -39,8 +39,6 @@ return_pos = text.find('return $asset;', asset_put_pos)
 if return_pos < 0:
     raise SystemExit('asset completion return missing')
 return_end = return_pos + len('return $asset;')
-old_tail = text[statement_start:return_end]
-# Preserve the asset assignment/persistence statement itself, replace only post-persistence finalization.
 put_end = text.find(';', asset_put_pos)
 if put_end < 0 or put_end > return_end:
     raise SystemExit('asset persistence terminator missing')
