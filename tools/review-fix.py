@@ -5,34 +5,51 @@ ROOT = Path(__file__).resolve().parents[1]
 upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
 text = upload.read_text()
 
-start_marker = "$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);"
-end_marker = "$stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"
-start = text.find(start_marker)
-end = text.find(end_marker, start)
-if start < 0 or end < 0:
-    raise SystemExit(f'completion markers missing start={start} end={end}')
-end += len(end_marker)
-replacement = """$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);
+# This transformer is intentionally staged only after Fresh Review Round 3 completed.
+# Anchor on semantic tokens so formatting changes do not make the correction brittle.
+claim_anchor = "Idempotency::claim('upload-complete'"
+claim_pos = text.find(claim_anchor)
+if claim_pos < 0:
+    raise SystemExit('upload-complete claim anchor missing')
+replay_pos = text.find("asset_replay_missing", claim_pos)
+if replay_pos < 0:
+    raise SystemExit('upload replay anchor missing')
+insert_pos = text.find(';', replay_pos)
+if insert_pos < 0:
+    raise SystemExit('upload replay terminator missing')
+insert_pos += 1
+reconcile = """
         $existingAsset=RecordStore::get('asset',$uploadId);
         if($existingAsset){
             if(($existingAsset['source_upload_id']??'')!==$uploadId||(int)($existingAsset['actor_id']??0)!==$actor||!hash_equals((string)($existingAsset['sha256']??''),(string)$u['expected_sha256'])||!hash_equals((string)($existingAsset['policy_hash']??''),(string)$u['policy_hash'])){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'asset_reconciliation_mismatch');throw new Error('asset_reconciliation_mismatch','Existing asset cannot be reconciled to this upload.',409);}
             try{return self::finalizeCompletedUpload($u,$existingAsset,$idempotencyKey,$fingerprint);}
             catch(\\Throwable $e){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
-        }
-        $stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"""
-text = text[:start] + replacement + text[end:]
+        }"""
+if "$existingAsset=RecordStore::get('asset',$uploadId)" not in text:
+    text = text[:insert_pos] + reconcile + text[insert_pos:]
 
-post_start_marker = "$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;"
-post_end_marker = "self::emit('scm.asset.quarantined',$asset);return $asset;"
-post_start = text.find(post_start_marker)
-post_end = text.find(post_end_marker, post_start)
-if post_start < 0 or post_end < 0:
-    raise SystemExit(f'post-asset markers missing start={post_start} end={post_end}')
-post_end += len(post_end_marker)
-post_replacement = "$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
-text = text[:post_start] + post_replacement + text[post_end:]
+asset_put_anchor = "RecordStore::put('asset',$uploadId,$asset)"
+asset_put_pos = text.find(asset_put_anchor, claim_pos)
+if asset_put_pos < 0:
+    raise SystemExit('asset persistence anchor missing')
+statement_start = text.rfind('$asset=', claim_pos, asset_put_pos + 1)
+if statement_start < 0:
+    raise SystemExit('asset assignment start missing')
+return_pos = text.find('return $asset;', asset_put_pos)
+if return_pos < 0:
+    raise SystemExit('asset completion return missing')
+return_end = return_pos + len('return $asset;')
+old_tail = text[statement_start:return_end]
+# Preserve the asset assignment/persistence statement itself, replace only post-persistence finalization.
+put_end = text.find(';', asset_put_pos)
+if put_end < 0 or put_end > return_end:
+    raise SystemExit('asset persistence terminator missing')
+put_end += 1
+asset_statement = text[statement_start:put_end]
+new_tail = asset_statement + "$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
+text = text[:statement_start] + new_tail + text[return_end:]
 
-insert_before = "\n    public static function cleanupExpired(int $now=0,int $limit=500): array {"
+insert_before = "\n    public static function cleanupExpired("
 helper = r'''
     private static function finalizeCompletedUpload(array $upload,array $asset,string $idempotencyKey,string $fingerprint): array {
         $uploadId=(string)$upload['id'];
@@ -54,9 +71,10 @@ helper = r'''
     }
 '''
 if 'private static function finalizeCompletedUpload' not in text:
-    if insert_before not in text:
-        raise SystemExit('upload finalization insertion point missing')
-    text = text.replace(insert_before, '\n'+helper+insert_before, 1)
+    idx = text.find(insert_before)
+    if idx < 0:
+        raise SystemExit('upload cleanup insertion anchor missing')
+    text = text[:idx] + '\n' + helper + text[idx:]
 upload.write_text(text)
 
 regression = ROOT / 'tests/review-round-59-upload-finalization.php'
@@ -80,5 +98,3 @@ if 'review-round-59-upload-finalization.php' not in q:
     if needle not in q:
         raise SystemExit('quality-check insertion point missing')
     quality.write_text(q.replace(needle, insert, 1))
-
-# Fresh review round 3 corrections are intentionally applied only after the round audit was completed.
