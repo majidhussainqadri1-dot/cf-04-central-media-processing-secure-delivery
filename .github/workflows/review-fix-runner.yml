@@ -1,0 +1,55 @@
+name: CF-04 Sequential Review Fix Runner
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-complete-1.2.0
+    paths:
+      - tools/review-fix.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cf04-sequential-review-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-review-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, openssl, fileinfo
+          coverage: none
+      - name: Install deterministic build tools
+        run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
+      - name: Apply completed-round corrections
+        run: python3 tools/review-fix.py
+      - name: Verify corrected round
+        run: |
+          set -euo pipefail
+          git diff --check
+          bash tools/quality-check.sh
+      - name: Commit corrected round
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No generated correction changes.'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m "CF-04: apply completed sequential review corrections"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
