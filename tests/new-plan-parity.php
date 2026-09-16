@@ -58,7 +58,8 @@ ok($meta['human_reviewed']===true&&$meta['reviewer_id']===11&&$meta['owner_objec
 err(fn()=>AccessibilityMetadataService::record($asset['id'],11,['kind'=>'transcript','locale'=>'ur-PK','source_type'=>'machine','source_version'=>'mt-1','content_hash'=>$hash,'risk_class'=>'medical','human_reviewed'=>false,'reviewer_id'=>0]),'qualified_review_required','CF04-CEN-06 high-risk unreviewed metadata blocked');
 
 // Low-bandwidth and audio-only choices use explicit derivatives and never silently substitute an original.
-$video=RecordStore::put('asset','video-current-plan',['actor_id'=>11,'asset_id'=>'video-current-plan','owner_domain'=>'file17','owner_object'=>'message:video-current-plan','owner_type'=>'message','object_version'=>1,'policy'=>policy('video','C3',['view','download']),'policy_hash'=>policy('video','C3',['view','download'])['policy_hash'],'rights'=>policy('video','C3',['view','download'])['rights'],'privacy_class'=>'C3','media_class'=>'video','declared_name'=>'video.mp4','mime'=>'video/mp4','size'=>$asset['size'],'sha256'=>$asset['sha256'],'fingerprint'=>$asset['fingerprint'],'storage'=>$asset['storage'],'object_key'=>$asset['object_key'],'status'=>'quarantined','scan_status'=>'pending','processing_status'=>'pending','manifest_version'=>0]);
+$videoPolicy=policy('video','C3',['view','download']);
+$video=RecordStore::put('asset','video-current-plan',['actor_id'=>11,'asset_id'=>'video-current-plan','owner_domain'=>'file17','owner_object'=>'message:video-current-plan','owner_type'=>'message','object_version'=>1,'policy'=>$videoPolicy,'policy_hash'=>$videoPolicy['policy_hash'],'rights'=>$videoPolicy['rights'],'privacy_class'=>'C3','media_class'=>'video','declared_name'=>'video.mp4','mime'=>'video/mp4','size'=>$asset['size'],'sha256'=>$asset['sha256'],'fingerprint'=>$asset['fingerprint'],'storage'=>$asset['storage'],'object_key'=>$asset['object_key'],'status'=>'quarantined','scan_status'=>'pending','processing_status'=>'pending','manifest_version'=>0]);
 ProcessingService::start($video['id']);$video=ProcessingService::execute($video['id'],'new-plan-video-worker');
 $low=RenditionSelector::select($video['id'],'low_bandwidth');
 ok($low['status']==='ready'&&in_array($low['rendition']['kind'],['video-low','audio-low','audio-aac'],true),'CF04-CEN-07 explicit low-bandwidth rendition');
@@ -79,5 +80,11 @@ $after=RecordStore::get('asset',$asset['id']);
 ok($after['active_manifest_id']===null&&$after['status']==='quarantined','CF04-CEN-08 stale derivatives removed after rights expiry');
 $projections=array_values(array_filter(RecordStore::all('projection_revocation',0,null,1000),fn($row)=>($row['asset_id']??'')===$asset['id']));
 ok($projections!==[]&&$projections[0]['index_status']==='pending_owner_consumer','CF04-CEN-08 downstream index/backup propagation evidence recorded');
+
+// Review 62 regression: the configured batch size is a processing limit, not a RecordStore scan ceiling.
+RecordStore::resetMemory();
+for($i=0;$i<500;$i++)RecordStore::put('asset','rights-batch-'.$i,['actor_id'=>0,'status'=>'ready','rights'=>['expires_at'=>0]]);
+$bounded=RightsRevocationService::reconcileExpired(Utils::now(),500);
+ok($bounded['checked']===500&&$bounded['revoked']===0&&$bounded['failed']===0,'REVIEW-62 rights reconciliation processes an exactly-full bounded batch without record_scan_limit');
 
 echo "CF-04 CURRENT NEW-PLAN PARITY: PASS\n";
