@@ -6,7 +6,8 @@
 - Schema: `1.5.0`
 - Contract: `1.5.0`
 - Runtime default: disabled
-- Source implementation: 33/33 CF04 functional requirements plus CHAT-XFER-001
+- Governing CF-04 plan: `v1.1 — Future-40 Amended — 2026-09-16`
+- Source implementation: 33/33 CF04 functional requirements plus CHAT-XFER-001, CF04-CEN-01..10, CF04-NJ-01..06 source journeys, and CF04-FUT-001..040
 - Automated source acceptance: required on PHP 8.1, 8.3 and 8.4
 
 ## Completion boundaries
@@ -30,7 +31,6 @@ No external-environment claim may be inferred from source completion.
 - CF04-NJ-01 through CF04-NJ-06: source paths/negative gates represented in the automated suite.
 - Data constitution: `C0 Public`, `C1 Account`, `C2 Private Communication`, `C3 Professional Evidence`, `C4 Financial/Legal`, `C5 Clinical/High Sensitivity`.
 - Runtime remains disabled by default. Hostinger/real-provider/browser/accessibility/load/penetration/migration/restore/rollback/live/operational acceptance is still pending.
-
 
 ## Future-40 extension — 2026-09-16
 
