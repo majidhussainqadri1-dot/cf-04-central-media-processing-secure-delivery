@@ -1,27 +1,40 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def replace_once(path: Path, old: str, new: str) -> None:
-    text = path.read_text()
-    if old not in text:
-        raise SystemExit(f"expected review target not found: {path}")
-    path.write_text(text.replace(old, new, 1))
-
 upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
+text = upload.read_text()
 
-replace_once(
-    upload,
-    "$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);\n        $stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;",
-    "$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);\n        $existingAsset=RecordStore::get('asset',$uploadId);\n        if($existingAsset){\n            if(($existingAsset['source_upload_id']??'')!==$uploadId||(int)($existingAsset['actor_id']??0)!==$actor||!hash_equals((string)($existingAsset['sha256']??''),(string)$u['expected_sha256'])||!hash_equals((string)($existingAsset['policy_hash']??''),(string)$u['policy_hash'])){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'asset_reconciliation_mismatch');throw new Error('asset_reconciliation_mismatch','Existing asset cannot be reconciled to this upload.',409);}\n            try{return self::finalizeCompletedUpload($u,$existingAsset,$idempotencyKey,$fingerprint);}\n            catch(\\Throwable $e){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected');throw $e;}\n        }\n        $stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"
+start_pattern = re.compile(
+    r"\$fingerprint=hash\('sha256',\$uploadId\.\'\|\'\.\$u\['expected_sha256'\]\.\'\|\'\.\$u\['expected_size'\]\);"
+    r"\$claim=Idempotency::claim\('upload-complete',\$idempotencyKey,\$fingerprint\);"
+    r"if\(\$claim\['replay'\]\)return RecordStore::get\('asset',\(string\)\$claim\['record'\]\['result_id'\]\)\?\?throw new Error\('asset_replay_missing','Completed asset missing\.',500\);"
+    r"\s*\$stream=PartStore::assemble\(\$uploadId,\(int\)\$u\['expected_size'\],\(string\)\$u\['expected_sha256'\],\(int\)\$u\['policy'\]\['max_upload_parts'\]\);\$stored=null;\$assetCreated=false;",
+    re.S,
 )
+start_replacement = """$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);
+        $existingAsset=RecordStore::get('asset',$uploadId);
+        if($existingAsset){
+            if(($existingAsset['source_upload_id']??'')!==$uploadId||(int)($existingAsset['actor_id']??0)!==$actor||!hash_equals((string)($existingAsset['sha256']??''),(string)$u['expected_sha256'])||!hash_equals((string)($existingAsset['policy_hash']??''),(string)$u['policy_hash'])){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'asset_reconciliation_mismatch');throw new Error('asset_reconciliation_mismatch','Existing asset cannot be reconciled to this upload.',409);}
+            try{return self::finalizeCompletedUpload($u,$existingAsset,$idempotencyKey,$fingerprint);}
+            catch(\\Throwable $e){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
+        }
+        $stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"""
+text, count = start_pattern.subn(lambda m: start_replacement, text, count=1)
+if count != 1:
+    raise SystemExit(f'upload completion reconciliation start target count={count}')
 
-replace_once(
-    upload,
-    "$asset=['actor_id'=>$actor,'asset_id'=>$uploadId,'source_upload_id'=>$uploadId,'duplicate_of'=>$duplicate['id']??null,'owner_domain'=>$u['owner_domain'],'owner_object'=>$u['owner_object'],'owner_type'=>$u['owner_type'],'object_version'=>$u['object_version'],'policy'=>$u['policy'],'policy_hash'=>$u['policy_hash'],'rights'=>$u['policy']['rights'],'privacy_class'=>$u['policy']['privacy_class'],'media_class'=>$u['media_class'],'declared_name'=>$u['declared_name'],'mime'=>$inspection['mime'],'size'=>$inspection['size'],'sha256'=>$inspection['sha256'],'fingerprint'=>$inspection['fingerprint'],'storage'=>$stored,'object_key'=>$stored['object_key'],'status'=>'quarantined','scan_status'=>'pending','processing_status'=>'pending','manifest_version'=>0,'created_at'=>Utils::now()];$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;$u['status']='completed';$u['completed_at']=Utils::now();RecordStore::put('upload',$uploadId,$u,(int)$u['version']);QuotaService::settle($u['quota']['quota_id'],$u['quota']['reservation_id'],true,(int)$u['expected_size'],1);PartStore::purge($uploadId);Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,'asset',$uploadId);Audit::record('asset_quarantined',['asset_id'=>$uploadId,'actor_id'=>$actor,'privacy_class'=>$asset['privacy_class'],'sha256'=>$asset['sha256'],'duplicate_of'=>$asset['duplicate_of']]);self::emit('scm.asset.quarantined',$asset);return $asset;",
-    "$asset=['actor_id'=>$actor,'asset_id'=>$uploadId,'source_upload_id'=>$uploadId,'duplicate_of'=>$duplicate['id']??null,'owner_domain'=>$u['owner_domain'],'owner_object'=>$u['owner_object'],'owner_type'=>$u['owner_type'],'object_version'=>$u['object_version'],'policy'=>$u['policy'],'policy_hash'=>$u['policy_hash'],'rights'=>$u['policy']['rights'],'privacy_class'=>$u['policy']['privacy_class'],'media_class'=>$u['media_class'],'declared_name'=>$u['declared_name'],'mime'=>$inspection['mime'],'size'=>$inspection['size'],'sha256'=>$inspection['sha256'],'fingerprint'=>$inspection['fingerprint'],'storage'=>$stored,'object_key'=>$stored['object_key'],'status'=>'quarantined','scan_status'=>'pending','processing_status'=>'pending','manifest_version'=>0,'created_at'=>Utils::now()];$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
+post_pattern = re.compile(
+    r"\$asset=RecordStore::put\('asset',\$uploadId,\$asset\);\$assetCreated=true;"
+    r".*?self::emit\('scm\.asset\.quarantined',\$asset\);return \$asset;",
+    re.S,
 )
+post_replacement = "$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
+text, count = post_pattern.subn(lambda m: post_replacement, text, count=1)
+if count != 1:
+    raise SystemExit(f'upload completion post-asset target count={count}')
 
 insert_before = "\n    public static function cleanupExpired(int $now=0,int $limit=500): array {"
 helper = r'''
@@ -44,11 +57,11 @@ helper = r'''
         return $asset;
     }
 '''
-text = upload.read_text()
 if 'private static function finalizeCompletedUpload' not in text:
     if insert_before not in text:
         raise SystemExit('upload finalization insertion point missing')
-    upload.write_text(text.replace(insert_before, '\n'+helper+insert_before, 1))
+    text = text.replace(insert_before, '\n'+helper+insert_before, 1)
+upload.write_text(text)
 
 regression = ROOT / 'tests/review-round-59-upload-finalization.php'
 regression.write_text(r'''<?php
