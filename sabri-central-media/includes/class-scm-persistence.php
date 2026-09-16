@@ -40,7 +40,7 @@ final class RecordStore {
         $row['record_type']=$type;$row['id']=$id;$row['version']=$version+1;$row['updated_at']=Utils::now();
         if(self::test()){self::$memory[$type][$id]=$row;return $row;}
         self::requirePersistent();global $wpdb;$data=['record_type'=>$type,'id'=>$id,'actor_id'=>(int)($row['actor_id']??0),'status'=>Utils::key((string)($row['status']??'active'),40),'version'=>$row['version'],'expires_at'=>isset($row['expires_at'])&&(int)$row['expires_at']>0?gmdate('Y-m-d H:i:s',(int)$row['expires_at']):null,'payload'=>Utils::canonicalJson($row),'updated_at'=>gmdate('Y-m-d H:i:s',$row['updated_at'])];
-        if($version===0){$ok=$wpdb->insert(Db::table('records'),$data,['%s','%s','%d','%s','%d','%s','%s','%s']);if($ok!==1)throw new Error('record_write_failed','Persistent insert failed.',500,['type'=>$type,'id'=>$id]);}
+        if($version===0){$ok=$wpdb->insert(Db::table('records'),$data,['%s','%s','%d','%s','%d','%s','%s','%s']);if($ok!==1){$winner=self::get($type,$id);if($winner!==null)throw new Error('record_version_conflict','Concurrent record creation won before this insert.',409,['type'=>$type,'id'=>$id,'expected'=>0,'actual'=>(int)($winner['version']??1)]);throw new Error('record_write_failed','Persistent insert failed.',500,['type'=>$type,'id'=>$id]);}}
         else{$ok=$wpdb->update(Db::table('records'),$data,['record_type'=>$type,'id'=>$id,'version'=>$version],['%s','%s','%d','%s','%d','%s','%s','%s'],['%s','%s','%d']);if($ok!==1)throw new Error('record_version_conflict','Atomic compare-and-swap failed.',409,['type'=>$type,'id'=>$id]);}
         return $row;
     }

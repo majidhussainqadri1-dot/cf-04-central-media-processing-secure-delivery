@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Forty-pass hardening:** review/fix rounds 15–54 completed with focused and full-suite regression evidence.
+**Sequential hardening evidence:** review/fix rounds 15–54 plus the fresh 10-pass batch 62–71 are completed with focused and full-suite regression evidence; each defect-bearing round was corrected only after that round ended and verified before the next round began.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 

@@ -147,8 +147,19 @@ final class PrivacyTelemetry {
 final class RightsRevocationService {
     public static function reconcileExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['checked'=>0,'revoked'=>0,'failed'=>0];
-        foreach(RecordStore::list('asset',0,null,$limit) as $asset){
-            if($result['checked']>=$limit)break;$result['checked']++;
+        $inventory=RecordStore::all('asset',0,null,1000000);
+        usort($inventory,static function(array $a,array $b)use($now): int {
+            $rank=static function(array $asset)use($now): int {
+                if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))return 2;
+                $expires=(int)($asset['rights']['expires_at']??0);
+                return $expires>0&&$expires<=$now?0:1;
+            };
+            $ar=$rank($a);$br=$rank($b);if($ar!==$br)return $ar<=>$br;
+            if($ar===0){$ae=(int)($a['rights']['expires_at']??0);$be=(int)($b['rights']['expires_at']??0);if($ae!==$be)return $ae<=>$be;}
+            return strcmp((string)($a['id']??''),(string)($b['id']??''));
+        });
+        foreach(array_slice($inventory,0,$limit) as $asset){
+            $result['checked']++;
             if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))continue;
             $expires=(int)($asset['rights']['expires_at']??0);
             if($expires<1||$expires>$now)continue;
