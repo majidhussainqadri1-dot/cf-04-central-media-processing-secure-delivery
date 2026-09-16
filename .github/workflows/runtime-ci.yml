@@ -45,6 +45,12 @@ jobs:
       - name: Install deterministic build tools
         if: steps.parity.outputs.apply == 'true'
         run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
+      - name: Apply transformer corrections
+        if: steps.parity.outputs.apply == 'true'
+        run: |
+          if [[ -f tools/fix-current-plan-transformer.py ]]; then
+            python3 tools/fix-current-plan-transformer.py
+          fi
       - name: Apply current rewritten-plan source parity
         id: apply
         if: steps.parity.outputs.apply == 'true'
@@ -90,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/apply-current-plan-parity.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log
+          rm -f tools/apply-current-plan-parity.py tools/fix-current-plan-transformer.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
