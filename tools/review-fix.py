@@ -42,3 +42,5 @@ if 'review-round-58-processing-consistency.php' not in q:
     if needle not in q:
         raise SystemExit('quality-check insertion point missing')
     quality.write_text(q.replace(needle, insert, 1))
+
+# Round 4 corrections are intentionally applied only after the complete review ledger is frozen.
