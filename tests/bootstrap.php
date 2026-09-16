@@ -19,7 +19,7 @@ if(!function_exists('esc_html')){function esc_html(string $text): string {return
 if(!function_exists('esc_attr__')){function esc_attr__(string $text,string $domain=''): string {return $text;}}
 
 $base=dirname(__DIR__).'/sabri-central-media/includes/';
-foreach(['class-scm-core.php','class-scm-persistence.php','class-scm-storage.php','class-scm-contracts.php','class-scm-upload.php','class-scm-validation.php','class-scm-processing.php','class-scm-delivery.php','class-scm-transfer.php','class-scm-lifecycle.php','class-scm-operations.php','class-scm-plan-parity.php','class-scm-rest.php','class-scm-plugin.php'] as $file)require_once $base.$file;
+foreach(['class-scm-core.php','class-scm-persistence.php','class-scm-storage.php','class-scm-contracts.php','class-scm-upload.php','class-scm-validation.php','class-scm-processing.php','class-scm-delivery.php','class-scm-transfer.php','class-scm-lifecycle.php','class-scm-operations.php','class-scm-plan-parity.php','class-scm-future40.php','class-scm-rest.php','class-scm-plugin.php'] as $file)require_once $base.$file;
 
 use Sabri\CentralMedia\{Keyring,ProviderRegistry,LocalObjectStore,CdnRegistry,CdnAdapter,DomainRegistry,ScannerRegistry,RecordStore,Audit,Utils};
 Keyring::setTestKeys(['test-v1'=>str_repeat('k',64),'test-v2'=>str_repeat('m',64)],'test-v1');

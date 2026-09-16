@@ -44,7 +44,7 @@ final class Plugin {
     }
     public static function cronSchedules(array $schedules): array {$schedules['scm_minute']=['interval'=>60,'display'=>__('Every minute (CF-04)','sabri-central-media')];return $schedules;}
     public static function integrate(): void {
-        if(self::$integrated)return;self::$integrated=true;CompanionDomainAdapters::registerWordPressFilters();ScannerRegistry::registerWordPressAdapters();
+        if(self::$integrated)return;self::$integrated=true;CompanionDomainAdapters::registerWordPressFilters();ScannerRegistry::registerWordPressAdapters();FutureAdapterRegistry::registerWordPressAdapters();
         if(function_exists('apply_filters')){$provider=apply_filters('scm_object_provider',null);if($provider instanceof ObjectStore)ProviderRegistry::register((string)apply_filters('scm_object_provider_id','approved-private'),$provider,(array)apply_filters('scm_object_provider_metadata',[]));$cdn=apply_filters('scm_cdn_adapter',null);if($cdn instanceof CdnAdapter)CdnRegistry::register((string)apply_filters('scm_cdn_adapter_id','approved-cdn'),$cdn);}
         if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true&&ProviderRegistry::ids()===[])ProviderRegistry::register('local-private',new LocalObjectStore(),['test'=>true,'region'=>'test']);
     }

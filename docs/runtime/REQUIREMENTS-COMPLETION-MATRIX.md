@@ -82,3 +82,51 @@ The 2026-09 current CF-04 plan adds the following source gates. These rows recor
 | CF04-NJ-06 | malware/archive/polyglot/decompression-bomb fail-closed scan path |
 
 External browser/device/accessibility, real-provider, Hostinger staging, migration/restore/rollback, live and operational evidence remain separate gates and are not claimed by this source matrix.
+
+
+## Approved Future-40 source capabilities
+
+The Founder-approved Future-40 extension is implemented as a fail-closed source layer. Capabilities requiring specialist external engines (for example provenance signing, perceptual hashing, CDR, quality scoring or sensitive-data detection) require an approved adapter and do not silently simulate production success. Staging/live/provider acceptance remains a separate lifecycle gate.
+
+| Requirement | Source responsibility | Evidence | Source status |
+|---|---|---|---|
+| CF04-FUT-001 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-002 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-003 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-004 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-005 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-006 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-007 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-008 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-009 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-010 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-011 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-012 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-013 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-014 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-015 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-016 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-017 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-018 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-019 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-020 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-021 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-022 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-023 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-024 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-025 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-026 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-027 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-028 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-029 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-030 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-031 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-032 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-033 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-034 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-035 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-036 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-037 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-038 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-039 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-040 | Implemented in source; provider-dependent engines remain fail-closed until approved adapter/staging evidence | `class-scm-future40.php`, `tests/future40.php` | Complete in source |

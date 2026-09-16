@@ -37,3 +37,10 @@ Do not merge or activate for production until `docs/runtime/EXTERNAL-ACCEPTANCE-
 ## Current rewritten-plan parity — 2026-09-16
 
 Candidate `1.3.0-rc.1` reconciles source code with the current rewritten Central Master Plan and CF-04 plan: C0-C5 classification, CF04-CEN-01..10, and CF04-NJ-01..06 source paths are gated by automated tests. Canonical domain ownership remains unchanged. Runtime is still disabled by default, and no staging/live/operational claim is made.
+
+
+## Future-40 media infrastructure extension
+
+The approved CF-04 Future-40 extension adds source-level contracts and fail-closed orchestration for content credentials/provenance, synthetic-media declaration, perceptual fingerprints and privacy-safe dedupe, CDR/re-scan/kill-switch controls, content-aware encoding and objective quality gates, HDR/audio QC, smart previews/chapters/accessibility tracks/OCR maps, sensitive-data detection and governed redaction, multi-CDN/origin-shield/edge authorization/network-adaptive transfer/offline packages, regional residency/object lock/per-asset key envelopes/crypto agility, multi-region DR/storage-tier/cost/provider routing, privacy-minimal QoE, staging-only chaos exercises, signed migration bundles and a versioned SDK contract.
+
+Provider-specific engines remain adapter-gated and the runtime remains fail closed until the existing staging/provider/migration/restore/rollback activation evidence is approved.
