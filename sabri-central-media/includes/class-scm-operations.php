@@ -14,7 +14,13 @@ final class ProviderExitService {
         if(($asset['status']??'')==='deleted'||($asset['storage']['provider_id']??'')!==$sourceProvider)continue;
         LegalHoldService::assertNoHold((string)$asset['id'],'provider_exit');
         $items[]=['type'=>'asset','id'=>$asset['id'],'object_key'=>$asset['object_key'],'sha256'=>$asset['sha256'],'size'=>$asset['size'],'status'=>'pending'];
-        foreach(DerivativeService::forAsset((string)$asset['id']) as $derivative)if(($derivative['status']??'')!=='deleted'&&($derivative['storage']['provider_id']??'')===$sourceProvider)$items[]=['type'=>'derivative','id'=>$derivative['id'],'asset_id'=>$asset['id'],'object_key'=>$derivative['object_key'],'sha256'=>$derivative['sha256'],'size'=>$derivative['size'],'status'=>'pending'];
+    }
+    foreach(RecordStore::all('derivative',0,null,200000) as $derivative){
+        if(($derivative['status']??'')==='deleted'||($derivative['storage']['provider_id']??'')!==$sourceProvider)continue;
+        $assetId=Utils::text((string)($derivative['asset_id']??''),96);$parent=$assetId!==''?RecordStore::get('asset',$assetId):null;
+        if(!$parent||($parent['status']??'')==='deleted')throw new Error('provider_exit_derivative_orphaned','Source-provider derivative has no active parent asset.',409,['derivative_id'=>$derivative['id']??'']);
+        LegalHoldService::assertNoHold($assetId,'provider_exit');
+        $items[]=['type'=>'derivative','id'=>$derivative['id'],'asset_id'=>$assetId,'object_key'=>$derivative['object_key'],'sha256'=>$derivative['sha256'],'size'=>$derivative['size'],'status'=>'pending'];
     }
     if($items===[])throw new Error('provider_exit_inventory_empty','No eligible source-provider objects were found.',409);
     $record=['actor_id'=>$actor,'exit_id'=>$id,'source_provider'=>$sourceProvider,'target_provider'=>$targetProvider,'status'=>'planned','items'=>$items,'copied'=>0,'verified'=>0,'switched'=>0,'purged'=>0,'created_at'=>Utils::now()];
