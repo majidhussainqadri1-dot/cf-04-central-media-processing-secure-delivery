@@ -147,7 +147,7 @@ final class PrivacyTelemetry {
 final class RightsRevocationService {
     public static function reconcileExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['checked'=>0,'revoked'=>0,'failed'=>0];
-        foreach(RecordStore::all('asset',0,null,$limit) as $asset){
+        foreach(RecordStore::list('asset',0,null,$limit) as $asset){
             if($result['checked']>=$limit)break;$result['checked']++;
             if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))continue;
             $expires=(int)($asset['rights']['expires_at']??0);
