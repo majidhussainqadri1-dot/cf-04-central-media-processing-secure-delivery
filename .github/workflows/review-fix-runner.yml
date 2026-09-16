@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+users.noreply.github.com'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git reset review-fix-apply.log review-fix-apply.status review-fix-diagnostics.log 2>/dev/null || true
           rm -f review-fix-apply.log review-fix-apply.status review-fix-diagnostics.log
