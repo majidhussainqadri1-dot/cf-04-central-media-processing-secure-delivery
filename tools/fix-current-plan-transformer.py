@@ -23,5 +23,11 @@ if obsolete not in s:
     raise SystemExit('obsolete plugin-manifest transformer block not found')
 s=s.replace(obsolete,"# Plan-parity services are loaded as native runtime classes; no duplicate plugin manifest is introduced.\n\n")
 
+marker="# ---------------------------------------------------------------------------\n# Source QA now treats current rewritten plans as a first-class release gate.\n"
+if marker not in s:
+    raise SystemExit('source-QA insertion marker not found')
+legacy="""# Legacy source tests that represented public media as C1 are migrated to the\n# current plan's C0 Public class. Account/private C1 uses are intentionally untouched.\nreplace_all(\n    'tests/run-all.php',\n    \"create_document_asset('message:public','C1')\",\n    \"create_document_asset('message:public','C0')\"\n)\n\n"""
+s=s.replace(marker,legacy+marker,1)
+
 p.write_text(s)
-print('transformer source-drift assumptions corrected')
+print('transformer source-drift and legacy-public fixtures corrected')
