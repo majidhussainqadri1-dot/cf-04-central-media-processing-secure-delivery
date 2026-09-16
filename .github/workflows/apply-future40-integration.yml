@@ -62,7 +62,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -f tools/apply-future40-integration.py
-          git checkout HEAD -- .github/workflows/apply-future40-integration.yml
+          # The GITHUB_TOKEN for this workflow can publish ordinary source/docs but
+          # cannot mutate workflow files. Preserve registered workflows here; the
+          # permanent runtime-CI update and one-time workflow cleanup are applied
+          # separately through the authenticated repository connector after green QA.
+          git checkout HEAD -- .github/workflows/apply-future40-integration.yml .github/workflows/runtime-ci.yml
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
