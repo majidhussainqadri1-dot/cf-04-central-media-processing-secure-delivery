@@ -1,9 +1,9 @@
 # CF-04 — Central Media Processing and Secure Delivery
 
-**Runtime candidate:** `1.2.0-rc.2`
+**Runtime candidate:** `1.3.0-rc.1`
 
 **Forty-pass hardening:** review/fix rounds 15–54 completed with focused and full-suite regression evidence.
-**Schema / contract:** `1.4.0 / 1.4.0`
+**Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.0.
 
 ## Truthful status
@@ -33,3 +33,7 @@ bash tools/quality-check.sh
 ## Release law
 
 Do not merge or activate for production until `docs/runtime/EXTERNAL-ACCEPTANCE-GATES.md` is fully evidenced and Founder-approved.
+
+## Current rewritten-plan parity — 2026-09-16
+
+Candidate `1.3.0-rc.1` reconciles source code with the current rewritten Central Master Plan and CF-04 plan: C0-C5 classification, CF04-CEN-01..10, and CF04-NJ-01..06 source paths are gated by automated tests. Canonical domain ownership remains unchanged. Runtime is still disabled by default, and no staging/live/operational claim is made.

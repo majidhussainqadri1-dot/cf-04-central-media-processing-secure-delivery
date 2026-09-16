@@ -6,5 +6,5 @@ for($i=1;$i<=33;$i++)gate(str_contains($matrix,sprintf('CF04-FR-%03d',$i)),'trac
 gate(str_contains($matrix,'CHAT-XFER-001')&&str_contains($matrix,'CHAT-QA-001'),'cross-plan directives mapped');
 gate(str_contains($readme,'External acceptance')&&str_contains($readme,'does **not** authorize production use'),'truthful completion boundary');
 gate((bool)preg_match("/define\('SCM_RUNTIME_ENABLED',false\)/",$plugin),'runtime disabled by default');
-gate(str_contains($plugin,"SCM_SCHEMA_VERSION','1.4.0")&&str_contains($plugin,"SCM_CONTRACT_VERSION','1.4.0"),'version alignment');
+gate(str_contains($plugin,"SCM_SCHEMA_VERSION','1.5.0")&&str_contains($plugin,"SCM_CONTRACT_VERSION','1.5.0"),'version alignment');
 echo "REVIEW ROUND 11 GOVERNANCE: PASS\n";

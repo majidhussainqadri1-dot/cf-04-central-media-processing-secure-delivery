@@ -105,14 +105,14 @@ final class ImagePipeline {
 
 final class AvPipeline {
     public static function run(array $asset,$source,string $jobId): array {
-    $spec=$asset['media_class']==='video'?['probe'=>true,'adaptive'=>true,'manifests'=>['hls','dash'],'video_codecs'=>['h264','vp9','av1'],'audio_codecs'=>['aac','opus'],'poster'=>true,'waveform'=>true,'loudness'=>'EBU-R128','captions_reference'=>true,'segment_hashes'=>true,'duration_limit'=>$asset['policy']['max_duration_seconds']]:['probe'=>true,'audio_codecs'=>['aac','opus','mp3'],'waveform'=>true,'loudness'=>'EBU-R128','captions_reference'=>true,'duration_limit'=>$asset['policy']['max_duration_seconds']];
+    $spec=$asset['media_class']==='video'?['probe'=>true,'adaptive'=>true,'manifests'=>['hls','dash'],'video_codecs'=>['h264','vp9','av1'],'audio_codecs'=>['aac','opus'],'poster'=>true,'waveform'=>true,'loudness'=>'EBU-R128','captions_reference'=>true,'transcript_reference'=>true,'low_bandwidth'=>true,'audio_only'=>true,'segment_hashes'=>true,'duration_limit'=>$asset['policy']['max_duration_seconds']]:['probe'=>true,'audio_codecs'=>['aac','opus','mp3'],'waveform'=>true,'loudness'=>'EBU-R128','captions_reference'=>true,'transcript_reference'=>true,'low_bandwidth'=>true,'duration_limit'=>$asset['policy']['max_duration_seconds']];
     $result=ToolRunner::transform($asset['media_class'].'-pipeline',['stream'=>$source,'mime'=>$asset['mime']],$spec);
     $probe=(array)($result['probe']??[]);
     if(($probe['supported']??false)!==true||(int)($probe['duration_seconds']??0)<1)throw new Error('av_probe_failed','Audio/video probe failed.',422);
     if($asset['policy']['max_duration_seconds']>0&&(int)$probe['duration_seconds']>$asset['policy']['max_duration_seconds'])throw new Error('duration_limit_exceeded','Media duration exceeds policy.',413);
     $outputs=(array)($result['outputs']??[]);
     if($outputs===[])throw new Error('av_pipeline_empty','Audio/video pipeline returned no outputs.',422);
-    $ids=[];$allKinds=[];$mimes=['hls-manifest'=>'application/vnd.apple.mpegurl','hls-segment'=>'video/mp2t','dash-manifest'=>'application/dash+xml','poster'=>'image/jpeg','waveform'=>'application/json','audio-aac'=>'audio/aac','audio-opus'=>'audio/ogg','audio-mp3'=>'audio/mpeg','video-h264'=>'video/mp4','video-vp9'=>'video/webm','video-av1'=>'video/mp4'];
+    $ids=[];$allKinds=[];$mimes=['hls-manifest'=>'application/vnd.apple.mpegurl','hls-segment'=>'video/mp2t','dash-manifest'=>'application/dash+xml','poster'=>'image/jpeg','waveform'=>'application/json','audio-aac'=>'audio/aac','audio-opus'=>'audio/ogg','audio-mp3'=>'audio/mpeg','video-h264'=>'video/mp4','video-vp9'=>'video/webm','video-av1'=>'video/mp4','video-low'=>'video/mp4','audio-low'=>'audio/aac','caption-ref'=>'application/json','transcript-ref'=>'application/json'];
     foreach($outputs as $output){
         if(!is_array($output)||!is_resource($output['stream']??null)||empty($output['kind'])||empty($output['sha256']))throw new Error('av_output_invalid','Audio/video output invalid.',422);
         try{
@@ -124,8 +124,8 @@ final class AvPipeline {
             $ids[]=DerivativeService::store($asset['asset_id'],$kind,$output['stream'],ProcessingService::lineage($asset,$jobId,$result,$kind,(string)($output['preset_version']??'1'),['mime'=>$mime,'bitrate'=>$output['bitrate']??null,'duration'=>$probe['duration_seconds']]),$asset['policy'])['id'];
         }finally{fclose($output['stream']);}
     }
-    if($asset['media_class']==='video')foreach(['hls-manifest','poster'] as $required)if(!in_array($required,$allKinds,true))throw new Error('video_derivative_missing','Required video derivative missing.',422,['kind'=>$required]);
-    if($ids===[])throw new Error('target_derivative_missing','Audio/video pipeline did not produce a requested derivative.',422);
+    if($asset['media_class']==='video')foreach(['hls-manifest','poster','video-low','audio-low','caption-ref','transcript-ref'] as $required)if(!in_array($required,$allKinds,true))throw new Error('video_derivative_missing','Required video derivative missing.',422,['kind'=>$required]);
+    if($asset['media_class']==='audio')foreach(['audio-low','caption-ref','transcript-ref'] as $required)if(!in_array($required,$allKinds,true))throw new Error('audio_derivative_missing','Required audio accessibility/low-bandwidth derivative missing.',422,['kind'=>$required]);if($ids===[])throw new Error('target_derivative_missing','Audio/video pipeline did not produce a requested derivative.',422);
     return $ids;
 }
 }

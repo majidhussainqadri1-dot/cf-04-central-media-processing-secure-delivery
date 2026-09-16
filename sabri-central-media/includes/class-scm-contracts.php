@@ -104,10 +104,10 @@ final class RightsPolicy {
 }
 
 final class Policy {
-    public const PRIVACY=['C1','C2','C3','C4','C5'];
+    public const PRIVACY=['C0','C1','C2','C3','C4','C5'];
     public const MEDIA=['image','audio','video','document','archive','course','other'];
     public static function normalize(array $input,bool $strict=true): array {
-        $required=['policy_id','policy_version','owner_domain','purpose','privacy_class','media_class','max_size_bytes','max_part_size_bytes','max_upload_parts','allowed_mime_types','required_scans','derivative_set','retention','rights','delivery'];
+        $required=['policy_id','policy_version','owner_domain','purpose','lawful_basis','revocation_hook','privacy_class','media_class','max_size_bytes','max_part_size_bytes','max_upload_parts','allowed_mime_types','required_scans','derivative_set','retention','rights','delivery'];
         Utils::requireFields($input,$required,'policy_incomplete');
         $privacy=strtoupper(Utils::text((string)$input['privacy_class'],4));if(!in_array($privacy,self::PRIVACY,true))throw new Error('privacy_class_invalid','Invalid privacy class.',400);
         $media=Utils::key((string)$input['media_class'],32);if(!in_array($media,self::MEDIA,true))throw new Error('media_class_invalid','Unsupported media class.',400);
@@ -122,7 +122,7 @@ final class Policy {
         $rights=RightsPolicy::normalize((array)$input['rights']);
         $normalized=[
             'policy_id'=>Utils::text((string)$input['policy_id'],96),'policy_version'=>max(1,(int)$input['policy_version']),
-            'owner_domain'=>Utils::key((string)$input['owner_domain'],64),'purpose'=>Utils::key((string)$input['purpose'],96),
+            'owner_domain'=>Utils::key((string)$input['owner_domain'],64),'purpose'=>Utils::key((string)$input['purpose'],96),'lawful_basis'=>Utils::key((string)$input['lawful_basis'],64),'revocation_hook'=>Utils::key((string)$input['revocation_hook'],96),
             'privacy_class'=>$privacy,'media_class'=>$media,'max_size_bytes'=>$max,'max_part_size_bytes'=>$part,'max_upload_parts'=>$parts,
             'allowed_mime_types'=>$mimes,'allowed_extensions'=>self::extensions((array)($input['allowed_extensions']??[])),
             'required_scans'=>$scans,'derivative_set'=>$derivatives,
@@ -136,7 +136,7 @@ final class Policy {
             'safety'=>['require_reviewer_for_low_confidence'=>Utils::bool($input['safety']['require_reviewer_for_low_confidence']??true),'minimum_confidence'=>max(0.0,min(1.0,(float)($input['safety']['minimum_confidence']??0.80)))],
             'issued_at'=>max(1,(int)($input['issued_at']??$input['created_at']??Utils::now())),
         ];
-        if($normalized['owner_domain']===''||$normalized['purpose']==='')throw new Error('policy_identity_invalid','Policy owner and purpose are required.',400);if($normalized['issued_at']>Utils::now()+300)throw new Error('policy_issued_at_invalid','Policy issue time is in the future.',400);if($normalized['delivery']['public_cdn']&&$normalized['privacy_class']!=='C1')throw new Error('public_cdn_privacy_denied','Public CDN requires privacy class C1.',400);if($normalized['rights']['clinical_confidentiality']&&($normalized['delivery']['public_cdn']||in_array('public',$normalized['rights']['allowed_audiences'],true)))throw new Error('clinical_public_delivery_denied','Clinically confidential media cannot use public delivery.',400);if($normalized['delivery']['allow_ranges']&&$normalized['delivery']['max_range_bytes']<1)throw new Error('range_policy_invalid','Range delivery requires a positive range limit.',400);$normalized['policy_hash']=hash('sha256',Utils::canonicalJson($normalized));return $normalized;
+        if($normalized['owner_domain']===''||$normalized['purpose']===''||$normalized['lawful_basis']===''||$normalized['revocation_hook']==='')throw new Error('policy_identity_invalid','Policy owner, purpose, lawful basis and revocation hook are required.',400);if($normalized['issued_at']>Utils::now()+300)throw new Error('policy_issued_at_invalid','Policy issue time is in the future.',400);if($normalized['delivery']['public_cdn']&&$normalized['privacy_class']!=='C0')throw new Error('public_cdn_privacy_denied','Public CDN requires privacy class C0.',400);if($normalized['rights']['clinical_confidentiality']&&($normalized['delivery']['public_cdn']||in_array('public',$normalized['rights']['allowed_audiences'],true)))throw new Error('clinical_public_delivery_denied','Clinically confidential media cannot use public delivery.',400);if($normalized['delivery']['allow_ranges']&&$normalized['delivery']['max_range_bytes']<1)throw new Error('range_policy_invalid','Range delivery requires a positive range limit.',400);$normalized['policy_hash']=hash('sha256',Utils::canonicalJson($normalized));return $normalized;
     }
     private static function extensions(array $values): array {$raw=array_map('strval',$values);$extensions=array_values(array_unique(array_map(fn($x)=>strtolower(Utils::key($x,16)),$raw)));if(array_filter($extensions,fn($x)=>$x===''||!preg_match('/^[a-z0-9][a-z0-9._+-]{0,15}$/',$x))||count($extensions)!==count(array_unique($raw)))throw new Error('extension_allowlist_invalid','Extension allowlist contains an invalid value.',400);return $extensions;}
 }

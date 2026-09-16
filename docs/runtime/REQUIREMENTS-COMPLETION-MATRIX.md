@@ -52,3 +52,33 @@ The matrix records source-code completion and automated source-level acceptance.
 ## Release boundary
 
 All 33 source requirements and the transfer directive have implementation paths and automated source evidence. Hostinger staging, real provider acceptance, migration, backup/restore, rollback, browser/accessibility/load/security acceptance, Founder approval, live deployment and monitored operations remain pending external gates.
+
+## Current rewritten-plan parity
+
+The 2026-09 current CF-04 plan adds the following source gates. These rows record only CF-04 native implementation/consumer-contract responsibility; domain capabilities remain with their canonical owners.
+
+| Requirement | CF-04 source responsibility | Evidence | Source status |
+|---|---|---|---|
+| CF04-CEN-01 | Typed owner reference + C0-C5 class + rights/purpose/lawful-basis/retention/revocation envelope | `tests/new-plan-parity.php` | Complete in source |
+| CF04-CEN-02 | Quarantine + required scans + fail-closed processing | existing FR-006..011 + new-plan suite | Complete in source |
+| CF04-CEN-03 | Versioned/checksum lineage + active-manifest stale-state checks | FR-016/022 + adversarial tests | Complete in source |
+| CF04-CEN-04 | Purpose/privacy-bound grants + rights-aware immutable CDN key | new-plan suite | Complete in source |
+| CF04-CEN-05 | C0-only public CDN; C2-C5 public delivery denied | new-plan suite | Complete in source |
+| CF04-CEN-06 | Accessibility metadata provenance + qualified high-risk review | `AccessibilityMetadataService` | Complete in source |
+| CF04-CEN-07 | Explicit low-bandwidth/audio/text selection + resumable transfer | `RenditionSelector`, FR-002/014/021, CHAT-XFER-001 | Complete in source |
+| CF04-CEN-08 | Rights/delete propagation through grants/CDN/derivatives + downstream invalidation event | `RightsRevocationService`, `DeletionService` | Complete in source |
+| CF04-CEN-09 | Explicit degraded-state evidence; no silent rendition substitution | `DegradedStateService`, `RenditionSelector` | Complete in source |
+| CF04-CEN-10 | Allowlisted aggregate operational telemetry; person/content labels denied | `PrivacyTelemetry` | Complete in source |
+
+### Native journeys
+
+| Journey | Source evidence |
+|---|---|
+| CF04-NJ-01 | upload/quarantine/scan/process/manifest path + owner contracts |
+| CF04-NJ-02 | AV adaptive + caption/transcript references + low-bandwidth outputs |
+| CF04-NJ-03 | verified 1 GiB resumable transfer + scoped grant/revoke |
+| CF04-NJ-04 | rights-expiry/deletion propagation + tombstone/projection evidence |
+| CF04-NJ-05 | durable jobs, bounded retry, dead-letter, repair and degraded state |
+| CF04-NJ-06 | malware/archive/polyglot/decompression-bomb fail-closed scan path |
+
+External browser/device/accessibility, real-provider, Hostinger staging, migration/restore/rollback, live and operational evidence remain separate gates and are not claimed by this source matrix.

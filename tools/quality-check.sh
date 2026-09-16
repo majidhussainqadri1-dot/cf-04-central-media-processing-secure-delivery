@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="1.2.0-rc.2"
+VERSION="1.3.0-rc.1"
 for command in php python3 zip unzip sha256sum rsync; do command -v "$command" >/dev/null || { echo "missing command: $command" >&2; exit 1; }; done
 find "$ROOT/sabri-central-media" "$ROOT/tests" -type f -name '*.php' -print0 | LC_ALL=C sort -z | xargs -0 -n1 php -l >/dev/null
 python3 "$ROOT/tests/contracts-runtime.py"
 python3 "$ROOT/tests/source-integration.py"
 php "$ROOT/tests/run-all.php"
+php "$ROOT/tests/new-plan-parity.php"
 php "$ROOT/tests/review-round-11-governance.php"
 php "$ROOT/tests/review-round-12-security.php"
 php "$ROOT/tests/review-round-13-adversarial.php"
@@ -24,7 +25,7 @@ PACKAGE_SHA="$(sha256sum "$ROOT/dist/cf-04-sabri-central-media-$VERSION.zip" | a
 python3 - "$ROOT" "$VERSION" "$COMMIT" "$PACKAGE_SHA" <<'PY'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]);version=sys.argv[2];commit=sys.argv[3];sha=sys.argv[4]
-evidence={'module':'CF-04','version':version,'source_commit':commit,'package_sha256':sha,'runtime_default':'disabled','source_requirements':'33/33','cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'quality_gate':'passed','external_acceptance':'pending'}
+evidence={'module':'CF-04','version':version,'source_commit':commit,'package_sha256':sha,'runtime_default':'disabled','source_requirements':'33/33','current_plan_requirements':'CF04-CEN-01..10','native_journeys':'CF04-NJ-01..06','cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'quality_gate':'passed','external_acceptance':'pending'}
 (root/'dist/RELEASE-EVIDENCE.json').write_text(json.dumps(evidence,sort_keys=True,separators=(',',':'))+'\n')
 PY
 echo "CF-04 QUALITY GATE: PASS ($VERSION $PACKAGE_SHA)"

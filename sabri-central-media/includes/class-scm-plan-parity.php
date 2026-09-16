@@ -93,7 +93,7 @@ final class RenditionSelector {
         if(!$manifest||($manifest['status']??'')!=='active'||(int)($manifest['processing_generation']??0)!==(int)($asset['processing_generation']??0))return ['status'=>'degraded','reason'=>'active_manifest_unavailable','mode'=>$mode,'asset_id'=>$assetId,'rendition'=>null];
         $preferences=match($mode){
             'low_bandwidth'=>['video-low','audio-low','audio-aac','thumbnail','text'],
-            'audio_only'=>['audio-low','audio-aac','audio-opus','audio-mp3','text'],
+            'audio_only'=>['audio-low','audio-aac','audio-opus','audio-mp3'],
             'text_first'=>['transcript-ref','text','caption-ref','ocr'],
             default=>['hls-manifest','dash-manifest','video-h264','audio-aac','preview','thumbnail','text'],
         };
