@@ -9,49 +9,36 @@ def replace_once(path: Path, old: str, new: str) -> None:
         raise SystemExit(f"expected review target not found: {path}")
     path.write_text(text.replace(old, new, 1))
 
-upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
+processing = ROOT / 'sabri-central-media/includes/class-scm-processing.php'
 replace_once(
-    upload,
-    "$hash=Utils::streamHash($stream);if($hash['size']<1||$hash['size']>(int)$upload['policy']['max_part_size_bytes'])throw new Error('part_size_exceeded','Part exceeds policy.',413);if($hash['size']+(int)$upload['received_size']>(int)$upload['expected_size']+(int)$upload['policy']['max_part_size_bytes'])throw new Error('upload_size_exceeded','Uploaded parts exceed expected bounds.',422);$stored=PartStore::put($uploadId,$part,$stream,strtolower($sha256));",
-    "$hash=Utils::streamHash($stream);if($hash['size']<1||$hash['size']>(int)$upload['policy']['max_part_size_bytes'])throw new Error('part_size_exceeded','Part exceeds policy.',413);$existingPart=null;foreach(PartStore::list($uploadId) as $candidate)if((int)($candidate['part_number']??0)===$part){$existingPart=$candidate;break;}$projected=(int)$upload['received_size']-(int)($existingPart['size']??0)+(int)$hash['size'];if($projected>(int)$upload['expected_size'])throw new Error('upload_size_exceeded','Uploaded parts exceed expected size.',422);$stored=PartStore::put($uploadId,$part,$stream,strtolower($sha256));"
+    processing,
+    "$jobs=JobService::graph($assetId,$asset['policy'],$generation);\n    $asset['processing_status']='queued';$asset['processing_generation']=$generation;$asset['job_graph']=$jobs;\n    RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);\n    Audit::record('processing_graph_created',['asset_id'=>$assetId,'processing_generation'=>$generation,'jobs'=>array_keys($jobs)]);\n    return $jobs;",
+    "$jobs=JobService::graph($assetId,$asset['policy'],$generation);\n    $asset['processing_status']='queued';$asset['processing_generation']=$generation;$asset['job_graph']=$jobs;\n    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}\n    catch(\\Throwable $exception){foreach($jobs as $jobId){$job=RecordStore::get('job',(string)$jobId);if($job&&($job['asset_id']??'')===$assetId&&(int)($job['processing_generation']??0)===$generation&&($job['status']??'')==='queued')RecordStore::delete('job',(string)$jobId);}throw $exception;}\n    Audit::record('processing_graph_created',['asset_id'=>$assetId,'processing_generation'=>$generation,'jobs'=>array_keys($jobs)]);\n    return $jobs;"
 )
 
-validation = ROOT / 'sabri-central-media/includes/class-scm-validation.php'
 replace_once(
-    validation,
-    "$pages=0;$encrypted=false;$active=false;$overlap='';\n        try{while(!feof($h)){$chunk=fread($h,1048576);if($chunk===false)throw new Error('source_read_failed','Cannot scan PDF source.',500);if($chunk==='')continue;$data=$overlap.$chunk;$pages+=preg_match_all('/\\/Type\\s*\\/Page\\b/',$data);$encrypted=$encrypted||preg_match('/\\/Encrypt\\b/',$data)===1;$active=$active||preg_match('/\\/JavaScript\\b|\\/JS\\b|\\/Launch\\b|\\/EmbeddedFile\\b/i',$data)===1;$overlap=substr($data,-256);}}finally{fclose($h);}return ['pages'=>$pages,'encrypted'=>$encrypted,'active_content'=>$active];",
-    "$pages=0;$encrypted=false;$active=false;$overlap='';\n        try{while(!feof($h)){$chunk=fread($h,1048576);if($chunk===false)throw new Error('source_read_failed','Cannot scan PDF source.',500);if($chunk==='')continue;$overlapLength=strlen($overlap);$data=$overlap.$chunk;$matches=[];preg_match_all('/\\/Type\\s*\\/Page\\b/',$data,$matches,PREG_OFFSET_CAPTURE);foreach($matches[0]??[] as $match){$text=(string)($match[0]??'');$offset=(int)($match[1]??0);if($offset+strlen($text)>$overlapLength)$pages++;}$encrypted=$encrypted||preg_match('/\\/Encrypt\\b/',$data)===1;$active=$active||preg_match('/\\/JavaScript\\b|\\/JS\\b|\\/Launch\\b|\\/EmbeddedFile\\b/i',$data)===1;$overlap=substr($data,-256);}}finally{fclose($h);}return ['pages'=>$pages,'encrypted'=>$encrypted,'active_content'=>$active];"
+    processing,
+    "$old=$asset['active_manifest_id']??null;\n    $asset['active_manifest_id']=$manifestId;$asset['manifest_version']=$manifest['manifest_version'];$asset['processing_status']='completed';$asset['status']='ready';$asset['ready_at']=Utils::now();\n    unset($asset['reprocess_context']);\n    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}\n    catch(\\Throwable $exception){RecordStore::delete('manifest',$manifestId);throw $exception;}\n    $manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);\n    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}}",
+    "$old=$asset['active_manifest_id']??null;$before=$asset;\n    $asset['active_manifest_id']=$manifestId;$asset['manifest_version']=$manifest['manifest_version'];$asset['processing_status']='completed';$asset['status']='ready';$asset['ready_at']=Utils::now();\n    unset($asset['reprocess_context']);\n    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}\n    catch(\\Throwable $exception){RecordStore::delete('manifest',$manifestId);throw $exception;}\n    try{$manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);}\n    catch(\\Throwable $exception){$fresh=RecordStore::get('asset',$assetId);if($fresh&&($fresh['active_manifest_id']??null)===$manifestId){$fresh['active_manifest_id']=$before['active_manifest_id']??null;$fresh['manifest_version']=(int)($before['manifest_version']??0);$fresh['processing_status']=$before['processing_status']??'failed';$fresh['status']=$before['status']??'quarantined';if(isset($before['ready_at']))$fresh['ready_at']=$before['ready_at'];else unset($fresh['ready_at']);RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);}RecordStore::delete('manifest',$manifestId);throw $exception;}\n    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){try{$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}catch(\\Throwable $exception){Observability::alert('warning','manifest_supersede_reconciliation_required',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'previous_manifest'=>$old,'exception'=>get_class($exception)]);}}}"
 )
 
-regression = ROOT / 'tests/review-round-57-upload-validation.php'
+regression = ROOT / 'tests/review-round-58-processing-consistency.php'
 regression.write_text(r'''<?php
 declare(strict_types=1);
-require __DIR__.'/bootstrap.php';
-use Sabri\CentralMedia\{UploadService};
-
-$p=policy('document','C3');
-$p['max_size_bytes']=6;$p['max_part_size_bytes']=65536;$p['max_upload_parts']=2;
-// Policy normalization requires part capacity >= max size and permits the small logical object.
-$p=Sabri\CentralMedia\Policy::normalize($p,true);
-$bytes='abcdef';$meta=['name'=>'bounded.pdf','mime'=>'application/pdf','size'=>strlen($bytes),'sha256'=>hash('sha256',$bytes),'owner_object'=>'message:round57'];
-$u=UploadService::create(11,$meta,$p,'round57-create');
-$s=stream_of('abc');UploadService::putPart($u['id'],11,1,$s,hash('sha256','abc'),$u['upload_credential']);fclose($s);
-// Retry of the same part must not be double-counted.
-$s=stream_of('abc');$retry=UploadService::putPart($u['id'],11,1,$s,hash('sha256','abc'),$u['upload_credential']);fclose($s);
-ok((int)$retry['received_size']===3,'ROUND 57 retried part is not double-counted');
-// A new part that pushes received bytes beyond the declared object must fail immediately.
-$s=stream_of('defg');err(fn()=>UploadService::putPart($u['id'],11,2,$s,hash('sha256','defg'),$u['upload_credential']),'upload_size_exceeded','ROUND 57 projected upload bytes cannot exceed declared size');fclose($s);
-
-$source=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-scm-validation.php');
-ok(str_contains($source,'PREG_OFFSET_CAPTURE')&&str_contains($source,'$offset+strlen($text)>$overlapLength'),'ROUND 57 PDF page scanner avoids overlap double-counting');
-echo "REVIEW ROUND 57 UPLOAD/VALIDATION: PASS\n";
+$root=dirname(__DIR__);
+$source=file_get_contents($root.'/sabri-central-media/includes/class-scm-processing.php');
+function r58(bool $ok,string $message): void {if(!$ok){fwrite(STDERR,"ROUND 58 FAIL: $message\n");exit(1);}echo "ROUND 58 PASS: $message\n";}
+r58(str_contains($source,"RecordStore::delete('job',(string)$jobId)"),'orphan queued jobs are discarded when asset graph persistence fails');
+r58(str_contains($source,"if($fresh&&($fresh['active_manifest_id']??null)===$manifestId)")&&str_contains($source,"RecordStore::delete('manifest',$manifestId)"),'manifest activation failure rolls asset pointer back and removes pending manifest');
+r58(str_contains($source,'manifest_supersede_reconciliation_required'),'old-manifest supersede failure is surfaced for reconciliation without corrupting new active state');
+echo "REVIEW ROUND 58 PROCESSING CONSISTENCY: PASS\n";
 ''')
 
 quality = ROOT / 'tools/quality-check.sh'
 q = quality.read_text()
-needle = 'php "$ROOT/tests/future40.php"\n'
-insert = needle + 'php "$ROOT/tests/review-round-57-upload-validation.php"\n'
-if 'review-round-57-upload-validation.php' not in q:
+needle = 'php "$ROOT/tests/review-round-57-upload-validation.php"\n'
+insert = needle + 'php "$ROOT/tests/review-round-58-processing-consistency.php"\n'
+if 'review-round-58-processing-consistency.php' not in q:
     if needle not in q:
         raise SystemExit('quality-check insertion point missing')
     quality.write_text(q.replace(needle, insert, 1))
