@@ -104,7 +104,7 @@ jobs:
       - name: Final full regression
         if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'success'
         run: bash tools/quality-check.sh
-      - name: Remove one-time transport tooling and publish reviewed source
+      - name: Remove one-time source tooling and publish reviewed source
         id: publish
         continue-on-error: true
         if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'success'
@@ -113,7 +113,10 @@ jobs:
           set -o pipefail
           {
             set -euo pipefail
-            rm -f tools/apply-current-plan-parity.py tools/fix-current-plan-transformer.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log parity-review.log
+            rm -f tools/apply-current-plan-parity.py tools/fix-current-plan-transformer.py parity-diagnostic.log parity-review.log
+            # GitHub Actions tokens cannot mutate workflow files. Preserve the exact
+            # registered workflows here; cleanup is performed through the repository API.
+            git checkout HEAD -- .github/workflows/runtime-ci.yml .github/workflows/apply-current-plan-parity.yml dist/.gitkeep
             git diff --check
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
