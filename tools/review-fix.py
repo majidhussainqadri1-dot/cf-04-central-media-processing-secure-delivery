@@ -1,38 +1,28 @@
 #!/usr/bin/env python3
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=ROOT/'sabri-central-media/includes/class-scm-processing.php'
+p=ROOT/'sabri-central-media/includes/class-scm-lifecycle.php'
 s=p.read_text()
 
-# Fresh Review Round 67 was fully completed before applying this correction.
-old="""    public static function lease(string $workerId,array $capabilities,int $leaseSeconds=120): ?array {
-        $workerId=Utils::text($workerId,96);$capabilities=array_values(array_filter(array_unique(array_map(fn($value)=>Utils::key((string)$value,64),$capabilities))));if($workerId===''||$capabilities===[])throw new Error('worker_identity_invalid','Worker identity and capabilities are required.',400);$now=Utils::now();$queued=RecordStore::all('job',0,null,100000);$eligible=[];foreach($queued as $job){if(!in_array(($job['status']??''),['queued','retry'],true)||(int)($job['next_attempt_at']??0)>$now)continue;if(!in_array((string)$job['job_type'],$capabilities,true))continue;if(!self::dependenciesComplete($job))continue;$age=max(0,$now-(int)($job['created_at']??$now));$fairness=min(30,(int)floor($age/60));$tenantPenalty=self::tenantActiveLeases((string)$job['tenant'])*10;$job['_score']=(int)$job['priority_weight']+$fairness-$tenantPenalty;$eligible[]=$job;}if($eligible===[])return null;usort($eligible,fn($a,$b)=>$b['_score']<=>$a['_score'] ?: ((int)$a['created_at']<=>(int)$b['created_at']));$job=$eligible[0];unset($job['_score']);$fresh=RecordStore::get('job',(string)$job['id']);if(!$fresh||!in_array(($fresh['status']??''),['queued','retry'],true))return null;$fresh['status']='leased';$fresh['lease_owner']=$workerId;$leaseToken=Utils::id('lease');$fresh['lease_token_hash']=hash('sha256',$leaseToken);$fresh['lease_expires_at']=$now+max(30,min(600,$leaseSeconds));$fresh['heartbeat_at']=$now;$fresh['attempts']=(int)$fresh['attempts']+1;$saved=RecordStore::put('job',(string)$fresh['id'],$fresh,(int)$fresh['version']);return $saved+['lease_token'=>$leaseToken];
-    }
+# Fresh Review Round 68 was fully completed before applying this correction.
+old="""    $aliases=['delete'=>'deletion','deletion'=>'deletion','deliver'=>'delivery','delivery'=>'delivery','process'=>'processing','processing'=>'processing','repair'=>'reprocess','reprocess'=>'reprocess','provider-exit'=>'provider_exit','provider_exit'=>'provider_exit'];
 """
-new="""    public static function lease(string $workerId,array $capabilities,int $leaseSeconds=120): ?array {
-        $workerId=Utils::text($workerId,96);$capabilities=array_values(array_filter(array_unique(array_map(fn($value)=>Utils::key((string)$value,64),$capabilities))));if($workerId===''||$capabilities===[])throw new Error('worker_identity_invalid','Worker identity and capabilities are required.',400);$now=Utils::now();$queued=RecordStore::all('job',0,null,100000);$eligible=[];foreach($queued as $job){if(!in_array(($job['status']??''),['queued','retry'],true)||(int)($job['next_attempt_at']??0)>$now)continue;if(!in_array((string)$job['job_type'],$capabilities,true))continue;if(!self::dependenciesComplete($job))continue;$age=max(0,$now-(int)($job['created_at']??$now));$fairness=min(30,(int)floor($age/60));$tenantPenalty=self::tenantActiveLeases((string)$job['tenant'])*10;$job['_score']=(int)$job['priority_weight']+$fairness-$tenantPenalty;$eligible[]=$job;}if($eligible===[])return null;usort($eligible,fn($a,$b)=>$b['_score']<=>$a['_score'] ?: ((int)$a['created_at']<=>(int)$b['created_at']));foreach($eligible as $job){unset($job['_score']);$fresh=RecordStore::get('job',(string)$job['id']);if(!$fresh||!in_array(($fresh['status']??''),['queued','retry'],true)||(int)($fresh['next_attempt_at']??0)>$now||!in_array((string)$fresh['job_type'],$capabilities,true)||!self::dependenciesComplete($fresh))continue;$fresh['status']='leased';$fresh['lease_owner']=$workerId;$leaseToken=Utils::id('lease');$fresh['lease_token_hash']=hash('sha256',$leaseToken);$fresh['lease_expires_at']=$now+max(30,min(600,$leaseSeconds));$fresh['heartbeat_at']=$now;$fresh['attempts']=(int)$fresh['attempts']+1;try{$saved=RecordStore::put('job',(string)$fresh['id'],$fresh,(int)$fresh['version']);return $saved+['lease_token'=>$leaseToken];}catch(Error $leaseError){if($leaseError->errorCode!=='record_version_conflict')throw $leaseError;}}return null;
-    }
+new="""    $aliases=['delete'=>'deletion','deletion'=>'deletion','expire-derivatives'=>'deletion','expire_derivatives'=>'deletion','deliver'=>'delivery','delivery'=>'delivery','process'=>'processing','processing'=>'processing','repair'=>'reprocess','reprocess'=>'reprocess','provider-exit'=>'provider_exit','provider_exit'=>'provider_exit'];
 """
-if old not in s: raise SystemExit('lease contention target missing')
+if old not in s: raise SystemExit('legal-hold alias target missing')
 p.write_text(s.replace(old,new,1))
 
-t=ROOT/'tests/review-round-67-lease-contention.php'
+t=ROOT/'tests/review-round-68-legal-hold-scope.php'
 t.write_text(r'''<?php
 declare(strict_types=1);
-$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-processing.php');
-function r67($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 67 FAIL: $m\n");exit(1);}echo "ROUND 67 PASS: $m\n";}
-$loopPattern='foreach($eligible as $job)';
-$catchPattern='catch(Error $leaseError)';
-$conflictPattern='$leaseError' . "->errorCode!=='record_version_conflict'";
-$dependencyPattern='!self::dependenciesComplete($fresh))continue';
-$timingPattern='(int)($fresh' . "['next_attempt_at']??0)>" . '$now';
-r67(str_contains($s,$loopPattern),'lease selection iterates ranked eligible jobs instead of committing to one stale candidate');
-r67(str_contains($s,$catchPattern)&&str_contains($s,$conflictPattern),'lease CAS contention retries another eligible job while preserving non-conflict failures');
-r67(str_contains($s,$dependencyPattern),'lease revalidates dependencies immediately before CAS acquisition');
-r67(str_contains($s,$timingPattern),'lease revalidates retry timing immediately before CAS acquisition');
-echo "REVIEW ROUND 67 LEASE CONTENTION: PASS\n";
+$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-lifecycle.php');
+function r68($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 68 FAIL: $m\n");exit(1);}echo "ROUND 68 PASS: $m\n";}
+r68(str_contains($s,"'expire-derivatives'=>'deletion'")&&str_contains($s,"'expire_derivatives'=>'deletion'"),'derivative expiry operations map to deletion hold scope');
+r68(str_contains($s,"LegalHoldService::assertNoHold($assetId,'expire-derivatives')"),'derivative expiry path remains protected by the centralized hold assertion');
+r68(str_contains($s,"$allowed=['delivery','processing','deletion','reprocess','provider_exit','all']"),'legal-hold accepted scopes remain canonical and bounded');
+echo "REVIEW ROUND 68 LEGAL HOLD SCOPE: PASS\n";
 ''')
-q=ROOT/'tools/quality-check.sh';x=q.read_text();needle='php "$ROOT/tests/review-round-66-runtime-lock.php"\n'
-if 'review-round-67-lease-contention.php' not in x:
+q=ROOT/'tools/quality-check.sh';x=q.read_text();needle='php "$ROOT/tests/review-round-67-lease-contention.php"\n'
+if 'review-round-68-legal-hold-scope.php' not in x:
     if needle not in x: raise SystemExit('quality insertion anchor missing')
-    q.write_text(x.replace(needle,needle+'php "$ROOT/tests/review-round-67-lease-contention.php"\n',1))
+    q.write_text(x.replace(needle,needle+'php "$ROOT/tests/review-round-68-legal-hold-scope.php"\n',1))
