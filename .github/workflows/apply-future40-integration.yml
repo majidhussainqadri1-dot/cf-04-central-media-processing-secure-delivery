@@ -1,0 +1,72 @@
+name: CF-04 Apply Future-40 Integration
+
+on:
+  push:
+    branches:
+      - codex/cf04-three-plan-complete-1.2.0
+    paths:
+      - tools/apply-future40-integration.py
+      - .github/workflows/apply-future40-integration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cf04-future40-integration
+  cancel-in-progress: false
+
+jobs:
+  integrate-review-test-publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, openssl, fileinfo
+          coverage: none
+
+      - name: Install deterministic build tools
+        run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
+
+      - name: Apply Future-40 integration
+        run: python3 tools/apply-future40-integration.py
+
+      - name: Complete review gate
+        run: |
+          set -euo pipefail
+          git diff --check
+          bash tools/quality-check.sh
+
+      - name: Fresh Future-40 adversarial gate
+        run: |
+          set -euo pipefail
+          php tests/future40.php
+          grep -q 'CF04-FUT-001' sabri-central-media/includes/class-scm-future40.php
+          grep -q 'CF04-FUT-040' sabri-central-media/includes/class-scm-future40.php
+          grep -q 'CF04-FUT-040' docs/runtime/REQUIREMENTS-COMPLETION-MATRIX.md
+          grep -q 'class-scm-future40.php' sabri-central-media/sabri-central-media.php
+
+      - name: Final full regression
+        run: bash tools/quality-check.sh
+
+      - name: Publish reviewed integration
+        run: |
+          set -euo pipefail
+          rm -f tools/apply-future40-integration.py
+          git checkout HEAD -- .github/workflows/apply-future40-integration.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'CF-04: complete Future-40 source integration'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
