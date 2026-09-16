@@ -46,16 +46,32 @@ jobs:
         if: steps.parity.outputs.apply == 'true'
         run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
       - name: Apply current rewritten-plan source parity
+        id: apply
         if: steps.parity.outputs.apply == 'true'
-        run: python3 tools/apply-current-plan-parity.py
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/apply-current-plan-parity.py 2>&1 | tee parity-diagnostic.log
+      - name: Upload transformer diagnostic
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-current-plan-transformer-diagnostic-${{ github.sha }}
+          path: parity-diagnostic.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop after transformer failure
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'failure'
+        run: exit 1
       - name: Complete review gate then correct-by-failure
-        if: steps.parity.outputs.apply == 'true'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
         run: |
           set -euo pipefail
           git diff --check
           bash tools/quality-check.sh
       - name: Fresh adversarial plan gate
-        if: steps.parity.outputs.apply == 'true'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
         run: |
           set -euo pipefail
           php tests/new-plan-parity.php
@@ -67,14 +83,14 @@ jobs:
           grep -q "SCM_SCHEMA_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
           grep -q "SCM_CONTRACT_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
       - name: Final full regression
-        if: steps.parity.outputs.apply == 'true'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
         run: bash tools/quality-check.sh
       - name: Remove one-time transport tooling and publish reviewed source
-        if: steps.parity.outputs.apply == 'true'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/apply-current-plan-parity.py .github/workflows/apply-current-plan-parity.yml
+          rm -f tools/apply-current-plan-parity.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
