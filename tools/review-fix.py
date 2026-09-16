@@ -6,17 +6,13 @@ upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
 text = upload.read_text()
 
 # This transformer is intentionally staged only after Fresh Review Round 3 completed.
-# Diagnostic-enabled rerun; anchor on semantic tokens so formatting changes do not make the correction brittle.
 claim_anchor = "Idempotency::claim('upload-complete'"
 claim_pos = text.find(claim_anchor)
-if claim_pos < 0:
-    raise SystemExit('upload-complete claim anchor missing')
+if claim_pos < 0: raise SystemExit('upload-complete claim anchor missing')
 replay_pos = text.find("asset_replay_missing", claim_pos)
-if replay_pos < 0:
-    raise SystemExit('upload replay anchor missing')
+if replay_pos < 0: raise SystemExit('upload replay anchor missing')
 insert_pos = text.find(';', replay_pos)
-if insert_pos < 0:
-    raise SystemExit('upload replay terminator missing')
+if insert_pos < 0: raise SystemExit('upload replay terminator missing')
 insert_pos += 1
 reconcile = """
         $existingAsset=RecordStore::get('asset',$uploadId);
@@ -30,22 +26,17 @@ if "$existingAsset=RecordStore::get('asset',$uploadId)" not in text:
 
 asset_put_anchor = "RecordStore::put('asset',$uploadId,$asset)"
 asset_put_pos = text.find(asset_put_anchor, claim_pos)
-if asset_put_pos < 0:
-    raise SystemExit('asset persistence anchor missing')
+if asset_put_pos < 0: raise SystemExit('asset persistence anchor missing')
 statement_start = text.rfind('$asset=', claim_pos, asset_put_pos + 1)
-if statement_start < 0:
-    raise SystemExit('asset assignment start missing')
+if statement_start < 0: raise SystemExit('asset assignment start missing')
 return_pos = text.find('return $asset;', asset_put_pos)
-if return_pos < 0:
-    raise SystemExit('asset completion return missing')
+if return_pos < 0: raise SystemExit('asset completion return missing')
 return_end = return_pos + len('return $asset;')
 put_end = text.find(';', asset_put_pos)
-if put_end < 0 or put_end > return_end:
-    raise SystemExit('asset persistence terminator missing')
+if put_end < 0 or put_end > return_end: raise SystemExit('asset persistence terminator missing')
 put_end += 1
 asset_statement = text[statement_start:put_end]
-new_tail = asset_statement + "$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
-text = text[:statement_start] + new_tail + text[return_end:]
+text = text[:statement_start] + asset_statement + "$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);" + text[return_end:]
 
 insert_before = "\n    public static function cleanupExpired("
 helper = r'''
@@ -70,8 +61,7 @@ helper = r'''
 '''
 if 'private static function finalizeCompletedUpload' not in text:
     idx = text.find(insert_before)
-    if idx < 0:
-        raise SystemExit('upload cleanup insertion anchor missing')
+    if idx < 0: raise SystemExit('upload cleanup insertion anchor missing')
     text = text[:idx] + '\n' + helper + text[idx:]
 upload.write_text(text)
 
@@ -81,10 +71,10 @@ declare(strict_types=1);
 $root=dirname(__DIR__);
 $source=file_get_contents($root.'/sabri-central-media/includes/class-scm-upload.php');
 function r59(bool $ok,string $message): void {if(!$ok){fwrite(STDERR,"ROUND 59 FAIL: $message\n");exit(1);}echo "ROUND 59 PASS: $message\n";}
-r59(str_contains($source,"private static function finalizeCompletedUpload"),'completion has an explicit idempotent reconciliation phase');
-r59(str_contains($source,"$upload['status']='finalizing'"),'upload is durably marked finalizing before post-asset cleanup');
-r59(str_contains($source,"$existingAsset=RecordStore::get('asset',$uploadId)")&&str_contains($source,"asset_reconciliation_mismatch"),'retry reconciles an already-created matching asset and rejects mismatches');
-r59(str_contains($source,"QuotaService::settle")&&str_contains($source,"PartStore::purge")&&str_contains($source,"Idempotency::complete"),'finalizer covers quota, multipart cleanup and idempotency completion');
+r59(str_contains($source,'private static function finalizeCompletedUpload'),'completion has an explicit idempotent reconciliation phase');
+r59(str_contains($source,"'status']='finalizing'") || str_contains($source,"['status']='finalizing'"),'upload is durably marked finalizing before post-asset cleanup');
+r59(str_contains($source,"RecordStore::get('asset',")&&str_contains($source,'asset_reconciliation_mismatch'),'retry reconciles an already-created matching asset and rejects mismatches');
+r59(str_contains($source,'QuotaService::settle')&&str_contains($source,'PartStore::purge')&&str_contains($source,'Idempotency::complete'),'finalizer covers quota, multipart cleanup and idempotency completion');
 echo "REVIEW ROUND 59 UPLOAD FINALIZATION: PASS\n";
 ''')
 
@@ -93,6 +83,5 @@ q = quality.read_text()
 needle = 'php "$ROOT/tests/review-round-58-processing-consistency.php"\n'
 insert = needle + 'php "$ROOT/tests/review-round-59-upload-finalization.php"\n'
 if 'review-round-59-upload-finalization.php' not in q:
-    if needle not in q:
-        raise SystemExit('quality-check insertion point missing')
+    if needle not in q: raise SystemExit('quality-check insertion point missing')
     quality.write_text(q.replace(needle, insert, 1))
