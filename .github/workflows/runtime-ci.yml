@@ -71,13 +71,26 @@ jobs:
         if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'failure'
         run: exit 1
       - name: Complete review gate then correct-by-failure
+        id: review
+        continue-on-error: true
         if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
+        shell: bash
         run: |
-          set -euo pipefail
-          git diff --check
-          bash tools/quality-check.sh
+          set -o pipefail
+          { git diff --check && bash tools/quality-check.sh; } 2>&1 | tee parity-review.log
+      - name: Upload transformed-source review diagnostic
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-current-plan-review-diagnostic-${{ github.sha }}
+          path: parity-review.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop after review failure
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'failure'
+        run: exit 1
       - name: Fresh adversarial plan gate
-        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'success'
         run: |
           set -euo pipefail
           php tests/new-plan-parity.php
@@ -89,14 +102,14 @@ jobs:
           grep -q "SCM_SCHEMA_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
           grep -q "SCM_CONTRACT_VERSION','1.5.0" sabri-central-media/sabri-central-media.php
       - name: Final full regression
-        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'success'
         run: bash tools/quality-check.sh
       - name: Remove one-time transport tooling and publish reviewed source
-        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success'
+        if: steps.parity.outputs.apply == 'true' && steps.apply.outcome == 'success' && steps.review.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
-          rm -f tools/apply-current-plan-parity.py tools/fix-current-plan-transformer.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log
+          rm -f tools/apply-current-plan-parity.py tools/fix-current-plan-transformer.py .github/workflows/apply-current-plan-parity.yml parity-diagnostic.log parity-review.log
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
