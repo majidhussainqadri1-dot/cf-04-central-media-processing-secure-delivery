@@ -37,15 +37,28 @@ jobs:
         run: python3 tools/review-fix.py
       - name: Verify corrected round
         run: |
-          set -euo pipefail
-          git diff --check
-          bash tools/quality-check.sh
+          set -o pipefail
+          git diff --check 2>&1 | tee review-fix-diagnostics.log
+          git_status=${PIPESTATUS[0]}
+          if [ "$git_status" -ne 0 ]; then exit "$git_status"; fi
+          bash tools/quality-check.sh 2>&1 | tee -a review-fix-diagnostics.log
+          exit ${PIPESTATUS[0]}
+      - name: Upload correction diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cf04-review-fix-diagnostics-${{ github.sha }}
+          path: review-fix-diagnostics.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Commit corrected round
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
+          git reset review-fix-diagnostics.log 2>/dev/null || true
+          rm -f review-fix-diagnostics.log
           if git diff --cached --quiet; then
             echo 'No generated correction changes.'
             exit 0
