@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import re
 
 ROOT = Path(__file__).resolve().parents[1]
-
 upload = ROOT / 'sabri-central-media/includes/class-scm-upload.php'
 text = upload.read_text()
 
-start_pattern = re.compile(
-    r"\$fingerprint=hash\('sha256',\$uploadId\.\'\|\'\.\$u\['expected_sha256'\]\.\'\|\'\.\$u\['expected_size'\]\);"
-    r"\$claim=Idempotency::claim\('upload-complete',\$idempotencyKey,\$fingerprint\);"
-    r"if\(\$claim\['replay'\]\)return RecordStore::get\('asset',\(string\)\$claim\['record'\]\['result_id'\]\)\?\?throw new Error\('asset_replay_missing','Completed asset missing\.',500\);"
-    r"\s*\$stream=PartStore::assemble\(\$uploadId,\(int\)\$u\['expected_size'\],\(string\)\$u\['expected_sha256'\],\(int\)\$u\['policy'\]\['max_upload_parts'\]\);\$stored=null;\$assetCreated=false;",
-    re.S,
-)
-start_replacement = """$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);
+start_marker = "$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);"
+end_marker = "$stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"
+start = text.find(start_marker)
+end = text.find(end_marker, start)
+if start < 0 or end < 0:
+    raise SystemExit(f'completion markers missing start={start} end={end}')
+end += len(end_marker)
+replacement = """$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha256'].'|'.$u['expected_size']);$claim=Idempotency::claim('upload-complete',$idempotencyKey,$fingerprint);if($claim['replay'])return RecordStore::get('asset',(string)$claim['record']['result_id'])??throw new Error('asset_replay_missing','Completed asset missing.',500);
         $existingAsset=RecordStore::get('asset',$uploadId);
         if($existingAsset){
             if(($existingAsset['source_upload_id']??'')!==$uploadId||(int)($existingAsset['actor_id']??0)!==$actor||!hash_equals((string)($existingAsset['sha256']??''),(string)$u['expected_sha256'])||!hash_equals((string)($existingAsset['policy_hash']??''),(string)$u['policy_hash'])){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'asset_reconciliation_mismatch');throw new Error('asset_reconciliation_mismatch','Existing asset cannot be reconciled to this upload.',409);}
@@ -22,19 +20,17 @@ start_replacement = """$fingerprint=hash('sha256',$uploadId.'|'.$u['expected_sha
             catch(\\Throwable $e){Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
         }
         $stream=PartStore::assemble($uploadId,(int)$u['expected_size'],(string)$u['expected_sha256'],(int)$u['policy']['max_upload_parts']);$stored=null;$assetCreated=false;"""
-text, count = start_pattern.subn(lambda m: start_replacement, text, count=1)
-if count != 1:
-    raise SystemExit(f'upload completion reconciliation start target count={count}')
+text = text[:start] + replacement + text[end:]
 
-post_pattern = re.compile(
-    r"\$asset=RecordStore::put\('asset',\$uploadId,\$asset\);\$assetCreated=true;"
-    r".*?self::emit\('scm\.asset\.quarantined',\$asset\);return \$asset;",
-    re.S,
-)
+post_start_marker = "$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;"
+post_end_marker = "self::emit('scm.asset.quarantined',$asset);return $asset;"
+post_start = text.find(post_start_marker)
+post_end = text.find(post_end_marker, post_start)
+if post_start < 0 or post_end < 0:
+    raise SystemExit(f'post-asset markers missing start={post_start} end={post_end}')
+post_end += len(post_end_marker)
 post_replacement = "$asset=RecordStore::put('asset',$uploadId,$asset);$assetCreated=true;return self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint);"
-text, count = post_pattern.subn(lambda m: post_replacement, text, count=1)
-if count != 1:
-    raise SystemExit(f'upload completion post-asset target count={count}')
+text = text[:post_start] + post_replacement + text[post_end:]
 
 insert_before = "\n    public static function cleanupExpired(int $now=0,int $limit=500): array {"
 helper = r'''
