@@ -34,9 +34,20 @@ jobs:
       - name: Install deterministic build tools
         run: sudo apt-get update && sudo apt-get install -y zip unzip rsync
       - name: Apply completed-round corrections
-        run: python3 tools/review-fix.py
+        run: |
+          set +e
+          python3 tools/review-fix.py > review-fix-apply.log 2>&1
+          status=$?
+          cat review-fix-apply.log
+          echo "$status" > review-fix-apply.status
+          exit 0
       - name: Verify corrected round
         run: |
+          if [ "$(cat review-fix-apply.status)" != "0" ]; then
+            echo "Correction transformer failed before verification." >> review-fix-diagnostics.log
+            cat review-fix-apply.log >> review-fix-diagnostics.log
+            exit 1
+          fi
           set -o pipefail
           git diff --check 2>&1 | tee review-fix-diagnostics.log
           git_status=${PIPESTATUS[0]}
@@ -48,17 +59,33 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cf04-review-fix-diagnostics-${{ github.sha }}
-          path: review-fix-diagnostics.log
+          path: |
+            review-fix-apply.log
+            review-fix-apply.status
+            review-fix-diagnostics.log
           if-no-files-found: warn
           retention-days: 7
+      - name: Persist transformer failure diagnostic
+        if: failure()
+        run: |
+          set -euo pipefail
+          mkdir -p docs/runtime/review-diagnostics
+          cp review-fix-apply.log docs/runtime/review-diagnostics/latest-transformer-failure.log || true
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/runtime/review-diagnostics/latest-transformer-failure.log
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'CF-04: persist sequential review transformer diagnostic'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
       - name: Commit corrected round
+        if: success()
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git reset review-fix-diagnostics.log 2>/dev/null || true
-          rm -f review-fix-diagnostics.log
+          git reset review-fix-apply.log review-fix-apply.status review-fix-diagnostics.log 2>/dev/null || true
+          rm -f review-fix-apply.log review-fix-apply.status review-fix-diagnostics.log
           if git diff --cached --quiet; then
             echo 'No generated correction changes.'
             exit 0
