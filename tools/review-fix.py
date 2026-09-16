@@ -1,45 +1,27 @@
 #!/usr/bin/env python3
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=ROOT/'sabri-central-media/includes/class-scm-processing.php'
+p=ROOT/'sabri-central-media/includes/class-scm-lifecycle.php'
 s=p.read_text()
 
-# Fresh Review Round 4 was completed before these corrections were staged.
-old="""$jobs=JobService::graph($assetId,$asset['policy'],$generation);
-    $asset['processing_status']='queued';$asset['processing_generation']=$generation;$asset['job_graph']=$jobs;
-    RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);"""
-new="""$jobs=JobService::graph($assetId,$asset['policy'],$generation);
-    $asset['processing_status']='queued';$asset['processing_generation']=$generation;$asset['job_graph']=$jobs;
-    try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
-    catch(\\Throwable $exception){$fresh=RecordStore::get('asset',$assetId);$attached=$fresh&&(int)($fresh['processing_generation']??0)===$generation&&(array)($fresh['job_graph']??[])===$jobs;if(!$attached){foreach($jobs as $jobId){$job=RecordStore::get('job',(string)$jobId);if($job&&(int)($job['processing_generation']??0)===$generation&&in_array(($job['status']??''),['queued','retry'],true)){try{RecordStore::delete('job',(string)$jobId);}catch(\\Throwable){}}}}throw $exception;}"""
-if old not in s: raise SystemExit('processing graph persistence target missing')
+# Fresh Review Round 6 was fully completed before applying this correction.
+old="$record=['actor_id'=>$actor,'deletion_id'=>$id,'asset_id'=>$assetId,'reason'=>$reason,'status'=>'pending_revoke','steps'=>['revoke_grants'=>'pending','purge_cdn'=>'pending','delete_derivatives'=>'pending','delete_source'=>'pending','delete_mappings'=>'pending','backup_ledger'=>'pending','tombstone'=>'pending'],'attempts'=>0,'next_attempt_at'=>$now,'backup_expiry_at'=>$backup,'created_at'=>$now];$asset['status']='deletion_pending';$asset['deletion_id']=$id;$asset['deletion_requested_at']=$now;RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);try{$record=RecordStore::put('deletion',$id,$record);}catch(\\Throwable $exception){$fresh=RecordStore::get('asset',$assetId);if($fresh&&($fresh['deletion_id']??'')===$id){unset($fresh['deletion_id'],$fresh['deletion_requested_at']);$fresh['status']='ready';RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);}throw $exception;}"
+new="$record=['actor_id'=>$actor,'deletion_id'=>$id,'asset_id'=>$assetId,'reason'=>$reason,'status'=>'pending_revoke','steps'=>['revoke_grants'=>'pending','purge_cdn'=>'pending','delete_derivatives'=>'pending','delete_source'=>'pending','delete_mappings'=>'pending','backup_ledger'=>'pending','tombstone'=>'pending'],'attempts'=>0,'next_attempt_at'=>$now,'backup_expiry_at'=>$backup,'created_at'=>$now];$previousState=['status'=>$asset['status']??null,'deletion_id'=>$asset['deletion_id']??null,'deletion_requested_at'=>$asset['deletion_requested_at']??null];$asset['status']='deletion_pending';$asset['deletion_id']=$id;$asset['deletion_requested_at']=$now;RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);try{$record=RecordStore::put('deletion',$id,$record);}catch(\\Throwable $exception){$fresh=RecordStore::get('asset',$assetId);if($fresh&&($fresh['deletion_id']??'')===$id){$fresh['status']=$previousState['status'];if($previousState['deletion_id']===null)unset($fresh['deletion_id']);else $fresh['deletion_id']=$previousState['deletion_id'];if($previousState['deletion_requested_at']===null)unset($fresh['deletion_requested_at']);else $fresh['deletion_requested_at']=$previousState['deletion_requested_at'];RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);}throw $exception;}"
+if old not in s: raise SystemExit('deletion rollback target missing')
 s=s.replace(old,new,1)
-
-old2="""try{RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
-    catch(\\Throwable $exception){RecordStore::delete('manifest',$manifestId);throw $exception;}
-    $manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);
-    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}}"""
-new2="""$original=$asset;$savedAsset=null;
-    try{$savedAsset=RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}
-    catch(\\Throwable $exception){RecordStore::delete('manifest',$manifestId);throw $exception;}
-    try{$manifest['status']='active';$manifest=RecordStore::put('manifest',$manifestId,$manifest,(int)$manifest['version']);}
-    catch(\\Throwable $exception){try{$current=RecordStore::get('asset',$assetId);if($current&&($current['active_manifest_id']??null)===$manifestId){$rollback=$current;$rollback['active_manifest_id']=$old;$rollback['manifest_version']=$original['manifest_version']??0;$rollback['processing_status']=$original['processing_status']??'pending';$rollback['status']=$original['status']??'quarantined';if(isset($original['ready_at']))$rollback['ready_at']=$original['ready_at'];else unset($rollback['ready_at']);RecordStore::put('asset',$assetId,$rollback,(int)$current['version']);}}catch(\\Throwable $rollbackError){Audit::record('manifest_switch_reconciliation_required',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'reason'=>'activation_failed_rollback_failed']);}try{$failed=RecordStore::get('manifest',$manifestId);if($failed){$failed['status']='activation_failed';RecordStore::put('manifest',$manifestId,$failed,(int)$failed['version']);}}catch(\\Throwable){}throw $exception;}
-    if($old){$oldManifest=RecordStore::get('manifest',(string)$old);if($oldManifest&&($oldManifest['status']??'')==='active'){try{$oldManifest['status']='superseded';$oldManifest['superseded_by']=$manifestId;RecordStore::put('manifest',(string)$old,$oldManifest,(int)$oldManifest['version']);}catch(\\Throwable){Audit::record('manifest_supersede_reconciliation_required',['asset_id'=>$assetId,'manifest_id'=>$manifestId,'previous_manifest'=>$old]);}}}"""
-if old2 not in s: raise SystemExit('manifest activation target missing')
-s=s.replace(old2,new2,1)
 p.write_text(s)
 
-t=ROOT/'tests/review-round-60-processing-atomicity.php'
+t=ROOT/'tests/review-round-61-lifecycle-rollback.php'
 t.write_text(r'''<?php
 declare(strict_types=1);
-$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-processing.php');
-function r60($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 60 FAIL: $m\n");exit(1);}echo "ROUND 60 PASS: $m\n";}
-r60(str_contains($s,'$attached=$fresh')&&str_contains($s,"RecordStore::delete('job'"),'unattached graph jobs are cleaned after asset CAS failure without deleting a concurrently attached graph');
-r60(str_contains($s,'manifest_switch_reconciliation_required')&&str_contains($s,"'status']='activation_failed'"),'manifest activation failure has rollback and reconciliation evidence');
-r60(str_contains($s,'manifest_supersede_reconciliation_required'),'old-manifest supersede conflict is explicitly reconcilable');
-echo "REVIEW ROUND 60 PROCESSING ATOMICITY: PASS\n";
+$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-lifecycle.php');
+function r61($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 61 FAIL: $m\n");exit(1);}echo "ROUND 61 PASS: $m\n";}
+r61(str_contains($s,"$previousState=['status'=>"),'deletion request captures the exact prior asset lifecycle state');
+r61(str_contains($s,"$fresh['status']=$previousState['status']"),'deletion-record persistence failure restores the prior status instead of forcing ready');
+r61(str_contains($s,"$previousState['deletion_id']")&&str_contains($s,"$previousState['deletion_requested_at']"),'rollback restores prior deletion metadata exactly');
+echo "REVIEW ROUND 61 LIFECYCLE ROLLBACK: PASS\n";
 ''')
-q=ROOT/'tools/quality-check.sh';x=q.read_text();needle='php "$ROOT/tests/review-round-59-upload-finalization.php"\n'
-if 'review-round-60-processing-atomicity.php' not in x:
+q=ROOT/'tools/quality-check.sh';x=q.read_text();needle='php "$ROOT/tests/review-round-60-processing-atomicity.php"\n'
+if 'review-round-61-lifecycle-rollback.php' not in x:
     if needle not in x: raise SystemExit('quality insertion anchor missing')
-    q.write_text(x.replace(needle,needle+'php "$ROOT/tests/review-round-60-processing-atomicity.php"\n',1))
+    q.write_text(x.replace(needle,needle+'php "$ROOT/tests/review-round-61-lifecycle-rollback.php"\n',1))
