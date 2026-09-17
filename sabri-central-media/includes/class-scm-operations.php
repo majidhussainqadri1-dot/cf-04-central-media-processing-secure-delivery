@@ -60,11 +60,13 @@ final class KeyRotationService {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
     $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0];
     $groups=[];
-    foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key'])||($record['storage']['key_id']??'')===$active)continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'asset','record'=>$record];}
-    foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key'])||($record['storage']['key_id']??'')===$active)continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'derivative','record'=>$record];}
+    foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'asset','record'=>$record];}
+    foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'derivative','record'=>$record];}
+    $groups=array_filter($groups,static function(array $group)use($active): bool {foreach($group as $entry)if(($entry['record']['storage']['key_id']??'')!==$active)return true;return false;});
     RecordStore::put('key_rotation',$runId,['actor_id'=>$actor,'rotation_id'=>$runId,'active_key_id'=>$active,'status'=>'running','groups_total'=>count($groups),'result'=>$result,'created_at'=>Utils::now()]);
     foreach($groups as $groupKey=>$group){
         $first=$group[0]['record'];$providerId=Utils::key((string)($first['storage']['provider_id']??ProviderRegistry::activeId()),64);$oldKey=(string)$first['object_key'];$newKey='';
+        foreach($group as $entry){$candidate=$entry['record'];if(!hash_equals((string)$first['sha256'],(string)($candidate['sha256']??''))||(int)$first['size']!==(int)($candidate['size']??-1)||($candidate['object_key']??'')!==$oldKey||Utils::key((string)($candidate['storage']['provider_id']??ProviderRegistry::activeId()),64)!==$providerId)throw new Error('key_rotation_shared_identity_mismatch','Shared storage references disagree about physical content identity.',409,['group_hash'=>hash('sha256',$groupKey)]);}
         try{
             $provider=ProviderRegistry::get($providerId);$source=$provider->openStream($oldKey);$newKey=hash('sha256','rekey|'.$oldKey.'|'.$active.'|'.$first['sha256']);
             try{$stored=$provider->putStream($newKey,$source,['scope'=>'key-rotation','source_key_hash'=>hash('sha256',$oldKey),'rotation_id'=>$runId]);}finally{fclose($source);}
