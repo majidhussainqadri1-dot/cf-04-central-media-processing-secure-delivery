@@ -66,13 +66,15 @@ final class RecordStore {
     return $out;
 }
     public static function all(string $type,int $actor=0,?string $status=null,int $maximum=100000): array {
-        $maximum=max(1,min(1000000,$maximum));$pageSize=min(2000,$maximum);$offset=0;$out=[];
-        while(true){
+        $maximum=max(1,min(1000000,$maximum));$offset=0;$out=[];
+        while(count($out)<$maximum){
+            $remaining=$maximum-count($out);$pageSize=min(2000,$remaining);
             $page=self::list($type,$actor,$status,$pageSize,$offset);$count=count($page);
             if($count===0)break;
             array_push($out,...$page);$offset+=$count;
             if(count($out)>=$maximum){
-                if($count===$pageSize)throw new Error('record_scan_limit','Record scan exceeded its explicit safety limit.',503,['record_type'=>Utils::key($type,48),'maximum'=>$maximum]);
+                $probe=self::list($type,$actor,$status,1,$offset);
+                if($probe!==[])throw new Error('record_scan_limit','Record scan exceeded its explicit safety limit.',503,['record_type'=>Utils::key($type,48),'maximum'=>$maximum]);
                 break;
             }
             if($count<$pageSize)break;
