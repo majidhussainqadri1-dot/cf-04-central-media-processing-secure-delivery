@@ -14,7 +14,12 @@ final class ServiceAuth {
         try{RecordStore::put('service_nonce',$id,['actor_id'=>0,'service_id'=>$serviceId,'nonce_hash'=>hash('sha256',$nonce),'body_hash'=>$bodyHash,'status'=>'consumed','expires_at'=>Utils::now()+600,'created_at'=>Utils::now()],$existing?(int)$existing['version']:0);}catch(Error $nonceError){if($nonceError->errorCode==='record_version_conflict')throw new Error('service_replay_denied','Service nonce already consumed concurrently.',409);throw $nonceError;}
         return ['service_id'=>$serviceId,'method'=>$method,'path'=>$path,'body_hash'=>$bodyHash];
     }
-    private static function path(string $path): string {$path=parse_url($path,PHP_URL_PATH);if(!is_string($path)||$path===''||strlen($path)>1024||str_contains($path,"\r")||str_contains($path,"\n")||preg_match('#(?:^|/)\.\.(?:/|$)#',$path)||!str_starts_with($path,'/'))throw new Error('service_path_invalid','Service path invalid.',400);return $path;}
+    private static function path(string $target): string {
+        if($target===''||strlen($target)>2048||str_contains($target,"\r")||str_contains($target,"\n")||str_contains($target,'#'))throw new Error('service_path_invalid','Service request target invalid.',400);
+        $parts=parse_url($target);if($parts===false||isset($parts['scheme'])||isset($parts['host'])||isset($parts['user'])||isset($parts['pass'])||isset($parts['fragment']))throw new Error('service_path_invalid','Service request target must use origin-form path and query only.',400);
+        $path=$parts['path']??'';if(!is_string($path)||$path===''||!str_starts_with($path,'/')||preg_match('#(?:^|/)\.\.(?:/|$)#',rawurldecode($path)))throw new Error('service_path_invalid','Service path invalid.',400);
+        $query=array_key_exists('query',$parts)?(string)$parts['query']:null;return $path.($query!==null?'?'.$query:'');
+    }
 }
 
 final class StreamingEndpoint {
