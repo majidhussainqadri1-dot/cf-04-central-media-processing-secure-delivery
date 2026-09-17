@@ -48,3 +48,28 @@ q=ROOT/'tools/quality-check.sh';x=q.read_text();a='php "$ROOT/tests/review-round
 if 'review-round-82-idempotency-generation.php' not in x:
     if a not in x: raise SystemExit('round 82 quality anchor missing')
     q.write_text(x.replace(a,a+'php "$ROOT/tests/review-round-82-idempotency-generation.php"\n',1))
+
+# Fresh Review Round 83 was fully completed before corrections began.
+# Defect ledger: Schema::ready trusted only the schema-version option and table names.
+# A partial/failed dbDelta could therefore mark an old table shape ready and let runtime
+# proceed against missing columns. Require the exact critical column set before ready.
+pp=ROOT/'sabri-central-media/includes/class-scm-persistence.php';ps=pp.read_text()
+old="global $wpdb; foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;}return true; }"
+new="global $wpdb;$required=['records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at'],'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']];foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;$columns=array_map('strval',(array)$wpdb->get_col('SHOW COLUMNS FROM '.$name,0));foreach($required[$t] as $column)if(!in_array($column,$columns,true))return false;}return true; }"
+if old in ps: ps=ps.replace(old,new,1)
+if "SHOW COLUMNS FROM '.$name" not in ps or "'records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at']" not in ps: raise SystemExit('round 83 schema-shape transformation incomplete')
+pp.write_text(ps)
+
+t83=ROOT/'tests/review-round-83-schema-shape.php';t83.write_text(r'''<?php
+declare(strict_types=1);
+$root=dirname(__DIR__);$p=file_get_contents($root.'/sabri-central-media/includes/class-scm-persistence.php');
+function r83($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 83 FAIL: $m\n");exit(1);}echo "ROUND 83 PASS: $m\n";}
+r83(str_contains($p,"SHOW COLUMNS FROM '.$name"),'schema readiness verifies physical columns');
+r83(str_contains($p,"'records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at']"),'records critical shape is explicit');
+r83(str_contains($p,"'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']"),'audit critical shape is explicit');
+echo "REVIEW ROUND 83 SCHEMA SHAPE: PASS\n";
+''')
+x=q.read_text();a83='php "$ROOT/tests/review-round-82-idempotency-generation.php"\n'
+if 'review-round-83-schema-shape.php' not in x:
+    if a83 not in x: raise SystemExit('round 83 quality anchor missing')
+    q.write_text(x.replace(a83,a83+'php "$ROOT/tests/review-round-83-schema-shape.php"\n',1))
