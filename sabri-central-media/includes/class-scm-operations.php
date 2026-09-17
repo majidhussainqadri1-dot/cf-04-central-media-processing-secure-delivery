@@ -180,13 +180,13 @@ final class RepairService {
         ProcessingService::start((string)$asset['id']);$updated=ProcessingService::execute((string)$asset['id'],'repair-worker');
         if(empty($updated['active_manifest_id'])||$updated['active_manifest_id']===$oldManifest)throw new Error('repair_manifest_unchanged','Repair did not create a new manifest.',500);
         $repair['status']='completed';$repair['new_manifest_id']=$updated['active_manifest_id'];$repair['completed_at']=Utils::now();
-        $repair=RecordStore::put('repair',$repairId,$repair,(int)$repair['version']);Idempotency::complete('repair',$idempotencyKey,$fingerprint,'repair',$repairId);return $repair;
+        $repair=RecordStore::put('repair',$repairId,$repair,(int)$repair['version']);Idempotency::complete('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'repair',$repairId);return $repair;
     }catch(\Throwable $exception){
         $fresh=RecordStore::get('asset',(string)$asset['id'])??$asset;unset($fresh['reprocess_context']);$fresh['job_graph']=[];
         if($oldManifest){$fresh['active_manifest_id']=$oldManifest;$fresh['status']='ready';$fresh['processing_status']='completed';}
         RecordStore::put('asset',(string)$fresh['id'],$fresh,(int)$fresh['version']);
         $repair=RecordStore::get('repair',$repairId)??$repair;$repair['status']='failed';$repair['error']=$exception instanceof Error?$exception->errorCode:'unexpected';$repair['last_valid_preserved']=$oldManifest!==null;
-        RecordStore::put('repair',$repairId,$repair,(int)$repair['version']);Idempotency::fail('repair',$idempotencyKey,$fingerprint,$repair['error']);throw $exception;
+        RecordStore::put('repair',$repairId,$repair,(int)$repair['version']);Idempotency::fail('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$repair['error']);throw $exception;
     }
 }
     public static function rollback(string $repairId,int $actor): array {
