@@ -27,7 +27,6 @@ for old,new in repls.items(): s=s.replace(old,new)
 if "claim_token'=>Utils::id('idem')" not in s or "string $claimToken,string $resultType" not in s or "string $fingerprint,string $claimToken): array" not in s: raise SystemExit('round 82 upload transformation incomplete')
 p.write_text(s)
 
-# RepairService also uses the shared Idempotency API.
 op=ROOT/'sabri-central-media/includes/class-scm-operations.php';o=op.read_text()
 o=o.replace("Idempotency::complete('repair',$idempotencyKey,$fingerprint,'repair',$repairId)","Idempotency::complete('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'repair',$repairId)")
 o=o.replace("Idempotency::fail('repair',$idempotencyKey,$fingerprint,$repair['error'])","Idempotency::fail('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$repair['error'])")
@@ -50,9 +49,6 @@ if 'review-round-82-idempotency-generation.php' not in x:
     q.write_text(x.replace(a,a+'php "$ROOT/tests/review-round-82-idempotency-generation.php"\n',1))
 
 # Fresh Review Round 83 was fully completed before corrections began.
-# Defect ledger: Schema::ready trusted only the schema-version option and table names.
-# A partial/failed dbDelta could therefore mark an old table shape ready and let runtime
-# proceed against missing columns. Require the exact critical column set before ready.
 pp=ROOT/'sabri-central-media/includes/class-scm-persistence.php';ps=pp.read_text()
 old="global $wpdb; foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;}return true; }"
 new="global $wpdb;$required=['records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at'],'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']];foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;$columns=array_map('strval',(array)$wpdb->get_col('SHOW COLUMNS FROM '.$name,0));foreach($required[$t] as $column)if(!in_array($column,$columns,true))return false;}return true; }"
@@ -76,12 +72,9 @@ if 'review-round-83-schema-shape.php' not in x:
 
 # Fresh Review Round 84 was fully completed before corrections began.
 # Defect ledger:
-# 1) upload-create completed its idempotency claim before mandatory audit evidence; an
-#    audit failure then released quota while leaving a replayable completed upload,
-#    allowing that replay to proceed without a live reservation.
-# 2) completion likewise terminalized idempotency before audit evidence.
-# 3) expired-upload cleanup filtered only the newest bounded page, so older expired
-#    uploads could starve indefinitely behind active/newer sessions.
+# 1) upload-create completed its idempotency claim before mandatory audit evidence.
+# 2) upload completion likewise terminalized idempotency before audit evidence.
+# 3) expired-upload cleanup filtered only the newest bounded page.
 up=ROOT/'sabri-central-media/includes/class-scm-upload.php';us=up.read_text()
 old_create="try{$row=RecordStore::put('upload',$id,$row);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);return $row+['upload_credential'=>$credential];}"
 new_create="try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}"
@@ -106,7 +99,7 @@ $createAudit=strpos($u,"Audit::record('upload_session_created'");$createComplete
 r84($createAudit!==false&&$createComplete!==false&&$createAudit<$createComplete,'upload-create audit evidence precedes terminal idempotency');
 $final=strpos($u,'private static function finalizeCompletedUpload');$finalAudit=strpos($u,"Audit::record('asset_quarantined'",$final);$finalComplete=strpos($u,"Idempotency::complete('upload-complete'",$final);
 r84($final!==false&&$finalAudit!==false&&$finalComplete!==false&&$finalAudit<$finalComplete,'upload completion audit evidence precedes terminal idempotency');
-r84(str_contains($u,"RecordStore::all('upload',0,null,100000)")&&str_contains($u,"$result['expired']+$result['failed']>=$limit"),'expiry cleanup scans beyond the newest page while preserving a bounded work limit');
+r84(str_contains($u,"RecordStore::all('upload',0,null,100000)")&&str_contains($u,"\$result['expired']+\$result['failed']>=\$limit"),'expiry cleanup scans beyond the newest page while preserving a bounded work limit');
 echo "REVIEW ROUND 84 UPLOAD TERMINAL ORDER: PASS\n";
 ''')
 x=q.read_text();a84='php "$ROOT/tests/review-round-83-schema-shape.php"\n'
