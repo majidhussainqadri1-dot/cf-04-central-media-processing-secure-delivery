@@ -99,7 +99,7 @@ final class UploadService {
         $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];$decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
         $quota=QuotaService::reserve($policy['owner_domain'],$actor,(int)$metadata['size'],1,self::effectiveLimits($quotaLimits),['purpose'=>$policy['purpose'],'governed_exception_authorized'=>Utils::bool($decision['governed_exception_authorized']??false)]);
         $id=Utils::id('upl');$row=['actor_id'=>$actor,'upload_id'=>$id,'owner_domain'=>$policy['owner_domain'],'owner_object'=>Utils::text((string)$metadata['owner_object'],191),'owner_type'=>$ownerType,'object_version'=>(int)$decision['object_version'],'declared_name'=>Utils::filename((string)$metadata['name']),'declared_mime'=>strtolower((string)$metadata['mime']),'expected_size'=>(int)$metadata['size'],'expected_sha256'=>strtolower((string)$metadata['sha256']),'media_class'=>$policy['media_class'],'policy'=>$policy,'policy_hash'=>$policy['policy_hash'],'quota'=>$quota,'received_size'=>0,'received_parts'=>0,'status'=>'uploading','created_at'=>Utils::now()];[$row,$credential]=self::issueCredential($row,min(86400,max(300,(int)($metadata['session_ttl_seconds']??3600))));
-        try{$row=RecordStore::put('upload',$id,$row);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);return $row+['upload_credential'=>$credential];}
+        try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}
         catch(\Throwable $e){QuotaService::settle($quota['quota_id'],$quota['reservation_id'],false);Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
     }
     private static function ownerType(string $reference): string {$reference=Utils::text($reference,191);$raw=str_contains($reference,':')?explode(':',$reference,2)[0]:'object';$type=Utils::key($raw,64);if($type==='')throw new Error('owner_type_invalid','Typed owner reference is required.',400);return $type;}
@@ -146,15 +146,16 @@ final class UploadService {
             $upload['status']='completed';$upload['completed_at']=$upload['completed_at']??Utils::now();unset($upload['finalizing_at']);
             $upload=RecordStore::put('upload',$uploadId,$upload,(int)$upload['version']);
         }
-        Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);
         Audit::record('asset_quarantined',['asset_id'=>$uploadId,'actor_id'=>(int)$upload['actor_id'],'privacy_class'=>$asset['privacy_class'],'sha256'=>$asset['sha256'],'duplicate_of'=>$asset['duplicate_of']??null]);
+        Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);
         self::emit('scm.asset.quarantined',$asset);
         return $asset;
     }
 
     public static function cleanupExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['expired'=>0,'parts_purged'=>0,'failed'=>0];
-        foreach(RecordStore::list('upload',0,null,$limit) as $upload){
+        foreach(RecordStore::all('upload',0,null,100000) as $upload){
+            if($result['expired']+$result['failed']>=$limit)break;
             if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;
             try{
                 $parts=PartStore::list((string)$upload['id']);PartStore::purge((string)$upload['id']);
