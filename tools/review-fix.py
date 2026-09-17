@@ -73,3 +73,43 @@ x=q.read_text();a83='php "$ROOT/tests/review-round-82-idempotency-generation.php
 if 'review-round-83-schema-shape.php' not in x:
     if a83 not in x: raise SystemExit('round 83 quality anchor missing')
     q.write_text(x.replace(a83,a83+'php "$ROOT/tests/review-round-83-schema-shape.php"\n',1))
+
+# Fresh Review Round 84 was fully completed before corrections began.
+# Defect ledger:
+# 1) upload-create completed its idempotency claim before mandatory audit evidence; an
+#    audit failure then released quota while leaving a replayable completed upload,
+#    allowing that replay to proceed without a live reservation.
+# 2) completion likewise terminalized idempotency before audit evidence.
+# 3) expired-upload cleanup filtered only the newest bounded page, so older expired
+#    uploads could starve indefinitely behind active/newer sessions.
+up=ROOT/'sabri-central-media/includes/class-scm-upload.php';us=up.read_text()
+old_create="try{$row=RecordStore::put('upload',$id,$row);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);return $row+['upload_credential'=>$credential];}"
+new_create="try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}"
+if old_create in us: us=us.replace(old_create,new_create,1)
+old_final="Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);\n        Audit::record('asset_quarantined'"
+new_final="Audit::record('asset_quarantined'"
+if old_final in us:
+    us=us.replace(old_final,new_final,1)
+    marker="Audit::record('asset_quarantined',['asset_id'=>$uploadId,'actor_id'=>(int)$upload['actor_id'],'privacy_class'=>$asset['privacy_class'],'sha256'=>$asset['sha256'],'duplicate_of'=>$asset['duplicate_of']??null]);"
+    us=us.replace(marker,marker+"\n        Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);",1)
+old_cleanup="foreach(RecordStore::list('upload',0,null,$limit) as $upload){\n            if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;"
+new_cleanup="foreach(RecordStore::all('upload',0,null,100000) as $upload){\n            if($result['expired']+$result['failed']>=$limit)break;\n            if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;"
+if old_cleanup in us: us=us.replace(old_cleanup,new_cleanup,1)
+if new_create not in us or "Audit::record('asset_quarantined'" not in us or "Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);" not in us or "RecordStore::all('upload',0,null,100000)" not in us: raise SystemExit('round 84 transformation incomplete')
+up.write_text(us)
+
+t84=ROOT/'tests/review-round-84-upload-terminal-order.php';t84.write_text(r'''<?php
+declare(strict_types=1);
+$root=dirname(__DIR__);$u=file_get_contents($root.'/sabri-central-media/includes/class-scm-upload.php');
+function r84($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 84 FAIL: $m\n");exit(1);}echo "ROUND 84 PASS: $m\n";}
+$createAudit=strpos($u,"Audit::record('upload_session_created'");$createComplete=strpos($u,"Idempotency::complete('upload-create'");
+r84($createAudit!==false&&$createComplete!==false&&$createAudit<$createComplete,'upload-create audit evidence precedes terminal idempotency');
+$final=strpos($u,'private static function finalizeCompletedUpload');$finalAudit=strpos($u,"Audit::record('asset_quarantined'",$final);$finalComplete=strpos($u,"Idempotency::complete('upload-complete'",$final);
+r84($final!==false&&$finalAudit!==false&&$finalComplete!==false&&$finalAudit<$finalComplete,'upload completion audit evidence precedes terminal idempotency');
+r84(str_contains($u,"RecordStore::all('upload',0,null,100000)")&&str_contains($u,"$result['expired']+$result['failed']>=$limit"),'expiry cleanup scans beyond the newest page while preserving a bounded work limit');
+echo "REVIEW ROUND 84 UPLOAD TERMINAL ORDER: PASS\n";
+''')
+x=q.read_text();a84='php "$ROOT/tests/review-round-83-schema-shape.php"\n'
+if 'review-round-84-upload-terminal-order.php' not in x:
+    if a84 not in x: raise SystemExit('round 84 quality anchor missing')
+    q.write_text(x.replace(a84,a84+'php "$ROOT/tests/review-round-84-upload-terminal-order.php"\n',1))
