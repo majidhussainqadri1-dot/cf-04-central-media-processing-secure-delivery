@@ -16,8 +16,8 @@ old="    private function path(string $key,bool $create=true): string { if(!preg
 new="    private function path(string $key,bool $create=true): string { if(!preg_match('/^[a-f0-9]{64}$/',$key))throw new Error('object_key_invalid','Invalid object key.',400);$root=$this->root();$dir=$root.'/'.substr($key,0,2);if($create&&!is_dir($dir)&&!mkdir($dir,0700,true)&&!is_dir($dir))throw new Error('storage_write_failed','Object directory unavailable.',500);if(is_dir($dir)){$dirReal=realpath($dir);if($dirReal===false||is_link($dir)||!Utils::pathWithin($dirReal,$root))throw new Error('storage_path_escape','Object shard must remain inside the private storage root.',503);$dir=$dirReal;}return $dir.'/'.$key.'.scm'; }"
 if old not in s and new not in s: raise SystemExit('round 87 path anchor missing')
 s=s.replace(old,new,1)
-old_loop="if($plain==='')continue;$size+=strlen($plain);hash_update($hash,$plain);Utils::writeAll($out,Utils::json(['i'=>$index]+Crypto::encryptChunk($plain,$key.'|'.$index,$kid)).\"\\n\");$index++;"
-new_loop="if($plain==='')continue;$size+=strlen($plain);if($size>1073741824)throw new Error('object_size_invalid','Object exceeds maximum supported size.',413);hash_update($hash,$plain);Utils::writeAll($out,Utils::json(['i'=>$index]+Crypto::encryptChunk($plain,$key.'|'.$index,$kid)).\"\\n\");$index++;"
+old_loop="$size+=strlen($plain);hash_update($hash,$plain);"
+new_loop="$size+=strlen($plain);if($size>1073741824)throw new Error('object_size_invalid','Object exceeds maximum supported size.',413);hash_update($hash,$plain);"
 if old_loop not in s and new_loop not in s: raise SystemExit('round 87 size anchor missing')
 s=s.replace(old_loop,new_loop,1)
 p.write_text(s)
