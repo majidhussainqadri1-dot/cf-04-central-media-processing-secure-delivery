@@ -20,7 +20,7 @@ final class Schema {
         foreach($tables as $n=>$body)dbDelta('CREATE TABLE '.Db::table($n).' ('.$body.') '.$c.';');
         if(function_exists('update_option'))update_option('scm_schema_version',defined('SCM_SCHEMA_VERSION')?SCM_SCHEMA_VERSION:'1.4.0',false);
     }
-    public static function ready(): bool { if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true)return true; if(!Db::available())return false; if(function_exists('get_option')&&(string)get_option('scm_schema_version','')!==(defined('SCM_SCHEMA_VERSION')?SCM_SCHEMA_VERSION:'1.4.0'))return false; global $wpdb; foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;}return true; }
+    public static function ready(): bool { if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true)return true; if(!Db::available())return false; if(function_exists('get_option')&&(string)get_option('scm_schema_version','')!==(defined('SCM_SCHEMA_VERSION')?SCM_SCHEMA_VERSION:'1.4.0'))return false; global $wpdb;$required=['records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at'],'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']];foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;$columns=array_map('strval',(array)$wpdb->get_col('SHOW COLUMNS FROM '.$name,0));foreach($required[$t] as $column)if(!in_array($column,$columns,true))return false;}return true; }
 }
 
 final class RecordStore {
