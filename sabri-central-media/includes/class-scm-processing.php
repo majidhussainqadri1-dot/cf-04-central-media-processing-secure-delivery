@@ -60,10 +60,13 @@ final class DerivativeService {
     if((int)($asset['manifest_version']??0)!==$expectedVersion)throw new Error('manifest_version_conflict','Asset manifest changed concurrently.',409,['expected'=>$expectedVersion,'actual'=>(int)($asset['manifest_version']??0)]);
     $derivativeIds=array_values(array_unique(array_map('strval',$derivativeIds)));
     if($derivativeIds===[])throw new Error('derivative_set_empty','No derivatives supplied for manifest.',422);
+    $currentGeneration=max(1,(int)($asset['processing_generation']??1));$carryover=[];$activeId=(string)($asset['active_manifest_id']??'');
+    if($activeId!==''){$active=RecordStore::get('manifest',$activeId);if($active&&($active['status']??'')==='active')foreach((array)($active['derivatives']??[]) as $item){$carryId=(string)($item['derivative_id']??'');if($carryId!=='')$carryover[$carryId]=true;}}
     $items=[];$kinds=[];
     foreach($derivativeIds as $id){
         $derivative=RecordStore::get('derivative',$id);
         if(!$derivative||($derivative['asset_id']??'')!==$assetId||($derivative['status']??'')!=='validated'||!empty($derivative['superseded_by']))throw new Error('derivative_not_validated','Derivative is not validated.',409,['derivative_id'=>$id]);
+        $generation=max(1,(int)($derivative['lineage']['processing_generation']??1));if($generation!==$currentGeneration&&!isset($carryover[$id]))throw new Error('derivative_generation_stale','Derivative is not from the current processing generation or the active-manifest carryover set.',409,['derivative_id'=>$id,'generation'=>$generation,'current_generation'=>$currentGeneration]);
         if(isset($kinds[$derivative['kind']]))throw new Error('derivative_kind_duplicate','Manifest contains duplicate derivative kinds.',409,['kind'=>$derivative['kind']]);
         $kinds[$derivative['kind']]=true;
         $items[]=['derivative_id'=>$derivative['id'],'kind'=>$derivative['kind'],'mime'=>$derivative['mime'],'sha256'=>$derivative['sha256'],'size'=>$derivative['size'],'lineage'=>$derivative['lineage']];
