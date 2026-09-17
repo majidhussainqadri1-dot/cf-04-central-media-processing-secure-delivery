@@ -2,48 +2,36 @@
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
-# Fresh Review Round 86 was fully completed before corrections began.
+# Fresh Review Round 87 was fully completed before corrections began.
 # Defect ledger:
-# 1) manifest activation rollback captured $original only after mutating the asset to
-#    the new manifest/ready state, so rollback restored the wrong manifest version and
-#    processing/status fields.
-# 2) low-confidence safety-review pauses were converted by ProcessingService::execute
-#    into non-retryable dead-letter jobs and processing_status=failed, so a subsequently
-#    accepted review could not resume the scan graph without operator dead-letter repair.
+# 1) LocalObjectStore::putStream had no write-time 1 GiB ceiling even though openStream
+#    refuses objects above that ceiling; an oversized input could therefore persist an
+#    object that the same provider could never read and could consume storage unboundedly.
+# 2) existing two-hex shard directories were not realpath/symlink checked after the
+#    private root was validated, so a replaced shard symlink could escape the private root.
 
-p=ROOT/'sabri-central-media/includes/class-scm-processing.php'
+p=ROOT/'sabri-central-media/includes/class-scm-storage.php'
 s=p.read_text()
-
-old_manifest="$old=$asset['active_manifest_id']??null;\n    $asset['active_manifest_id']=$manifestId;$asset['manifest_version']=$manifest['manifest_version'];$asset['processing_status']='completed';$asset['status']='ready';$asset['ready_at']=Utils::now();\n    unset($asset['reprocess_context']);\n    $original=$asset;$savedAsset=null;"
-new_manifest="$old=$asset['active_manifest_id']??null;$original=$asset;\n    $asset['active_manifest_id']=$manifestId;$asset['manifest_version']=$manifest['manifest_version'];$asset['processing_status']='completed';$asset['status']='ready';$asset['ready_at']=Utils::now();\n    unset($asset['reprocess_context']);\n    $savedAsset=null;"
-if old_manifest not in s and new_manifest not in s: raise SystemExit('round 86 manifest rollback anchor missing')
-s=s.replace(old_manifest,new_manifest,1)
-
-job_anchor="    public static function retryDeadLetter(string $jobId,int $actor,string $reason): array {Auth::capability('media_reprocess');Auth::assertActor($actor,'manage_options');$reason=Utils::text($reason,500);if($reason==='')throw new Error('operator_reason_required','A retry reason is required.',400);$job=RecordStore::get('job',$jobId);if(!$job||($job['status']??'')!=='dead_letter')throw new Error('dead_letter_not_found','Dead-letter job not found.',404);$job['status']='queued';$job['attempts']=0;$job['next_attempt_at']=Utils::now();$job['operator_reason']=$reason;$job['operator_id']=$actor;return RecordStore::put('job',$jobId,$job,(int)$job['version']);}\n"
-job_insert=job_anchor+"    public static function awaitSafetyReview(string $jobId,string $leaseToken,string $code,string $signalId): array {$job=RecordStore::get('job',$jobId);if(!$job||($job['status']??'')!=='leased'||!hash_equals((string)($job['lease_token_hash']??''),hash('sha256',$leaseToken)))throw new Error('job_lease_invalid','Job lease invalid.',409);if((int)($job['lease_expires_at']??0)<=Utils::now())throw new Error('job_lease_expired','Job lease expired.',409);$job['status']='waiting_review';$job['last_error']=Utils::key($code,64);$job['review_signal_id']=Utils::text($signalId,96);$job['review_wait_started_at']=$job['review_wait_started_at']??Utils::now();unset($job['lease_token_hash'],$job['lease_owner'],$job['lease_expires_at']);return RecordStore::put('job',$jobId,$job,(int)$job['version']);}\n    public static function resumeSafetyReview(string $jobId,string $signalId): array {$job=RecordStore::get('job',$jobId);if(!$job||($job['status']??'')!=='waiting_review')return $job??throw new Error('job_missing','Processing job missing.',500);if((string)($job['review_signal_id']??'')!==$signalId)throw new Error('safety_review_signal_mismatch','Waiting job is bound to a different safety signal.',409);$signal=RecordStore::get('safety_signal',$signalId);if(!$signal)throw new Error('safety_signal_missing','Safety signal missing.',409);$status=(string)($signal['status']??'pending_review');if(in_array($status,['accepted','informational'],true)){$job['status']='queued';$job['next_attempt_at']=Utils::now();unset($job['review_signal_id'],$job['review_wait_started_at']);return RecordStore::put('job',$jobId,$job,(int)$job['version']);}if($status==='rejected'){$job['status']='dead_letter';$job['last_error']='safety_review_rejected';$job['dead_lettered_at']=Utils::now();return RecordStore::put('job',$jobId,$job,(int)$job['version']);}return $job;}\n"
-if 'public static function awaitSafetyReview' not in s:
-    if job_anchor not in s: raise SystemExit('round 86 job review anchor missing')
-    s=s.replace(job_anchor,job_insert,1)
-
-old_execute="public static function execute(string $assetId,string $workerId='inline-worker'): array {$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);if(empty($asset['job_graph'])){self::start($assetId);$asset=RecordStore::get('asset',$assetId)??throw new Error('asset_not_found','Asset vanished.',500);}$derivatives=[];foreach(['probe','scan','metadata','transform','validate_outputs','store_derivatives','manifest_switch'] as $type){$jobId=$asset['job_graph'][$type]??hash('sha256',$assetId.'|'.$type.'|'.$asset['policy_hash']);$job=RecordStore::get('job',$jobId);if(!$job)throw new Error('job_missing','Processing job missing.',500,['job'=>$type]);if(($job['status']??'')==='completed'){if($type==='transform')$derivatives=(array)($job['result']['derivatives']??$derivatives);continue;}$leased=JobService::leaseSpecific($jobId,$workerId);try{$result=self::executeNode($type,$assetId,$jobId,$derivatives);if($type==='transform')$derivatives=(array)$result['derivatives'];JobService::complete($jobId,(string)$leased['lease_token'],$result);}catch(\\Throwable $exception){try{JobService::fail($jobId,(string)$leased['lease_token'],$exception instanceof Error?$exception->errorCode:'unexpected',!($exception instanceof Error)||$exception->httpStatus>=500);}catch(\\Throwable){}$asset=RecordStore::get('asset',$assetId)??$asset;$asset['processing_status']='failed';$asset['last_processing_error']=$exception instanceof Error?$exception->errorCode:'unexpected';RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);throw $exception;}$asset=RecordStore::get('asset',$assetId)??$asset;}return RecordStore::get('asset',$assetId)??throw new Error('asset_not_found','Asset vanished.',500);}"
-new_execute="public static function execute(string $assetId,string $workerId='inline-worker'): array {$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);if(empty($asset['job_graph'])){self::start($assetId);$asset=RecordStore::get('asset',$assetId)??throw new Error('asset_not_found','Asset vanished.',500);}$derivatives=[];foreach(['probe','scan','metadata','transform','validate_outputs','store_derivatives','manifest_switch'] as $type){$jobId=$asset['job_graph'][$type]??hash('sha256',$assetId.'|'.$type.'|'.$asset['policy_hash']);$job=RecordStore::get('job',$jobId);if(!$job)throw new Error('job_missing','Processing job missing.',500,['job'=>$type]);if($type==='scan'&&($job['status']??'')==='waiting_review'){$signalId=(string)($asset['safety_signal_id']??$job['review_signal_id']??'');if($signalId==='')throw new Error('safety_signal_missing','Waiting scan job has no safety signal.',409);$job=JobService::resumeSafetyReview($jobId,$signalId);if(($job['status']??'')==='waiting_review')throw new Error('safety_review_required','Technical safety review is still pending.',409,['signal_id'=>$signalId]);if(($job['status']??'')==='dead_letter')throw new Error('safety_review_rejected','Technical safety signal was rejected by review.',422,['signal_id'=>$signalId]);$asset=RecordStore::get('asset',$assetId)??$asset;$asset['processing_status']='queued';unset($asset['last_processing_error']);$asset=RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);}if(($job['status']??'')==='completed'){if($type==='transform')$derivatives=(array)($job['result']['derivatives']??$derivatives);continue;}$leased=JobService::leaseSpecific($jobId,$workerId);try{$result=self::executeNode($type,$assetId,$jobId,$derivatives);if($type==='transform')$derivatives=(array)$result['derivatives'];JobService::complete($jobId,(string)$leased['lease_token'],$result);}catch(\\Throwable $exception){$code=$exception instanceof Error?$exception->errorCode:'unexpected';if($exception instanceof Error&&in_array($code,['safety_review_required','safety_review_escalated'],true)){$signalId=(string)(($exception->context['signal_id']??'')?:((RecordStore::get('asset',$assetId)['safety_signal_id']??'')));try{JobService::awaitSafetyReview($jobId,(string)$leased['lease_token'],$code,$signalId);}catch(\\Throwable){}$asset=RecordStore::get('asset',$assetId)??$asset;$asset['processing_status']='awaiting_review';$asset['last_processing_error']=$code;RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);throw $exception;}try{JobService::fail($jobId,(string)$leased['lease_token'],$code,!($exception instanceof Error)||$exception->httpStatus>=500);}catch(\\Throwable){}$asset=RecordStore::get('asset',$assetId)??$asset;$asset['processing_status']='failed';$asset['last_processing_error']=$code;RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);throw $exception;}$asset=RecordStore::get('asset',$assetId)??$asset;}return RecordStore::get('asset',$assetId)??throw new Error('asset_not_found','Asset vanished.',500);}"
-if old_execute not in s and new_execute not in s: raise SystemExit('round 86 execute anchor missing')
-s=s.replace(old_execute,new_execute,1)
+old="    private function path(string $key,bool $create=true): string { if(!preg_match('/^[a-f0-9]{64}$/',$key))throw new Error('object_key_invalid','Invalid object key.',400);$root=$this->root();$dir=$root.'/'.substr($key,0,2);if($create&&!is_dir($dir)&&!mkdir($dir,0700,true)&&!is_dir($dir))throw new Error('storage_write_failed','Object directory unavailable.',500);return $dir.'/'.$key.'.scm'; }"
+new="    private function path(string $key,bool $create=true): string { if(!preg_match('/^[a-f0-9]{64}$/',$key))throw new Error('object_key_invalid','Invalid object key.',400);$root=$this->root();$dir=$root.'/'.substr($key,0,2);if($create&&!is_dir($dir)&&!mkdir($dir,0700,true)&&!is_dir($dir))throw new Error('storage_write_failed','Object directory unavailable.',500);if(is_dir($dir)){$dirReal=realpath($dir);if($dirReal===false||is_link($dir)||!Utils::pathWithin($dirReal,$root))throw new Error('storage_path_escape','Object shard must remain inside the private storage root.',503);$dir=$dirReal;}return $dir.'/'.$key.'.scm'; }"
+if old not in s and new not in s: raise SystemExit('round 87 path anchor missing')
+s=s.replace(old,new,1)
+old_loop="if($plain==='')continue;$size+=strlen($plain);hash_update($hash,$plain);Utils::writeAll($out,Utils::json(['i'=>$index]+Crypto::encryptChunk($plain,$key.'|'.$index,$kid)).\"\\n\");$index++;"
+new_loop="if($plain==='')continue;$size+=strlen($plain);if($size>1073741824)throw new Error('object_size_invalid','Object exceeds maximum supported size.',413);hash_update($hash,$plain);Utils::writeAll($out,Utils::json(['i'=>$index]+Crypto::encryptChunk($plain,$key.'|'.$index,$kid)).\"\\n\");$index++;"
+if old_loop not in s and new_loop not in s: raise SystemExit('round 87 size anchor missing')
+s=s.replace(old_loop,new_loop,1)
 p.write_text(s)
 
-t=ROOT/'tests/review-round-86-processing-review-pause.php'
+t=ROOT/'tests/review-round-87-storage-boundaries.php'
 t.write_text(r'''<?php
 declare(strict_types=1);
-$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-processing.php');
-function r86($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 86 FAIL: $m\n");exit(1);}echo "ROUND 86 PASS: $m\n";}
-$old=strpos($s,"\$old=\$asset['active_manifest_id']??null;\$original=\$asset;");$mut=strpos($s,"\$asset['active_manifest_id']=\$manifestId",$old===false?0:$old);
-r86($old!==false&&$mut!==false&&$old<$mut,'manifest rollback snapshot is captured before new manifest state mutates the asset');
-r86(str_contains($s,'public static function awaitSafetyReview')&&str_contains($s,"\$job['status']='waiting_review'"),'safety-review pauses release leases into a durable waiting state');
-r86(str_contains($s,'public static function resumeSafetyReview')&&str_contains($s,"in_array(\$status,['accepted','informational'],true)"),'accepted review can requeue the exact waiting scan job');
-r86(str_contains($s,"\$asset['processing_status']='awaiting_review'")&&str_contains($s,"['safety_review_required','safety_review_escalated']"),'review-required errors no longer become ordinary failed/dead-letter processing');
-echo "REVIEW ROUND 86 PROCESSING REVIEW PAUSE: PASS\n";
+$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-storage.php');
+function r87($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 87 FAIL: $m\n");exit(1);}echo "ROUND 87 PASS: $m\n";}
+r87(str_contains($s,"if(\$size>1073741824)throw new Error('object_size_invalid'")&&str_contains($s,"413);hash_update"),'write path enforces the same 1 GiB object ceiling before persistence');
+r87(str_contains($s,"is_link(\$dir)")&&str_contains($s,"Utils::pathWithin(\$dirReal,\$root)")&&str_contains($s,"storage_path_escape"),'shard directories cannot redirect object paths outside the private root');
+echo "REVIEW ROUND 87 STORAGE BOUNDARIES: PASS\n";
 ''')
-q=ROOT/'tools/quality-check.sh';qs=q.read_text();anchor='php "$ROOT/tests/review-round-85-validation-provenance.php"\n'
-if 'review-round-86-processing-review-pause.php' not in qs:
-    if anchor not in qs: raise SystemExit('round 86 quality anchor missing')
-    q.write_text(qs.replace(anchor,anchor+'php "$ROOT/tests/review-round-86-processing-review-pause.php"\n',1))
+q=ROOT/'tools/quality-check.sh';x=q.read_text();anchor='php "$ROOT/tests/review-round-86-processing-review-pause.php"\n'
+if 'review-round-87-storage-boundaries.php' not in x:
+    if anchor not in x: raise SystemExit('round 87 quality anchor missing')
+    q.write_text(x.replace(anchor,anchor+'php "$ROOT/tests/review-round-87-storage-boundaries.php"\n',1))
