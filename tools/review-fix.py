@@ -2,107 +2,47 @@
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
-# Fresh Review Round 82 was fully completed before corrections began.
-# Defect ledger: reclaimed idempotency leases were not generation-bound, so a stale
-# worker could complete/fail a newer same-key claim. Add a per-claim token and require
-# that exact current token for all terminal claim mutations across upload and repair.
-
-p=ROOT/'sabri-central-media/includes/class-scm-upload.php';s=p.read_text()
-s=s.replace("$row=['actor_id'=>$actor,'scope'=>$scope,'fingerprint'=>$fingerprint,'status'=>'claimed','expires_at'=>Utils::now()+$ttl,'claimed_at'=>Utils::now()];", "$row=['actor_id'=>$actor,'scope'=>$scope,'fingerprint'=>$fingerprint,'claim_token'=>Utils::id('idem'),'status'=>'claimed','expires_at'=>Utils::now()+$ttl,'claimed_at'=>Utils::now()];",1)
-s=s.replace("public static function complete(string $scope,string $key,string $fingerprint,string $resultType,string $resultId,array $result=[]): array {", "public static function complete(string $scope,string $key,string $fingerprint,string $claimToken,string $resultType,string $resultId,array $result=[]): array {",1)
-s=s.replace("if(!$record||(int)($record['actor_id']??0)!==$actor||!hash_equals((string)$record['fingerprint'],$fingerprint))throw new Error('idempotency_claim_missing','Idempotency claim missing.',409);", "if(!$record||(int)($record['actor_id']??0)!==$actor||($record['status']??'')!=='claimed'||!hash_equals((string)$record['fingerprint'],$fingerprint)||!hash_equals((string)($record['claim_token']??''),$claimToken))throw new Error('idempotency_claim_missing','Current idempotency claim identity is missing or stale.',409);",1)
-s=s.replace("public static function fail(string $scope,string $key,string $fingerprint,string $code): void {", "public static function fail(string $scope,string $key,string $fingerprint,string $claimToken,string $code): void {",1)
-s=s.replace("if(!$r||(int)($r['actor_id']??0)!==$actor||!hash_equals((string)$r['fingerprint'],$fingerprint))return;", "if(!$r||(int)($r['actor_id']??0)!==$actor||($r['status']??'')!=='claimed'||!hash_equals((string)$r['fingerprint'],$fingerprint)||!hash_equals((string)($r['claim_token']??''),$claimToken))return;",1)
-repls={
-"Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,'upload',$id)":"Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id)",
-"Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected')":"Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected')",
-"Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,'asset_reconciliation_mismatch')":"Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'asset_reconciliation_mismatch')",
-"self::finalizeCompletedUpload($u,$existingAsset,$idempotencyKey,$fingerprint)":"self::finalizeCompletedUpload($u,$existingAsset,$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'])",
-"Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,$e instanceof Error?$e->errorCode:'unexpected')":"Idempotency::fail('upload-complete',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected')",
-"self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint)":"self::finalizeCompletedUpload($u,$asset,$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'])",
-"private static function finalizeCompletedUpload(array $upload,array $asset,string $idempotencyKey,string $fingerprint): array {":"private static function finalizeCompletedUpload(array $upload,array $asset,string $idempotencyKey,string $fingerprint,string $claimToken): array {",
-"Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,'asset',$uploadId)":"Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId)"
-}
-for old,new in repls.items(): s=s.replace(old,new)
-if "claim_token'=>Utils::id('idem')" not in s or "string $claimToken,string $resultType" not in s or "string $fingerprint,string $claimToken): array" not in s: raise SystemExit('round 82 upload transformation incomplete')
-p.write_text(s)
-
-op=ROOT/'sabri-central-media/includes/class-scm-operations.php';o=op.read_text()
-o=o.replace("Idempotency::complete('repair',$idempotencyKey,$fingerprint,'repair',$repairId)","Idempotency::complete('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'repair',$repairId)")
-o=o.replace("Idempotency::fail('repair',$idempotencyKey,$fingerprint,$repair['error'])","Idempotency::fail('repair',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$repair['error'])")
-if "Idempotency::complete('repair',$idempotencyKey,$fingerprint,'repair'" in o or "Idempotency::fail('repair',$idempotencyKey,$fingerprint,$repair" in o: raise SystemExit('round 82 repair stale caller remains')
-op.write_text(o)
-
-t=ROOT/'tests/review-round-82-idempotency-generation.php';t.write_text(r'''<?php
-declare(strict_types=1);
-$root=dirname(__DIR__);$u=file_get_contents($root.'/sabri-central-media/includes/class-scm-upload.php');$o=file_get_contents($root.'/sabri-central-media/includes/class-scm-operations.php');
-function r82($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 82 FAIL: $m\n");exit(1);}echo "ROUND 82 PASS: $m\n";}
-r82(str_contains($u,"claim_token'=>Utils::id('idem')"),'new claims receive unique generation identity');
-r82(str_contains($u,"record['claim_token']??''")&&str_contains($u,"status']??'')!=='claimed'"),'completion rejects stale/non-current claims');
-r82(str_contains($u,"r['claim_token']??''"),'failure rejects stale claim generations');
-r82(substr_count($u,"['record']['claim_token']")>=5&&substr_count($o,"['record']['claim_token']")>=2,'all upload and repair terminal paths propagate exact claim identity');
-echo "REVIEW ROUND 82 IDEMPOTENCY GENERATION: PASS\n";
-''')
-q=ROOT/'tools/quality-check.sh';x=q.read_text();a='php "$ROOT/tests/review-round-81-provider-exit-drift.php"\n'
-if 'review-round-82-idempotency-generation.php' not in x:
-    if a not in x: raise SystemExit('round 82 quality anchor missing')
-    q.write_text(x.replace(a,a+'php "$ROOT/tests/review-round-82-idempotency-generation.php"\n',1))
-
-# Fresh Review Round 83 was fully completed before corrections began.
-pp=ROOT/'sabri-central-media/includes/class-scm-persistence.php';ps=pp.read_text()
-old="global $wpdb; foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;}return true; }"
-new="global $wpdb;$required=['records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at'],'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']];foreach(['records','audit'] as $t){$name=Db::table($t);$found=$wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s',$name));if((string)$found!==$name)return false;$columns=array_map('strval',(array)$wpdb->get_col('SHOW COLUMNS FROM '.$name,0));foreach($required[$t] as $column)if(!in_array($column,$columns,true))return false;}return true; }"
-if old in ps: ps=ps.replace(old,new,1)
-if "SHOW COLUMNS FROM '.$name" not in ps or "'records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at']" not in ps: raise SystemExit('round 83 schema-shape transformation incomplete')
-pp.write_text(ps)
-
-t83=ROOT/'tests/review-round-83-schema-shape.php';t83.write_text(r'''<?php
-declare(strict_types=1);
-$root=dirname(__DIR__);$p=file_get_contents($root.'/sabri-central-media/includes/class-scm-persistence.php');
-function r83($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 83 FAIL: $m\n");exit(1);}echo "ROUND 83 PASS: $m\n";}
-r83(str_contains($p,"SHOW COLUMNS FROM '.$name"),'schema readiness verifies physical columns');
-r83(str_contains($p,"'records'=>['record_type','id','actor_id','status','version','expires_at','payload','updated_at']"),'records critical shape is explicit');
-r83(str_contains($p,"'audit'=>['id','event_id','event_key','actor_id','previous_hash','event_hash','payload','created_at']"),'audit critical shape is explicit');
-echo "REVIEW ROUND 83 SCHEMA SHAPE: PASS\n";
-''')
-x=q.read_text();a83='php "$ROOT/tests/review-round-82-idempotency-generation.php"\n'
-if 'review-round-83-schema-shape.php' not in x:
-    if a83 not in x: raise SystemExit('round 83 quality anchor missing')
-    q.write_text(x.replace(a83,a83+'php "$ROOT/tests/review-round-83-schema-shape.php"\n',1))
-
-# Fresh Review Round 84 was fully completed before corrections began.
+# Fresh Review Round 85 was fully completed before corrections began.
 # Defect ledger:
-# 1) upload-create completed its idempotency claim before mandatory audit evidence.
-# 2) upload completion likewise terminalized idempotency before audit evidence.
-# 3) expired-upload cleanup filtered only the newest bounded page.
-up=ROOT/'sabri-central-media/includes/class-scm-upload.php';us=up.read_text()
-old_create="try{$row=RecordStore::put('upload',$id,$row);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);return $row+['upload_credential'=>$credential];}"
-new_create="try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}"
-if old_create in us: us=us.replace(old_create,new_create,1)
-old_final="Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);\n        Audit::record('asset_quarantined'"
-new_final="Audit::record('asset_quarantined'"
-if old_final in us:
-    us=us.replace(old_final,new_final,1)
-    marker="Audit::record('asset_quarantined',['asset_id'=>$uploadId,'actor_id'=>(int)$upload['actor_id'],'privacy_class'=>$asset['privacy_class'],'sha256'=>$asset['sha256'],'duplicate_of'=>$asset['duplicate_of']??null]);"
-    us=us.replace(marker,marker+"\n        Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);",1)
-old_cleanup="foreach(RecordStore::list('upload',0,null,$limit) as $upload){\n            if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;"
-new_cleanup="foreach(RecordStore::all('upload',0,null,100000) as $upload){\n            if($result['expired']+$result['failed']>=$limit)break;\n            if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;"
-if old_cleanup in us: us=us.replace(old_cleanup,new_cleanup,1)
-if new_create not in us or "Audit::record('asset_quarantined'" not in us or "Idempotency::complete('upload-complete',$idempotencyKey,$fingerprint,$claimToken,'asset',$uploadId);" not in us or "RecordStore::all('upload',0,null,100000)" not in us: raise SystemExit('round 84 transformation incomplete')
-up.write_text(us)
+# 1) sandbox provider output could override the trusted worker attestation because PHP
+#    array-union preserves the left operand.
+# 2) scanner callback output could likewise forge scanner_id/version provenance.
+# 3) low-confidence safety review failures did not persist/reuse the signal on the asset,
+#    so every retry created a new pending signal and a reviewed signal could never unblock it.
 
-t84=ROOT/'tests/review-round-84-upload-terminal-order.php';t84.write_text(r'''<?php
+v=ROOT/'sabri-central-media/includes/class-scm-validation.php'
+s=v.read_text()
+old="return $provider['output']+['worker'=>['id'=>$workerId,'version'=>$workerVersion,'non_root'=>true,'network_isolated'=>true,'ephemeral'=>true,'resource_limits'=>$provider['resource_limits']]];"
+new="return array_replace($provider['output'],['worker'=>['id'=>$workerId,'version'=>$workerVersion,'non_root'=>true,'network_isolated'=>true,'ephemeral'=>true,'resource_limits'=>$provider['resource_limits']]]);"
+if old not in s and new not in s: raise SystemExit('round 85 worker-attestation anchor missing')
+s=s.replace(old,new,1)
+old2="$results[$id]=Utils::redact($result)+['version'=>$meta['version'],'scanner_id'=>$id];"
+new2="$results[$id]=array_replace(Utils::redact($result),['version'=>$meta['version'],'scanner_id'=>$id]);"
+if old2 not in s and new2 not in s: raise SystemExit('round 85 scanner-provenance anchor missing')
+s=s.replace(old2,new2,1)
+v.write_text(s)
+
+p=ROOT/'sabri-central-media/includes/class-scm-processing.php'
+x=p.read_text()
+old3="    private static function scanNode($source,array $asset): array {$scans=ScannerRegistry::scan($source,$asset['policy']['required_scans'],['asset_id'=>$asset['asset_id'],'mime'=>$asset['mime'],'policy'=>$asset['policy']]);$signal=SafetySignalService::evaluate($source,$asset);if(($signal['status']??'')==='pending_review'&&$asset['policy']['safety']['require_reviewer_for_low_confidence'])throw new Error('safety_review_required','Low-confidence technical safety signal requires review.',409,['signal_id'=>$signal['id']]);$asset['scan_status']='passed';$asset['scan_results']=$scans;$asset['safety_signal_id']=$signal['id'];RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);return ['scans'=>$scans,'safety_signal'=>$signal['id']];}"
+new3="    private static function scanNode($source,array $asset): array {$scans=ScannerRegistry::scan($source,$asset['policy']['required_scans'],['asset_id'=>$asset['asset_id'],'mime'=>$asset['mime'],'policy'=>$asset['policy']]);$signal=null;$existingSignalId=(string)($asset['safety_signal_id']??'');if($existingSignalId!==''){$candidate=RecordStore::get('safety_signal',$existingSignalId);if($candidate&&($candidate['asset_id']??'')===$asset['asset_id'])$signal=$candidate;}if(!$signal)$signal=SafetySignalService::evaluate($source,$asset);$status=(string)($signal['status']??'pending_review');$asset['scan_results']=$scans;$asset['safety_signal_id']=$signal['id'];if($status==='rejected'){$asset['scan_status']='rejected';RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);throw new Error('safety_review_rejected','Technical safety signal was rejected by review.',422,['signal_id'=>$signal['id']]);}if($status==='escalated'){$asset['scan_status']='awaiting_review';RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);throw new Error('safety_review_escalated','Technical safety signal remains escalated.',409,['signal_id'=>$signal['id']]);}if($status==='pending_review'&&$asset['policy']['safety']['require_reviewer_for_low_confidence']){$asset['scan_status']='awaiting_review';RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);throw new Error('safety_review_required','Low-confidence technical safety signal requires review.',409,['signal_id'=>$signal['id']]);}$asset['scan_status']='passed';RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);return ['scans'=>$scans,'safety_signal'=>$signal['id']];}"
+if old3 not in x and new3 not in x: raise SystemExit('round 85 safety-review anchor missing')
+x=x.replace(old3,new3,1)
+p.write_text(x)
+
+t=ROOT/'tests/review-round-85-validation-provenance.php'
+t.write_text(r'''<?php
 declare(strict_types=1);
-$root=dirname(__DIR__);$u=file_get_contents($root.'/sabri-central-media/includes/class-scm-upload.php');
-function r84($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 84 FAIL: $m\n");exit(1);}echo "ROUND 84 PASS: $m\n";}
-$createAudit=strpos($u,"Audit::record('upload_session_created'");$createComplete=strpos($u,"Idempotency::complete('upload-create'");
-r84($createAudit!==false&&$createComplete!==false&&$createAudit<$createComplete,'upload-create audit evidence precedes terminal idempotency');
-$final=strpos($u,'private static function finalizeCompletedUpload');$finalAudit=strpos($u,"Audit::record('asset_quarantined'",$final);$finalComplete=strpos($u,"Idempotency::complete('upload-complete'",$final);
-r84($final!==false&&$finalAudit!==false&&$finalComplete!==false&&$finalAudit<$finalComplete,'upload completion audit evidence precedes terminal idempotency');
-r84(str_contains($u,"RecordStore::all('upload',0,null,100000)")&&str_contains($u,"\$result['expired']+\$result['failed']>=\$limit"),'expiry cleanup scans beyond the newest page while preserving a bounded work limit');
-echo "REVIEW ROUND 84 UPLOAD TERMINAL ORDER: PASS\n";
+$root=dirname(__DIR__);$v=file_get_contents($root.'/sabri-central-media/includes/class-scm-validation.php');$p=file_get_contents($root.'/sabri-central-media/includes/class-scm-processing.php');
+function r85($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 85 FAIL: $m\n");exit(1);}echo "ROUND 85 PASS: $m\n";}
+r85(str_contains($v,"array_replace($provider['output'],['worker'=>"),'trusted sandbox attestation overrides provider-supplied worker provenance');
+r85(str_contains($v,"array_replace(Utils::redact($result),['version'=>$meta['version'],'scanner_id'=>$id])"),'registered scanner identity/version override callback-supplied provenance');
+r85(str_contains($p,"$existingSignalId=(string)($asset['safety_signal_id']??'')")&&str_contains($p,"RecordStore::get('safety_signal',$existingSignalId)"),'scan retry reuses the asset-bound safety signal');
+r85(substr_count($p,"$asset['scan_status']='awaiting_review'")>=2&&str_contains($p,"$asset['safety_signal_id']=$signal['id']"),'pending or escalated review state is durably linked before fail-closed retry');
+r85(str_contains($p,"safety_review_rejected")&&str_contains($p,"$asset['scan_status']='rejected'"),'human rejection fails closed and is persisted');
+echo "REVIEW ROUND 85 VALIDATION PROVENANCE: PASS\n";
 ''')
-x=q.read_text();a84='php "$ROOT/tests/review-round-83-schema-shape.php"\n'
-if 'review-round-84-upload-terminal-order.php' not in x:
-    if a84 not in x: raise SystemExit('round 84 quality anchor missing')
-    q.write_text(x.replace(a84,a84+'php "$ROOT/tests/review-round-84-upload-terminal-order.php"\n',1))
+q=ROOT/'tools/quality-check.sh';qs=q.read_text();anchor='php "$ROOT/tests/review-round-84-upload-terminal-order.php"\n'
+if 'review-round-85-validation-provenance.php' not in qs:
+    if anchor not in qs: raise SystemExit('round 85 quality anchor missing')
+    q.write_text(qs.replace(anchor,anchor+'php "$ROOT/tests/review-round-85-validation-provenance.php"\n',1))
