@@ -51,13 +51,23 @@ final class Plugin {
     public static function cronJobs(): void {
         if(!RuntimeGuard::enabled())return;$token=self::acquire('cron-jobs',300);if($token===null)return;
         try{
-            JobService::recoverOrphans();$processed=0;
-            foreach(RecordStore::list('asset',0,null,200) as $asset){if($processed>=5)break;if(($asset['processing_status']??'')!=='queued')continue;try{ProcessingService::execute((string)$asset['id'],'wp-cron-'.substr($token,0,12));$processed++;}catch(\Throwable $e){Observability::alert('critical','processing_job_failed',['asset_id'=>$asset['id']??'','exception'=>get_class($e)]);}}
+            JobService::recoverOrphans();$candidates=[];$offset=0;$scanned=0;
+            while(count($candidates)<5&&$scanned<1000000){$page=RecordStore::list('asset',0,null,500,$offset);if($page===[])break;$offset+=count($page);$scanned+=count($page);foreach($page as $asset){if(($asset['processing_status']??'')==='queued'){$candidates[]=(string)$asset['id'];if(count($candidates)>=5)break;}}if(count($page)<500)break;}
+            foreach($candidates as $assetId)try{ProcessingService::execute($assetId,'wp-cron-'.substr($token,0,12));}catch(\Throwable $e){Observability::alert('critical','processing_job_failed',['asset_id'=>$assetId,'exception'=>get_class($e)]);}
+            if($scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[])Observability::alert('warning','processing_inventory_scan_truncated',['scanned'=>$scanned]);
         }finally{self::release('cron-jobs',$token);}
     }
     public static function cronRetention(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('retention',1800);if($token===null)return;try{RetentionService::run();}finally{self::release('retention',$token);}}
     public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();}finally{self::release('deletions',$token);}}
-    public static function cronIntegrity(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;try{foreach(array_slice(RecordStore::list('asset'),0,20) as $asset)if(($asset['status']??'')==='ready')try{IntegrityService::sample((string)$asset['id']);}catch(\Throwable $e){Observability::alert('critical','integrity_check_failed',['asset_id'=>$asset['id']??'','exception'=>get_class($e)]);}}finally{self::release('integrity',$token);}}
+    public static function cronIntegrity(): void {
+        if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;
+        try{
+            $cursor=RecordStore::get('cron_cursor','integrity');$offset=max(0,(int)($cursor['offset']??0));$selected=[];$scanned=0;$wrapped=false;$nextOffset=$offset;
+            while(count($selected)<20&&$scanned<5000){$page=RecordStore::list('asset',0,null,100,$nextOffset);if($page===[]){if($wrapped||$nextOffset===0)break;$wrapped=true;$nextOffset=0;continue;}$nextOffset+=count($page);$scanned+=count($page);foreach($page as $asset)if(($asset['status']??'')==='ready'){$selected[]=(string)$asset['id'];if(count($selected)>=20)break;}if(count($page)<100){if($wrapped)break;$wrapped=true;$nextOffset=0;}}
+            foreach($selected as $assetId)try{IntegrityService::sample($assetId);}catch(\Throwable $e){Observability::alert('critical','integrity_check_failed',['asset_id'=>$assetId,'exception'=>get_class($e)]);}
+            $cursorRow=['actor_id'=>0,'status'=>'active','name'=>'integrity','offset'=>$nextOffset,'last_scanned'=>$scanned,'last_sampled'=>count($selected),'updated_at'=>Utils::now()];RecordStore::put('cron_cursor','integrity',$cursorRow,$cursor?(int)$cursor['version']:0);
+        }finally{self::release('integrity',$token);}
+    }
     private static function acquire(string $name,int $ttl): ?string {$id=Utils::key($name,48);$now=Utils::now();$current=RecordStore::get('runtime_lock',$id);if($current&&(int)($current['expires_at']??0)>$now)return null;$token=Utils::id('lock');try{RecordStore::put('runtime_lock',$id,['actor_id'=>0,'status'=>'held','token_hash'=>hash('sha256',$token),'expires_at'=>$now+$ttl,'created_at'=>$now],$current?(int)$current['version']:0);return $token;}catch(\Throwable){return null;}}
     private static function release(string $name,string $token): void {$id=Utils::key($name,48);$current=RecordStore::get('runtime_lock',$id);if(!$current||!hash_equals((string)($current['token_hash']??''),hash('sha256',$token)))return;try{$current['status']='released';$current['expires_at']=Utils::now();RecordStore::put('runtime_lock',$id,$current,(int)$current['version']);}catch(\Throwable){}}
 }
