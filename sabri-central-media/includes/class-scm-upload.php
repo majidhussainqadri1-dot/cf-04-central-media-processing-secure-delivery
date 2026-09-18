@@ -37,34 +37,53 @@ final class QuotaService {
         Auth::assertActor($actor);if($actor<1||$bytes<0||$jobs<0)throw new Error('quota_request_invalid','Quota request invalid.',400);
         $domain=Utils::key($domain,64);if($domain==='')throw new Error('quota_request_invalid','Quota domain invalid.',400);
         $window=(int)floor(Utils::now()/86400);$id=hash('sha256',$domain.'|'.$actor.'|'.$window);
-        $r=RecordStore::get('quota',$id)??['actor_id'=>$actor,'domain'=>$domain,'window'=>$window,'status'=>'active','reserved_bytes'=>0,'used_bytes'=>0,'reserved_jobs'=>0,'used_jobs'=>0,'abuse_score'=>0,'reservations'=>[]];
         $storageLimit=max(1,(int)($limits['storage_bytes']??1073741824));$dailyLimit=max(1,(int)($limits['daily_bytes']??1073741824));$jobLimit=max(1,(int)($limits['jobs']??100));$burst=max(1,(int)($limits['burst_bytes']??67108864));
         if($bytes>$burst&&!Utils::bool($context['governed_exception_authorized']??false))throw new Error('quota_burst_exceeded','Upload burst exceeds policy.',429);
-        if((int)$r['reserved_bytes']+(int)$r['used_bytes']+$bytes>$dailyLimit||(int)$r['used_bytes']+$bytes>$storageLimit||(int)$r['reserved_jobs']+(int)$r['used_jobs']+$jobs>$jobLimit)throw new Error('quota_exceeded','Quota exhausted.',429,['domain'=>$domain]);
-        if((int)($r['abuse_score']??0)>=(int)($limits['abuse_block_score']??100))throw new Error('abuse_policy_block','Abuse policy blocked reservation.',403);
-        $reservation=Utils::id('qres');$r['reserved_bytes']+=$bytes;$r['reserved_jobs']+=$jobs;$r['reservations'][$reservation]=['bytes'=>$bytes,'jobs'=>$jobs,'status'=>'reserved','created_at'=>Utils::now(),'context'=>Utils::redact($context)];
-        $r=RecordStore::put('quota',$id,$r,(int)($r['version']??0));return ['quota_id'=>$id,'reservation_id'=>$reservation,'version'=>$r['version']];
+        for($attempt=0;$attempt<5;$attempt++){
+            $r=RecordStore::get('quota',$id)??['actor_id'=>$actor,'domain'=>$domain,'window'=>$window,'status'=>'active','reserved_bytes'=>0,'used_bytes'=>0,'reserved_jobs'=>0,'used_jobs'=>0,'abuse_score'=>0,'reservations'=>[]];
+            if((int)$r['reserved_bytes']+(int)$r['used_bytes']+$bytes>$dailyLimit||(int)$r['used_bytes']+$bytes>$storageLimit||(int)$r['reserved_jobs']+(int)$r['used_jobs']+$jobs>$jobLimit)throw new Error('quota_exceeded','Quota exhausted.',429,['domain'=>$domain]);
+            if((int)($r['abuse_score']??0)>=(int)($limits['abuse_block_score']??100))throw new Error('abuse_policy_block','Abuse policy blocked reservation.',403);
+            $reservation=Utils::id('qres');$r['reserved_bytes']+=$bytes;$r['reserved_jobs']+=$jobs;$r['reservations'][$reservation]=['bytes'=>$bytes,'jobs'=>$jobs,'status'=>'reserved','created_at'=>Utils::now(),'context'=>Utils::redact($context)];
+            try{$r=RecordStore::put('quota',$id,$r,(int)($r['version']??0));return ['quota_id'=>$id,'reservation_id'=>$reservation,'version'=>$r['version']];}
+            catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+        }
+        throw new Error('quota_contention','Quota state changed too frequently to reserve safely.',409,['domain'=>$domain]);
     }
     public static function settle(string $quotaId,string $reservationId,bool $commit,int $actualBytes=0,int $actualJobs=0): array {
-        $r=RecordStore::get('quota',$quotaId);if(!$r||!isset($r['reservations'][$reservationId]))throw new Error('quota_reservation_missing','Quota reservation missing.',409);
-        $res=$r['reservations'][$reservationId];if(($res['status']??'')!=='reserved')return $r;
-        if($actualBytes<0||$actualJobs<0||$actualBytes>(int)$res['bytes']||$actualJobs>(int)$res['jobs'])throw new Error('quota_settlement_invalid','Quota settlement exceeds its reservation.',409);
-        $r['reserved_bytes']=max(0,(int)$r['reserved_bytes']-(int)$res['bytes']);$r['reserved_jobs']=max(0,(int)$r['reserved_jobs']-(int)$res['jobs']);
-        if($commit){$r['used_bytes']+=$actualBytes;$r['used_jobs']+=$actualJobs;$r['reservations'][$reservationId]['status']='committed';}else{$r['reservations'][$reservationId]['status']='released';}
-        $r['reservations'][$reservationId]['settled_at']=Utils::now();return RecordStore::put('quota',$quotaId,$r,(int)$r['version']);
+        if($actualBytes<0||$actualJobs<0)throw new Error('quota_settlement_invalid','Quota settlement values are invalid.',409);
+        for($attempt=0;$attempt<5;$attempt++){
+            $r=RecordStore::get('quota',$quotaId);if(!$r||!isset($r['reservations'][$reservationId]))throw new Error('quota_reservation_missing','Quota reservation missing.',409);
+            $res=$r['reservations'][$reservationId];if(($res['status']??'')!=='reserved')return $r;
+            if($actualBytes>(int)$res['bytes']||$actualJobs>(int)$res['jobs'])throw new Error('quota_settlement_invalid','Quota settlement exceeds its reservation.',409);
+            $r['reserved_bytes']=max(0,(int)$r['reserved_bytes']-(int)$res['bytes']);$r['reserved_jobs']=max(0,(int)$r['reserved_jobs']-(int)$res['jobs']);
+            if($commit){$r['used_bytes']+=$actualBytes;$r['used_jobs']+=$actualJobs;$r['reservations'][$reservationId]['status']='committed';}else{$r['reservations'][$reservationId]['status']='released';}
+            $r['reservations'][$reservationId]['settled_at']=Utils::now();
+            try{return RecordStore::put('quota',$quotaId,$r,(int)$r['version']);}
+            catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+        }
+        throw new Error('quota_contention','Quota settlement could not converge safely.',409);
     }
     public static function scoreAbuse(string $domain,int $actor,int $score,string $reason): void {
-        Auth::assertActor($actor,'manage_options');$id=hash('sha256',Utils::key($domain,64).'|'.$actor.'|'.(int)floor(Utils::now()/86400));
-        $r=RecordStore::get('quota',$id)??['actor_id'=>$actor,'domain'=>Utils::key($domain,64),'window'=>(int)floor(Utils::now()/86400),'status'=>'active','reserved_bytes'=>0,'used_bytes'=>0,'reserved_jobs'=>0,'used_jobs'=>0,'abuse_score'=>0,'reservations'=>[]];
-        $r['abuse_score']=max(0,min(100000,(int)$r['abuse_score']+$score));$r['abuse_reasons'][]=['reason'=>Utils::key($reason,64),'score'=>$score,'at'=>Utils::now()];RecordStore::put('quota',$id,$r,(int)($r['version']??0));
+        Auth::assertActor($actor,'manage_options');$domain=Utils::key($domain,64);$id=hash('sha256',$domain.'|'.$actor.'|'.(int)floor(Utils::now()/86400));
+        for($attempt=0;$attempt<5;$attempt++){
+            $r=RecordStore::get('quota',$id)??['actor_id'=>$actor,'domain'=>$domain,'window'=>(int)floor(Utils::now()/86400),'status'=>'active','reserved_bytes'=>0,'used_bytes'=>0,'reserved_jobs'=>0,'used_jobs'=>0,'abuse_score'=>0,'reservations'=>[]];
+            $r['abuse_score']=max(0,min(100000,(int)$r['abuse_score']+$score));$r['abuse_reasons'][]=['reason'=>Utils::key($reason,64),'score'=>$score,'at'=>Utils::now()];
+            try{RecordStore::put('quota',$id,$r,(int)($r['version']??0));return;}catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+        }
+        throw new Error('quota_contention','Abuse-score update could not converge safely.',409);
     }
 }
 
 final class RateLimiter {
     public static function hit(string $bucket,string $subject,int $limit,int $windowSeconds): void {
         $bucket=Utils::key($bucket,48);$subject=Utils::text($subject,128);if($bucket===''||$subject===''||$limit<1||$limit>100000||$windowSeconds<1||$windowSeconds>86400)throw new Error('rate_limit_invalid','Rate-limit policy invalid.',500);
-        $id=hash('sha256',$bucket.'|'.$subject.'|'.(int)floor(Utils::now()/$windowSeconds));$r=RecordStore::get('rate',$id)??['actor_id'=>Auth::currentUser(),'bucket'=>$bucket,'count'=>0,'status'=>'active','expires_at'=>Utils::now()+$windowSeconds];
-        if((int)$r['count']>=$limit)throw new Error('rate_limited','Rate limit exceeded.',429);$r['count']++;RecordStore::put('rate',$id,$r,(int)($r['version']??0));
+        $id=hash('sha256',$bucket.'|'.$subject.'|'.(int)floor(Utils::now()/$windowSeconds));
+        for($attempt=0;$attempt<5;$attempt++){
+            $r=RecordStore::get('rate',$id)??['actor_id'=>Auth::currentUser(),'bucket'=>$bucket,'count'=>0,'status'=>'active','expires_at'=>Utils::now()+$windowSeconds];
+            if((int)$r['count']>=$limit)throw new Error('rate_limited','Rate limit exceeded.',429);$r['count']++;
+            try{RecordStore::put('rate',$id,$r,(int)($r['version']??0));return;}catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+        }
+        throw new Error('rate_limited','Rate-limit state is under contention; request denied safely.',429);
     }
 }
 
@@ -97,7 +116,7 @@ final class UploadService {
         $policy=Policy::normalize($rawPolicy,true);self::validateMetadata($metadata,$policy);$ownerType=self::ownerType((string)$metadata['owner_object']);$fingerprint=hash('sha256',Utils::canonicalJson(['actor'=>$actor,'metadata'=>Utils::redact($metadata),'policy_hash'=>$policy['policy_hash']]));$claim=Idempotency::claim('upload-create',$idempotencyKey,$fingerprint);
         if($claim['replay']){$row=RecordStore::get('upload',(string)$claim['record']['result_id'])??throw new Error('upload_replay_missing','Replayed upload missing.',500);if(!in_array(($row['status']??''),['uploading','paused'],true))throw new Error('upload_replay_state_invalid','Replayed upload is no longer resumable.',409);[$row,$credential]=self::issueCredential($row,min(86400,max(300,(int)($metadata['session_ttl_seconds']??3600))));$row=RecordStore::put('upload',(string)$row['id'],$row,(int)$row['version']);return $row+['upload_credential'=>$credential];}
         $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];$decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
-        $quota=QuotaService::reserve($policy['owner_domain'],$actor,(int)$metadata['size'],1,self::effectiveLimits($quotaLimits),['purpose'=>$policy['purpose'],'governed_exception_authorized'=>Utils::bool($decision['governed_exception_authorized']??false)]);
+        $decisionLimits=is_array($decision['quota_limits']??null)?(array)$decision['quota_limits']:[];$effectiveQuota=self::effectiveLimits(array_replace($quotaLimits,$decisionLimits));$quota=QuotaService::reserve($policy['owner_domain'],$actor,(int)$metadata['size'],1,$effectiveQuota,['purpose'=>$policy['purpose'],'governed_exception_authorized'=>Utils::bool($decision['governed_exception_authorized']??false)]);
         $id=Utils::id('upl');$row=['actor_id'=>$actor,'upload_id'=>$id,'owner_domain'=>$policy['owner_domain'],'owner_object'=>Utils::text((string)$metadata['owner_object'],191),'owner_type'=>$ownerType,'object_version'=>(int)$decision['object_version'],'declared_name'=>Utils::filename((string)$metadata['name']),'declared_mime'=>strtolower((string)$metadata['mime']),'expected_size'=>(int)$metadata['size'],'expected_sha256'=>strtolower((string)$metadata['sha256']),'media_class'=>$policy['media_class'],'policy'=>$policy,'policy_hash'=>$policy['policy_hash'],'quota'=>$quota,'received_size'=>0,'received_parts'=>0,'status'=>'uploading','created_at'=>Utils::now()];[$row,$credential]=self::issueCredential($row,min(86400,max(300,(int)($metadata['session_ttl_seconds']??3600))));
         try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}
         catch(\Throwable $e){QuotaService::settle($quota['quota_id'],$quota['reservation_id'],false);Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
@@ -154,15 +173,24 @@ final class UploadService {
 
     public static function cleanupExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['expired'=>0,'parts_purged'=>0,'failed'=>0];
-        foreach(RecordStore::all('upload',0,null,100000) as $upload){
+        foreach(RecordStore::all('upload',0,null,100000) as $snapshot){
             if($result['expired']+$result['failed']>=$limit)break;
-            if(!in_array(($upload['status']??''),['uploading','paused'],true)||(int)($upload['expires_at']??0)>$now)continue;
+            $state=(string)($snapshot['status']??'');if(!in_array($state,['uploading','paused','expiring'],true))continue;if($state!=='expiring'&&(int)($snapshot['expires_at']??0)>$now)continue;
             try{
+                $upload=RecordStore::get('upload',(string)$snapshot['id'])??$snapshot;$state=(string)($upload['status']??'');
+                if(!in_array($state,['uploading','paused','expiring'],true))continue;
+                if($state!=='expiring'){
+                    if((int)($upload['expires_at']??0)>$now)continue;
+                    $upload['status']='expiring';$upload['expiry_started_at']=$upload['expiry_started_at']??$now;$upload['credential_hash']='';
+                    try{$upload=RecordStore::put('upload',(string)$upload['id'],$upload,(int)$upload['version']);}
+                    catch(Error $race){if($race->errorCode==='record_version_conflict')continue;throw $race;}
+                }
                 $parts=PartStore::list((string)$upload['id']);PartStore::purge((string)$upload['id']);
-                $upload['status']='expired';$upload['expired_at']=$now;$upload['credential_hash']='';$upload=RecordStore::put('upload',(string)$upload['id'],$upload,(int)$upload['version']);
                 if(isset($upload['quota']['quota_id'],$upload['quota']['reservation_id']))QuotaService::settle((string)$upload['quota']['quota_id'],(string)$upload['quota']['reservation_id'],false);
+                $fresh=RecordStore::get('upload',(string)$upload['id'])??$upload;if(($fresh['status']??'')!=='expiring')continue;
+                $fresh['status']='expired';$fresh['expired_at']=$now;unset($fresh['expiry_started_at']);$fresh=RecordStore::put('upload',(string)$fresh['id'],$fresh,(int)$fresh['version']);
                 $result['expired']++;$result['parts_purged']+=count($parts);
-            }catch(\Throwable $exception){$result['failed']++;try{Observability::alert('warning','upload_cleanup_failed',['upload_id'=>$upload['id']??'','exception'=>get_class($exception)]);}catch(\Throwable){}}
+            }catch(\Throwable $exception){$result['failed']++;try{Observability::alert('warning','upload_cleanup_failed',['upload_id'=>$snapshot['id']??'','exception'=>get_class($exception)]);}catch(\Throwable){}}
         }
         return $result;
     }
