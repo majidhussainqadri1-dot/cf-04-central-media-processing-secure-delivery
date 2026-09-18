@@ -216,25 +216,161 @@ final class SensitiveDataProtectionService {
 }
 
 final class DeliveryResilienceService {
-    public static function routeCdn(string $assetId,array $candidates): array {$asset=Future40Registry::asset($assetId,true);if($asset['privacy_class']!=='C0')throw new Error('multi_cdn_public_only','Multi-CDN public routing is limited to C0 assets.',403);$approved=[];foreach($candidates as $c){$id=Utils::key((string)($c['id']??''),64);if($id===''||($c['approved']??false)!==true)continue;$approved[]=['id'=>$id,'healthy'=>($c['healthy']??false)===true,'priority'=>(int)($c['priority']??100),'region'=>Utils::key((string)($c['region']??''),32)];}usort($approved,fn($a,$b)=>$a['priority']<=>$b['priority']);foreach($approved as $c)if($c['healthy'])return ['status'=>'routed','provider'=>$c['id'],'region'=>$c['region'],'failover_candidates'=>count($approved)-1];throw new Error('cdn_unavailable','No healthy approved CDN is available.',503);}
-    public static function originShield(string $assetId,array $input): array {$asset=Future40Registry::asset($assetId,true);if($asset['privacy_class']!=='C0')throw new Error('origin_shield_public_only','Shared origin shield is restricted to C0 assets.',403);$ttl=max(0,min(86400,(int)($input['ttl_seconds']??0)));return ['asset_id'=>$assetId,'enabled'=>$ttl>0,'ttl_seconds'=>$ttl,'request_collapsing'=>Utils::bool($input['request_collapsing']??true),'prewarm'=>Utils::bool($input['prewarm']??false),'cache_key_hash'=>hash('sha256',$asset['sha256'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash'])];}
-    public static function edgeAuthorization(string $assetId,array $input): array {$asset=Future40Registry::asset($assetId,true);if($asset['privacy_class']==='C0')throw new Error('edge_auth_not_required','Public C0 assets do not require restricted edge authorization.',400);$ttl=max(1,min(900,(int)($input['ttl_seconds']??120)));return ['asset_id'=>$assetId,'mode'=>'edge_verify_origin_authoritative','ttl_seconds'=>$ttl,'claims'=>['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];}
-    public static function adaptiveUpload(array $network,array $bounds): array {$rtt=max(0,(int)($network['rtt_ms']??0));$down=max(0.0,(float)($network['mbps']??0));$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));$part=$unstable||$rtt>400||$down<2?min($maxPart,1048576):($down<10?min($maxPart,4194304):min($maxPart,16777216));$parallel=$unstable?1:($down>=20?4:2);return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,'retry'=>'exponential-jitter','checkpoint_each_part'=>true];}
-    public static function offlineGrant(string $assetId,int $actor,int $ttlSeconds): array {RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);if($asset['privacy_class']==='C0')throw new Error('offline_package_unnecessary','Use normal public delivery for C0 assets.',400);RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);$ttl=max(60,min(604800,$ttlSeconds));$token=Crypto::sign(['type'=>'offline_package','asset_id'=>$assetId,'actor_id'=>$actor,'purpose'=>$asset['policy']['purpose'],'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'object_version'=>$asset['object_version']],$ttl);$id=Utils::id('offline');RecordStore::put('offline_package_grant',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'token_hash'=>hash('sha256',$token),'expires_at'=>Utils::now()+$ttl,'created_at'=>Utils::now()]);return ['grant_id'=>$id,'token'=>$token,'expires_at'=>Utils::now()+$ttl,'encrypted'=>true];}
-    public static function resumeDownload(string $assetId,int $actor,array $state): array {RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);$offset=max(0,(int)($state['offset']??0));if($offset>(int)$asset['size'])throw new Error('download_offset_invalid','Download resume offset exceeds asset size.',416);$id=hash('sha256',$actor.'|'.$assetId);$existing=RecordStore::get('download_resume',$id);$row=RecordStore::put('download_resume',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'offset'=>$offset,'device_hash'=>Utils::hashReference((string)($state['device_id']??'unknown')),'reauthorize'=>true,'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);return $row;}
+    public static function routeCdn(string $assetId,array $candidates): array {
+        $asset=Future40Registry::asset($assetId,true);
+        if($asset['privacy_class']!=='C0')throw new Error('multi_cdn_public_only','Multi-CDN public routing is limited to C0 assets.',403);
+        $approved=[];
+        foreach($candidates as $c){
+            $id=Utils::key((string)($c['id']??''),64);
+            if($id===''||($c['approved']??false)!==true)continue;
+            $region=strtoupper(Utils::text((string)($c['region']??''),16));
+            if(ResidencyCryptoService::hasPolicy($assetId)){
+                try{ResidencyCryptoService::assertRegion($assetId,$region);}
+                catch(Error){continue;}
+            }
+            $approved[]=['id'=>$id,'healthy'=>($c['healthy']??false)===true,'priority'=>(int)($c['priority']??100),'region'=>$region];
+        }
+        usort($approved,fn($a,$b)=>$a['priority']<=>$b['priority']);
+        foreach($approved as $c)if($c['healthy'])return ['status'=>'routed','provider'=>$c['id'],'region'=>$c['region'],'failover_candidates'=>count($approved)-1];
+        throw new Error('cdn_unavailable','No healthy approved CDN is available.',503);
+    }
+    public static function originShield(string $assetId,array $input): array {
+        $asset=Future40Registry::asset($assetId,true);
+        if($asset['privacy_class']!=='C0')throw new Error('origin_shield_public_only','Shared origin shield is restricted to C0 assets.',403);
+        $ttl=max(0,min(86400,(int)($input['ttl_seconds']??0)));
+        return ['asset_id'=>$assetId,'enabled'=>$ttl>0,'ttl_seconds'=>$ttl,'request_collapsing'=>Utils::bool($input['request_collapsing']??true),'prewarm'=>Utils::bool($input['prewarm']??false),'cache_key_hash'=>hash('sha256',$asset['sha256'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash'])];
+    }
+    public static function edgeAuthorization(string $assetId,array $input): array {
+        $asset=Future40Registry::asset($assetId,true);
+        if($asset['privacy_class']==='C0')throw new Error('edge_auth_not_required','Public C0 assets do not require restricted edge authorization.',400);
+        $ttl=max(1,min(900,(int)($input['ttl_seconds']??120)));
+        return ['asset_id'=>$assetId,'mode'=>'edge_verify_origin_authoritative','ttl_seconds'=>$ttl,'claims'=>['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];
+    }
+    public static function adaptiveUpload(array $network,array $bounds): array {
+        $rtt=max(0,(int)($network['rtt_ms']??0));$down=max(0.0,(float)($network['mbps']??0));$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));
+        $part=$unstable||$rtt>400||$down<2?min($maxPart,1048576):($down<10?min($maxPart,4194304):min($maxPart,16777216));$parallel=$unstable?1:($down>=20?4:2);
+        return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,'retry'=>'exponential-jitter','checkpoint_each_part'=>true];
+    }
+    public static function offlineGrant(string $assetId,int $actor,int $ttlSeconds): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);
+        if($asset['privacy_class']==='C0')throw new Error('offline_package_unnecessary','Use normal public delivery for C0 assets.',400);
+        RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package','context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Offline-package authorization is stale.',409);
+        $ttl=max(60,min(86400,$ttlSeconds));$id=Utils::id('offline');$kid=Keyring::activeId();
+        $claims=['type'=>'offline_package','grant_id'=>$id,'asset_id'=>$assetId,'actor_id'=>$actor,'purpose'=>$asset['policy']['purpose'],'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'object_version'=>$asset['object_version']];
+        $aad='offline-package|'.$id.'|'.$actor;
+        $envelope=Crypto::encryptChunk(Utils::canonicalJson($claims),$aad,$kid);
+        $token=Crypto::sign(['type'=>'offline_package_envelope','grant_id'=>$id,'encryption_kid'=>$kid,'envelope'=>$envelope],$ttl);
+        $expires=Utils::now()+$ttl;
+        RecordStore::put('offline_package_grant',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'object_version'=>$asset['object_version'],'token_hash'=>hash('sha256',$token),'encryption_kid'=>$kid,'expires_at'=>$expires,'created_at'=>Utils::now()],0);
+        return ['grant_id'=>$id,'token'=>$token,'expires_at'=>$expires,'encrypted'=>true];
+    }
+    public static function verifyOfflineGrant(string $token,int $actor): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor);$outer=Crypto::verify($token);
+        Utils::requireFields($outer,['type','grant_id','encryption_kid','envelope'],'offline_grant_invalid');
+        if($outer['type']!=='offline_package_envelope')throw new Error('offline_grant_invalid','Offline grant type is invalid.',403);
+        $id=Utils::text((string)$outer['grant_id'],96);$record=RecordStore::get('offline_package_grant',$id);
+        if(!$record||($record['status']??'')!=='active'||(int)($record['expires_at']??0)<=Utils::now())throw new Error('offline_grant_unavailable','Offline grant is unavailable or expired.',403);
+        if((int)$record['actor_id']!==$actor||!hash_equals((string)$record['token_hash'],hash('sha256',$token)))throw new Error('offline_grant_binding_mismatch','Offline grant binding mismatch.',403);
+        $kid=Utils::key((string)$outer['encryption_kid'],64);
+        if($kid===''||!hash_equals((string)$record['encryption_kid'],$kid))throw new Error('offline_grant_binding_mismatch','Offline grant key binding mismatch.',403);
+        try{
+            $plain=Crypto::decryptChunk((array)$outer['envelope'],'offline-package|'.$id.'|'.$actor,$kid);
+            $claims=json_decode($plain,true,32,JSON_THROW_ON_ERROR);
+        }catch(Error $e){throw $e;}catch(\Throwable){throw new Error('offline_grant_invalid','Offline grant envelope is invalid.',403);}
+        if(!is_array($claims))throw new Error('offline_grant_invalid','Offline grant claims are invalid.',403);
+        Utils::requireFields($claims,['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'offline_grant_invalid');
+        if((int)$claims['actor_id']!==$actor)throw new Error('offline_grant_binding_mismatch','Offline grant actor mismatch.',403);
+        $asset=Future40Registry::asset((string)$claims['asset_id'],true);
+        if(!hash_equals((string)$claims['purpose'],(string)$asset['policy']['purpose'])||!hash_equals((string)$claims['privacy_class'],(string)$asset['privacy_class'])||!hash_equals((string)$claims['policy_hash'],(string)$asset['policy_hash']))throw new Error('offline_grant_state_changed','Offline grant asset state changed.',403);
+        if((int)$claims['object_version']!==(int)$asset['object_version']||!hash_equals((string)$claims['rights_hash'],(string)$asset['rights']['policy_hash'])||(int)$record['object_version']!==(int)$asset['object_version'])throw new Error('offline_grant_state_changed','Offline grant owner/rights version changed.',403);
+        RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package_consume','context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Offline grant authorization is stale.',409);
+        return $claims;
+    }
+    public static function resumeDownload(string $assetId,int $actor,array $state): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);$offset=max(0,(int)($state['offset']??0));
+        if($offset>(int)$asset['size'])throw new Error('download_offset_invalid','Download resume offset exceeds asset size.',416);
+        $device=Utils::text((string)($state['device_id']??''),191);
+        if($device==='')throw new Error('download_resume_device_required','A device reference is required for resumable download.',400);
+        $id=hash('sha256',$actor.'|'.$assetId);$existing=RecordStore::get('download_resume',$id);
+        return RecordStore::put('download_resume',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'offset'=>$offset,'device_hash'=>Utils::hashReference($device),'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'reauthorize'=>true,'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+    }
+    public static function resumeGrant(string $assetId,int $actor,string $sessionId,string $deviceId,array $context=[]): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor);$sessionId=Utils::text($sessionId,128);$deviceId=Utils::text($deviceId,191);
+        if($sessionId===''||$deviceId==='')throw new Error('download_resume_context_required','Session and device identity are required.',400);
+        $state=RecordStore::get('download_resume',hash('sha256',$actor.'|'.$assetId));
+        if(!$state||($state['status']??'')!=='active'||(int)$state['actor_id']!==$actor||!hash_equals((string)$state['device_hash'],Utils::hashReference($deviceId)))throw new Error('download_resume_state_invalid','Resumable download state is unavailable for this device.',403);
+        $asset=Future40Registry::asset($assetId,true);
+        if((int)($state['object_version']??0)!==(int)$asset['object_version']||!hash_equals((string)($state['policy_hash']??''),(string)$asset['policy_hash'])||!hash_equals((string)($state['rights_hash']??''),(string)$asset['rights']['policy_hash']))throw new Error('download_resume_state_stale','Resumable download state is stale.',409);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'resume','offset'=>(int)$state['offset'],'device_hash'=>$state['device_hash'],'session_id'=>$sessionId,'context'=>Utils::redact($context)]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Resume authorization is stale.',409);
+        $audience=['type'=>'user','user_id'=>$actor];$deliveryContext=array_replace($context,['audience_type'=>'user','territory'=>$context['territory']??'GLOBAL']);
+        $token=DeliveryService::issue($assetId,null,$actor,'future40-resume',$audience,$deliveryContext,'download',['allow_ranges'=>true,'max_range_bytes'=>(int)$asset['policy']['delivery']['max_range_bytes']],$sessionId,300,20);
+        return ['asset_id'=>$assetId,'offset'=>(int)$state['offset'],'token'=>$token,'session_id'=>$sessionId,'device_hash'=>$state['device_hash'],'reauthorized'=>true];
+    }
 }
 
 final class ResidencyCryptoService {
-    public static function residency(string $assetId,int $actor,array $regions): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);$regions=array_values(array_unique(array_filter(array_map(fn($v)=>strtoupper(Utils::text((string)$v,16)),$regions))));if($regions===[])throw new Error('residency_regions_required','At least one approved residency region is required.',400);$id=hash('sha256',$assetId);return RecordStore::put('residency_policy',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'privacy_class'=>$asset['privacy_class'],'allowed_regions'=>$regions,'enforcement'=>'fail_closed','created_at'=>Utils::now()]);}
-    public static function assertRegion(string $assetId,string $region): void {$policy=RecordStore::get('residency_policy',hash('sha256',$assetId));if(!$policy)return;$region=strtoupper(Utils::text($region,16));if(!in_array($region,(array)$policy['allowed_regions'],true))throw new Error('residency_region_denied','Storage/delivery region violates residency policy.',403,['region'=>$region]);}
-    public static function objectLock(string $assetId,int $actor,int $until,string $reason): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_hold');Future40Registry::asset($assetId);if($until<=Utils::now()||Utils::text($reason,255)==='')throw new Error('object_lock_invalid','Object-lock expiry and reason are required.',400);return RecordStore::put('object_lock',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>'locked','asset_id'=>$assetId,'locked_until'=>$until,'reason'=>Utils::text($reason,255),'mode'=>'compliance','created_at'=>Utils::now()]);}
-    public static function keyEnvelope(string $assetId,int $actor,string $keyId,string $algorithm='aes-256-gcm'): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);$keyId=Utils::key($keyId,64);$algorithm=Utils::key($algorithm,32);if($keyId===''||$algorithm==='')throw new Error('asset_key_envelope_invalid','Key identity/algorithm are required.',400);Keyring::key($keyId);$id=hash('sha256',$assetId);return RecordStore::put('asset_key_envelope',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'key_id'=>$keyId,'algorithm'=>$algorithm,'asset_sha256'=>$asset['sha256'],'rotatable'=>true,'created_at'=>Utils::now()]);}
-    public static function cryptoAgility(int $actor,array $policy): array {Auth::assertActor($actor,'media_manage_providers');Utils::requireFields($policy,['approved_algorithms','minimum_key_bits','migration_window_seconds'],'crypto_policy_incomplete');$alg=array_values(array_unique(array_map(fn($v)=>Utils::key((string)$v,32),(array)$policy['approved_algorithms'])));if($alg===[]||(int)$policy['minimum_key_bits']<128||(int)$policy['migration_window_seconds']<3600)throw new Error('crypto_policy_invalid','Crypto-agility policy is invalid.',400);$id='global';$existing=RecordStore::get('crypto_agility',$id);return RecordStore::put('crypto_agility',$id,['actor_id'=>$actor,'status'=>'active','approved_algorithms'=>$alg,'minimum_key_bits'=>(int)$policy['minimum_key_bits'],'migration_window_seconds'=>(int)$policy['migration_window_seconds'],'required_test_vector'=>true,'created_at'=>$existing?($existing['created_at']??Utils::now()):Utils::now()],$existing?(int)$existing['version']:0);}
+    private static function policy(string $assetId): ?array {return RecordStore::get('residency_policy',hash('sha256',$assetId));}
+    public static function hasPolicy(string $assetId): bool {return self::policy($assetId)!==null;}
+    public static function residency(string $assetId,int $actor,array $regions): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);
+        $regions=array_values(array_unique(array_filter(array_map(fn($v)=>strtoupper(Utils::text((string)$v,16)),$regions))));
+        if($regions===[])throw new Error('residency_regions_required','At least one approved residency region is required.',400);
+        $providerIds=[];$sourceProvider=Utils::key((string)($asset['storage']['provider_id']??''),64);if($sourceProvider!=='')$providerIds[$sourceProvider]=true;
+        foreach(DerivativeService::forAsset($assetId) as $derivative){if(($derivative['status']??'')==='deleted')continue;$pid=Utils::key((string)($derivative['storage']['provider_id']??''),64);if($pid!=='')$providerIds[$pid]=true;}
+        foreach(array_keys($providerIds) as $providerId){$region=strtoupper(Utils::text((string)(ProviderRegistry::metadata($providerId)['region']??''),16));if($region===''||!in_array($region,$regions,true))throw new Error('residency_current_placement_denied','Existing asset placement is outside the requested residency policy.',409,['provider'=>$providerId,'region'=>$region]);}
+        $id=hash('sha256',$assetId);$existing=RecordStore::get('residency_policy',$id);
+        $row=RecordStore::put('residency_policy',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'privacy_class'=>$asset['privacy_class'],'allowed_regions'=>$regions,'enforcement'=>'fail_closed','created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+        Audit::record('future40_residency_policy_set',['asset_id'=>$assetId,'regions'=>$regions,'actor_id'=>$actor]);return $row;
+    }
+    public static function assertRegion(string $assetId,string $region): void {
+        $policy=self::policy($assetId);if(!$policy)return;$region=strtoupper(Utils::text($region,16));
+        if($region===''||!in_array($region,(array)$policy['allowed_regions'],true))throw new Error('residency_region_denied','Storage/delivery region violates residency policy.',403,['region'=>$region]);
+    }
+    public static function assertProviderRegion(string $assetId,string $providerId): void {
+        $policy=self::policy($assetId);if(!$policy)return;$providerId=Utils::key($providerId,64);
+        if($providerId==='')throw new Error('residency_provider_unknown','Residency-controlled operation has no provider identity.',503);
+        $region=(string)(ProviderRegistry::metadata($providerId)['region']??'');self::assertRegion($assetId,$region);
+    }
+    public static function assertPublicCdnAllowed(string $assetId): void {
+        if(self::hasPolicy($assetId))throw new Error('residency_cdn_region_unverified','Public CDN publication is denied while CDN residency is not provider-attested.',503);
+    }
+    public static function isLocked(string $assetId): bool {
+        $lock=RecordStore::get('object_lock',hash('sha256',$assetId));
+        return (bool)($lock&&($lock['status']??'')==='locked'&&(int)($lock['locked_until']??0)>Utils::now());
+    }
+    public static function assertUnlocked(string $assetId,string $operation): void {
+        if(self::isLocked($assetId)){$lock=RecordStore::get('object_lock',hash('sha256',$assetId));throw new Error('object_lock_active','Physical mutation is blocked by active WORM/object lock.',423,['operation'=>Utils::key($operation,64),'locked_until'=>(int)($lock['locked_until']??0)]);}
+    }
+    public static function objectLock(string $assetId,int $actor,int $until,string $reason): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_hold');$asset=Future40Registry::asset($assetId);$reason=Utils::text($reason,255);
+        if($until<=Utils::now()||$reason==='')throw new Error('object_lock_invalid','Object-lock expiry and reason are required.',400);
+        $id=hash('sha256',$assetId);$existing=RecordStore::get('object_lock',$id);
+        if($existing&&($existing['status']??'')==='locked'&&(int)($existing['locked_until']??0)>Utils::now()&&$until<(int)$existing['locked_until'])throw new Error('object_lock_reduction_denied','An active compliance lock cannot be shortened.',409);
+        $until=max($until,(int)($existing['locked_until']??0));$holds=LegalHoldService::active($assetId);
+        $row=RecordStore::put('object_lock',$id,['actor_id'=>$actor,'status'=>'locked','asset_id'=>$assetId,'locked_until'=>$until,'reason'=>$reason,'mode'=>'compliance','retention_class'=>(string)($asset['policy']['retention']['class']??''),'legal_hold_ids'=>array_values(array_map('strval',array_column($holds,'id'))),'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+        Audit::record('future40_object_lock_set',['asset_id'=>$assetId,'actor_id'=>$actor,'locked_until'=>$until,'retention_class'=>$row['retention_class'],'legal_hold_count'=>count($row['legal_hold_ids'])]);return $row;
+    }
+    public static function keyEnvelope(string $assetId,int $actor,string $keyId,string $algorithm='aes-256-gcm'): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);$keyId=Utils::key($keyId,64);$algorithm=Utils::key($algorithm,32);
+        if($keyId===''||$algorithm==='')throw new Error('asset_key_envelope_invalid','Key identity/algorithm are required.',400);Keyring::key($keyId);
+        $id=hash('sha256',$assetId);$existing=RecordStore::get('asset_key_envelope',$id);
+        return RecordStore::put('asset_key_envelope',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'key_id'=>$keyId,'algorithm'=>$algorithm,'asset_sha256'=>$asset['sha256'],'rotatable'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+    }
+    public static function cryptoAgility(int $actor,array $policy): array {
+        Auth::assertActor($actor,'media_manage_providers');Utils::requireFields($policy,['approved_algorithms','minimum_key_bits','migration_window_seconds'],'crypto_policy_incomplete');$alg=array_values(array_unique(array_map(fn($v)=>Utils::key((string)$v,32),(array)$policy['approved_algorithms'])));
+        if($alg===[]||(int)$policy['minimum_key_bits']<128||(int)$policy['migration_window_seconds']<3600)throw new Error('crypto_policy_invalid','Crypto-agility policy is invalid.',400);
+        $id='global';$existing=RecordStore::get('crypto_agility',$id);return RecordStore::put('crypto_agility',$id,['actor_id'=>$actor,'status'=>'active','approved_algorithms'=>$alg,'minimum_key_bits'=>(int)$policy['minimum_key_bits'],'migration_window_seconds'=>(int)$policy['migration_window_seconds'],'required_test_vector'=>true,'created_at'=>$existing?($existing['created_at']??Utils::now()):Utils::now()],$existing?(int)$existing['version']:0);
+    }
 }
 
 final class DisasterCostRoutingService {
-    public static function disasterPlan(string $assetId,int $actor,array $input): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId,true);Utils::requireFields($input,['primary_region','secondary_region','rpo_seconds','rto_seconds'],'dr_plan_incomplete');$primary=strtoupper(Utils::text((string)$input['primary_region'],16));$secondary=strtoupper(Utils::text((string)$input['secondary_region'],16));if($primary===$secondary)throw new Error('dr_regions_invalid','Primary and secondary regions must differ.',400);ResidencyCryptoService::assertRegion($assetId,$primary);ResidencyCryptoService::assertRegion($assetId,$secondary);return RecordStore::put('disaster_plan',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,'primary_region'=>$primary,'secondary_region'=>$secondary,'rpo_seconds'=>max(0,(int)$input['rpo_seconds']),'rto_seconds'=>max(0,(int)$input['rto_seconds']),'integrity_hash'=>$asset['sha256'],'failback_required'=>true,'created_at'=>Utils::now()]);}
-    public static function optimizeTier(string $assetId,array $metrics): array {$asset=Future40Registry::asset($assetId,true);$access=max(0,(int)($metrics['accesses_30d']??0));$age=max(0,(int)($metrics['age_days']??0));$hold=RecordStore::get('object_lock',hash('sha256',$assetId));$tier=$hold&&($hold['status']??'')==='locked'?'archive_locked':($access>100?'hot':($access>10?'warm':($age>180?'archive':'cold')));return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>!str_starts_with($tier,'archive_locked'),'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'hold'=>$hold!==null]];}
+    public static function disasterPlan(string $assetId,int $actor,array $input): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId,true);Utils::requireFields($input,['primary_region','secondary_region','rpo_seconds','rto_seconds'],'dr_plan_incomplete');$primary=strtoupper(Utils::text((string)$input['primary_region'],16));$secondary=strtoupper(Utils::text((string)$input['secondary_region'],16));if($primary===$secondary)throw new Error('dr_regions_invalid','Primary and secondary regions must differ.',400);ResidencyCryptoService::assertRegion($assetId,$primary);ResidencyCryptoService::assertRegion($assetId,$secondary);$id=hash('sha256',$assetId);$existing=RecordStore::get('disaster_plan',$id);return RecordStore::put('disaster_plan',$id,['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,'primary_region'=>$primary,'secondary_region'=>$secondary,'rpo_seconds'=>max(0,(int)$input['rpo_seconds']),'rto_seconds'=>max(0,(int)$input['rto_seconds']),'integrity_hash'=>$asset['sha256'],'failback_required'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);}
+    public static function optimizeTier(string $assetId,array $metrics): array {$asset=Future40Registry::asset($assetId,true);$access=max(0,(int)($metrics['accesses_30d']??0));$age=max(0,(int)($metrics['age_days']??0));$hold=ResidencyCryptoService::isLocked($assetId);$tier=$hold?'archive_locked':($access>100?'hot':($access>10?'warm':($age>180?'archive':'cold')));return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>!str_starts_with($tier,'archive_locked'),'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'hold'=>$hold]];}
     public static function costEstimate(string $assetId,array $prices,array $plan): array {$asset=Future40Registry::asset($assetId);foreach(['storage_gb_month','transcode_minute','egress_gb'] as $p)if(!isset($prices[$p])||(float)$prices[$p]<0)throw new Error('cost_price_invalid','Cost price table is incomplete.',400,['price'=>$p]);$gb=max(0.000001,(int)$asset['size']/1073741824);$minutes=max(0.0,(float)($plan['minutes']??0));$egress=max(0.0,(float)($plan['egress_gb']??$gb));$cost=$gb*(float)$prices['storage_gb_month']+$minutes*(float)$prices['transcode_minute']+$egress*(float)$prices['egress_gb'];return ['asset_id'=>$assetId,'currency'=>Utils::key((string)($prices['currency']??'usd'),8),'estimated_cost'=>round($cost,6),'components'=>['storage_gb'=>$gb,'minutes'=>$minutes,'egress_gb'=>$egress],'estimate_only'=>true];}
     public static function autoRoute(array $providers,array $requirements): array {$eligible=[];foreach($providers as $p){if(($p['approved']??false)!==true||($p['healthy']??false)!==true)continue;$caps=(array)($p['capabilities']??[]);$missing=array_diff((array)($requirements['capabilities']??[]),$caps);if($missing!==[])continue;$region=strtoupper(Utils::text((string)($p['region']??''),16));if(isset($requirements['regions'])&&!in_array($region,(array)$requirements['regions'],true))continue;$eligible[]=['id'=>Utils::key((string)($p['id']??''),64),'region'=>$region,'cost'=>(float)($p['cost_score']??PHP_FLOAT_MAX),'latency'=>(float)($p['latency_score']??PHP_FLOAT_MAX)];}if($eligible===[])throw new Error('approved_provider_unavailable','No approved provider satisfies the routing requirements.',503);usort($eligible,fn($a,$b)=>($a['cost']+$a['latency'])<=>($b['cost']+$b['latency']));return ['provider'=>$eligible[0]['id'],'region'=>$eligible[0]['region'],'eligible_count'=>count($eligible),'decision'=>'approved_health_capability_cost_route'];}
 }
