@@ -5,7 +5,7 @@ require __DIR__.'/bootstrap.php';
 use Sabri\CentralMedia\{
     ContentSafetyUpgradeService,DeliveryResilienceService,DisasterCostRoutingService,Future40Registry,FutureAdapterRegistry,
     MediaOptimizationService,OperationsFutureService,PerceptualMediaService,ProvenanceCredentialService,RecordStore,
-    ResidencyCryptoService,RichMediaMetadataService,SensitiveDataProtectionService,ProcessingService,UploadService,Utils
+    ResidencyCryptoService,RichMediaMetadataService,SensitiveDataProtectionService,ProcessingService,UploadService,DeletionService,Utils
 };
 
 function f40_asset(string $owner,string $privacy='C3',string $media='document'): array {
@@ -74,11 +74,11 @@ $route=DeliveryResilienceService::routeCdn($public['id'],[['id'=>'cdn-a','approv
 $shield=DeliveryResilienceService::originShield($public['id'],['ttl_seconds'=>600,'request_collapsing'=>true]);ok($shield['enabled']===true&&$shield['request_collapsing']===true,'CF04-FUT-024 origin shield/cache protection');
 $edge=DeliveryResilienceService::edgeAuthorization($private['id'],['ttl_seconds'=>120]);ok($edge['canonical_owner']==='file17'&&$edge['authorization_refresh_required']===true,'CF04-FUT-025 edge authorization without ownership transfer');
 $upload=DeliveryResilienceService::adaptiveUpload(['rtt_ms'=>550,'mbps'=>1.5,'unstable'=>true],['max_part_size_bytes'=>8388608]);ok($upload['parallel_parts']===1&&$upload['checkpoint_each_part']===true,'CF04-FUT-026 network-adaptive upload');
-$offline=DeliveryResilienceService::offlineGrant($private['id'],11,3600);ok($offline['encrypted']===true&&$offline['token']!=='','CF04-FUT-027 encrypted bounded offline grant');
-$resume=DeliveryResilienceService::resumeDownload($private['id'],11,['offset'=>10,'device_id'=>'device-a']);ok($resume['reauthorize']===true,'CF04-FUT-028 cross-session/device resumable download state');
+$offline=DeliveryResilienceService::offlineGrant($private['id'],11,3600);$offlineClaims=DeliveryResilienceService::verifyOfflineGrant($offline['token'],11);ok($offline['encrypted']===true&&$offline['token']!==''&&($offlineClaims['asset_id']??'')===$private['id'],'CF04-FUT-027 encrypted bounded offline grant with consume-time reauthorization');
+$resume=DeliveryResilienceService::resumeDownload($private['id'],11,['offset'=>10,'device_id'=>'device-a']);$resumeGrant=DeliveryResilienceService::resumeGrant($private['id'],11,'future-session-a','device-a',['territory'=>'GLOBAL']);ok($resume['reauthorize']===true&&$resumeGrant['reauthorized']===true&&$resumeGrant['offset']===10&&$resumeGrant['token']!=='','CF04-FUT-028 cross-session/device resume requires fresh session/device authorization');
 
-$residency=ResidencyCryptoService::residency($private['id'],11,['TEST-A','TEST-B']);ok(count($residency['allowed_regions'])===2,'CF04-FUT-029 regional residency pinning');
-$lock=ResidencyCryptoService::objectLock($private['id'],11,time()+86400,'legal hold');ok($lock['status']==='locked','CF04-FUT-030 WORM/object-lock evidence');
+$residency=ResidencyCryptoService::residency($private['id'],11,['TEST-A','TEST-B']);ResidencyCryptoService::assertProviderRegion($private['id'],'source-private');err(fn()=>ResidencyCryptoService::assertRegion($private['id'],'OTHER'),'residency_region_denied','CF04-FUT-029 unapproved region fails closed');ok(count($residency['allowed_regions'])===2,'CF04-FUT-029 regional residency pinning');
+$lock=ResidencyCryptoService::objectLock($private['id'],11,time()+86400,'legal hold');err(fn()=>ResidencyCryptoService::objectLock($private['id'],11,time()+3600,'shorten'),'object_lock_reduction_denied','CF04-FUT-030 active object lock cannot be shortened');$locked=f40_asset('message:future40-lock-delete','C3');ResidencyCryptoService::objectLock($locked['id'],11,time()+86400,'evidence retention');$lockedDeletion=DeletionService::request($locked['id'],11,'user-request');err(fn()=>DeletionService::process($lockedDeletion['id']),'object_lock_active','CF04-FUT-030 normal physical deletion cannot bypass WORM lock');ok($lock['status']==='locked','CF04-FUT-030 WORM/object-lock evidence');
 $key=ResidencyCryptoService::keyEnvelope($private['id'],11,'test-v1');ok($key['rotatable']===true,'CF04-FUT-031 per-asset envelope encryption key reference');
 $crypto=ResidencyCryptoService::cryptoAgility(11,['approved_algorithms'=>['aes-256-gcm','future-approved'],'minimum_key_bits'=>256,'migration_window_seconds'=>86400]);ok(in_array('aes-256-gcm',$crypto['approved_algorithms'],true),'CF04-FUT-032 crypto-agility policy');
 
