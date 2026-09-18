@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: cf04-sequential-review-fix
@@ -65,21 +66,27 @@ jobs:
             review-fix-diagnostics.log
           if-no-files-found: warn
           retention-days: 7
-      - name: Persist transformer failure diagnostic
+      - name: Persist review failure diagnostic
         if: failure()
         run: |
           set -euo pipefail
           mkdir -p docs/runtime/review-diagnostics
-          cp review-fix-apply.log docs/runtime/review-diagnostics/latest-transformer-failure.log || true
+          if [ -s review-fix-diagnostics.log ]; then
+            cp review-fix-diagnostics.log docs/runtime/review-diagnostics/latest-review-failure.log
+          else
+            cp review-fix-apply.log docs/runtime/review-diagnostics/latest-review-failure.log || true
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # Repository-wide *.log ignore must not suppress a failure-evidence record.
-          git add -f docs/runtime/review-diagnostics/latest-transformer-failure.log
+          # Repository-wide *.log ignore must not suppress failure evidence.
+          git add -f docs/runtime/review-diagnostics/latest-review-failure.log
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'CF-04: persist sequential review transformer diagnostic'
+          git commit -m 'CF-04: persist sequential review failure diagnostic'
           git push origin "HEAD:${GITHUB_REF_NAME}"
       - name: Commit corrected round
         if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -93,4 +100,7 @@ jobs:
           fi
           git diff --cached --check
           git commit -m "CF-04: apply completed sequential review corrections"
+          corrected_sha="$(git rev-parse HEAD)"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "Dispatching Runtime CI for exact corrected head: $corrected_sha"
+          gh workflow run runtime-ci.yml --ref "${GITHUB_REF_NAME}"
