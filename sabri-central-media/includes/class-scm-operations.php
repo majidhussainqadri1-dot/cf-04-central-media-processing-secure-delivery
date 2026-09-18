@@ -64,7 +64,7 @@ final class ProviderExitService {
 final class KeyRotationService {
     public static function rotateAll(int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
-    $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0];
+    $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0,'locked_old_objects_retained'=>0];
     $groups=[];
     foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'asset','record'=>$record];}
     foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'derivative','record'=>$record];}
@@ -84,10 +84,13 @@ final class KeyRotationService {
                 if(($record['object_key']??'')===$newKey&&($record['storage']['key_id']??'')===$active){$updated++;continue;}
                 if(($record['object_key']??'')!==$oldKey)throw new Error('key_rotation_mapping_stale','Object mapping changed during key rotation.',409);
                 $previousKeyId=$record['storage']['key_id']??null;$record['object_key']=$newKey;$record['storage']=$stored;$record['previous_key_id']=$previousKeyId;$record['rotated_at']=Utils::now();$record['rotation_id']=$runId;
-                RecordStore::put($entry['type'],(string)$record['id'],$record,(int)$record['version']);$updated++;$result['rotated']++;
+                $record=RecordStore::put($entry['type'],(string)$record['id'],$record,(int)$record['version']);if($entry['type']==='asset')self::syncAssetEnvelope($record,$active,$runId);$updated++;$result['rotated']++;
             }
             if($updated!==count($group))throw new Error('key_rotation_partial_mapping','Not all mappings were rotated.',500);
-            if($provider->exists($oldKey)&&!$provider->delete($oldKey))throw new Error('key_rotation_cleanup_failed','Old encrypted object could not be deleted.',503);
+            $remaining=self::liveReferences($providerId,$oldKey);
+            if($remaining!==[])throw new Error('key_rotation_reference_drift','A live reference still points to the old encrypted object.',409,['remaining_count'=>count($remaining)]);
+            $locked=false;foreach($group as $entry){$assetId=$entry['type']==='asset'?(string)$entry['record']['id']:(string)($entry['record']['asset_id']??'');if($assetId!==''&&ResidencyCryptoService::isLocked($assetId)){$locked=true;break;}}
+            if($locked){$result['locked_old_objects_retained']++;}elseif($provider->exists($oldKey)&&!$provider->delete($oldKey)&&$provider->exists($oldKey))throw new Error('key_rotation_cleanup_failed','Old encrypted object could not be deleted.',503);
             $result['groups']++;
             RecordStore::put('key_rotation_group',hash('sha256',$runId.'|'.$groupKey),['actor_id'=>$actor,'rotation_id'=>$runId,'group_hash'=>hash('sha256',$groupKey),'status'=>'completed','records'=>$updated,'completed_at'=>Utils::now()]);
         }catch(\Throwable $exception){
@@ -100,6 +103,17 @@ final class KeyRotationService {
     $run=RecordStore::get('key_rotation',$runId);if($run){$run['status']=$result['failed']===0?'completed':'completed_with_failures';$run['result']=$result;$run['completed_at']=Utils::now();RecordStore::put('key_rotation',$runId,$run,(int)$run['version']);}
     Audit::record('key_rotation_completed',$result+['actor_id'=>$actor]);return $result;
 }
+    private static function liveReferences(string $providerId,string $objectKey): array {
+        $refs=[];foreach(RecordStore::all('asset',0,null,100000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$providerId&&($record['object_key']??'')===$objectKey)$refs[]=['type'=>'asset','id'=>$record['id']??''];
+        foreach(RecordStore::all('derivative',0,null,200000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$providerId&&($record['object_key']??'')===$objectKey)$refs[]=['type'=>'derivative','id'=>$record['id']??''];
+        return $refs;
+    }
+    private static function syncAssetEnvelope(array $asset,string $activeKeyId,string $rotationId): void {
+        $id=hash('sha256',(string)$asset['id']);$envelope=RecordStore::get('asset_key_envelope',$id);if(!$envelope)return;
+        if(($envelope['asset_id']??'')!==$asset['id']||!hash_equals((string)($envelope['asset_sha256']??''),(string)$asset['sha256']))throw new Error('asset_key_envelope_stale','Per-asset encryption envelope does not match the rotated asset.',409);
+        $envelope['key_id']=$activeKeyId;$envelope['algorithm']='aes-256-gcm';$envelope['rotation_id']=$rotationId;$envelope['rotated_at']=Utils::now();$envelope['asset_sha256']=$asset['sha256'];
+        RecordStore::put('asset_key_envelope',$id,$envelope,(int)$envelope['version']);
+    }
 }
 
 final class CostService {
