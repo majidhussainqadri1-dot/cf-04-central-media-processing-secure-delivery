@@ -26,5 +26,8 @@ r71(str_contains($p,"throw new Error('record_write_failed','Persistent insert fa
 r71(str_contains($r,$inventory),'rights reconciliation discovers the complete explicitly bounded inventory rather than repeatedly reading only the newest page');
 r71(str_contains($r,$priority),'expired rights are prioritized ahead of non-expired records, preventing head-page starvation');
 r71(str_contains($r,$bounded),'reconciliation mutation/check work remains bounded by the caller limit');
-r71(!str_contains($r,"foreach(RecordStore::list('asset',0,null,$limit) as $asset)"),'starving head-page-only reconciliation pattern is absent');
+$legacy=<<<'PATTERN'
+foreach(RecordStore::list('asset',0,null,$limit) as $asset)
+PATTERN;
+r71(!str_contains($r,$legacy),'starving head-page-only reconciliation pattern is absent');
 echo "REVIEW ROUND 71 FINAL ADVERSARIAL: PASS\n";
