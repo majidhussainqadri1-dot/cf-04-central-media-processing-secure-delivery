@@ -357,7 +357,7 @@ final class ResidencyCryptoService {
     }
     public static function keyEnvelope(string $assetId,int $actor,string $keyId,string $algorithm='aes-256-gcm'): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);$keyId=Utils::key($keyId,64);$algorithm=Utils::key($algorithm,32);
-        if($keyId===''||$algorithm==='')throw new Error('asset_key_envelope_invalid','Key identity/algorithm are required.',400);Keyring::key($keyId);
+        if($keyId===''||$algorithm==='')throw new Error('asset_key_envelope_invalid','Key identity/algorithm are required.',400);Keyring::key($keyId);$actualKeyId=Utils::key((string)($asset['storage']['key_id']??''),64);if($actualKeyId===''||!hash_equals($actualKeyId,$keyId))throw new Error('asset_key_envelope_mismatch','Envelope key reference must match the asset current encrypted storage key.',409);if($algorithm!=='aes-256-gcm')throw new Error('asset_key_envelope_algorithm_mismatch','Envelope algorithm must match current encrypted storage format.',409);
         $id=hash('sha256',$assetId);$existing=RecordStore::get('asset_key_envelope',$id);
         return RecordStore::put('asset_key_envelope',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'key_id'=>$keyId,'algorithm'=>$algorithm,'asset_sha256'=>$asset['sha256'],'rotatable'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
     }
