@@ -2,100 +2,67 @@
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
-# Fresh Review Round 90 was fully completed before corrections began.
+# Fresh Review Round 91 was fully completed before corrections began.
 # Defect ledger:
-# 1) Provider-exit legal holds were checked only while the plan was created. A hold
-#    placed after planning could not stop later copy/switch/source-purge phases.
-# 2) Repair rollback changed canonical active derivatives without a fresh owner-domain
-#    reauthorization/object-version check.
-# 3) Repair rollback mutated current manifest, previous manifest, then asset without
-#    rollback/reconciliation protection, so a CAS/storage failure could split manifest
-#    state from the asset pointer.
-# 4) Restore serve authorization wrote the restore row before the gate. If the second
-#    write failed, retry was rejected because the restore was already serve_authorized,
-#    permanently stranding a reconciled-but-blocking gate.
+# 1) transfer asset binding did not bind the asset actor to the transfer sender and did
+#    not require the asset owner object_version to match the native transfer version.
+# 2) markReady had no allowed-state/expiry guard, so a revoked or expired transfer with
+#    a ready asset could be moved back to ready; its owner decision version was also not
+#    compared to canonical transfer/asset versions.
+# 3) recipient grant issuance revalidated parties/authorization but did not reject a
+#    stale owner object_version decision against the native transfer and bound asset.
+# 4) transfer revocation invoked owner authorization but did not reject a stale owner
+#    object_version decision before changing transfer state.
+# 5) download tasks were authorized when created, but grant issuance did not re-run the
+#    owner-domain authorize_download decision or bind the task's stored object_version
+#    to the current asset version at the actual grant action.
 
-p=ROOT/'sabri-central-media/includes/class-scm-operations.php'
+p=ROOT/'sabri-central-media/includes/class-scm-transfer.php'
 s=p.read_text()
 
-# Provider-exit: re-check holds at every consequential phase.
-old="try{foreach($plan['items'] as $index=>$item){if(in_array(($item['status']??''),['verified','switched','purged'],true))continue;$targetKey="
-new="try{foreach($plan['items'] as $index=>$item){if(in_array(($item['status']??''),['verified','switched','purged'],true))continue;$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');$targetKey="
-if old not in s and new not in s: raise SystemExit('round 90 provider copy hold anchor missing')
+old="""    public static function bindAsset(string $transferId,string $assetId,int $sender): array {Auth::assertActor($sender);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if((int)$transfer['sender_user_id']!==$sender||($transfer['status']??'')!=='pending_upload'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_state_denied','Transfer cannot bind asset.',403);$asset=RecordStore::get('asset',$assetId);if(!$asset||($asset['owner_domain']??'')!=='file17'||($asset['owner_object']??'')!==$transfer['native_transfer_id']||(int)$asset['size']!==(int)$transfer['expected_size']||($asset['policy_hash']??'')!==$transfer['policy_hash'])throw new Error('transfer_asset_mismatch','Asset does not match transfer.',409);$transfer['asset_id']=$assetId;$transfer['status']='processing';$transfer['bound_at']=Utils::now();return RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);}"""
+new="""    public static function bindAsset(string $transferId,string $assetId,int $sender): array {Auth::assertActor($sender);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if((int)$transfer['sender_user_id']!==$sender||($transfer['status']??'')!=='pending_upload'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_state_denied','Transfer cannot bind asset.',403);Auth::transferParties($transfer,'transfer_bind');$asset=RecordStore::get('asset',$assetId);if(!$asset||($asset['owner_domain']??'')!=='file17'||($asset['owner_object']??'')!==$transfer['native_transfer_id']||(int)$asset['size']!==(int)$transfer['expected_size']||($asset['policy_hash']??'')!==$transfer['policy_hash'])throw new Error('transfer_asset_mismatch','Asset does not match transfer.',409);if((int)($asset['actor_id']??0)!==$sender)throw new Error('transfer_asset_actor_mismatch','Transfer asset belongs to a different actor.',403);if((int)($asset['object_version']??0)!==(int)$transfer['native_transfer_version'])throw new Error('transfer_bind_version_stale','Transfer asset owner version does not match the native transfer.',409);$transfer['asset_id']=$assetId;$transfer['status']='processing';$transfer['bound_at']=Utils::now();return RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);}"""
+if old not in s and new not in s: raise SystemExit('round 91 bindAsset anchor missing')
 s=s.replace(old,new,1)
 
-old="try{foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='switched')continue;if(($item['status']??'')!=='verified')throw new Error('provider_exit_item_not_verified'"
-new="try{foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='switched')continue;if(($item['status']??'')!=='verified')throw new Error('provider_exit_item_not_verified','Provider exit item is not verified.',409,['id'=>$item['id']]);$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');$type=$item['type']==='asset'?'asset':'derivative';$record=RecordStore::get($type,(string)$item['id']);if(!$record)throw new Error('provider_exit_record_missing'"
-if old in s:
-    # this anchor intentionally replaces through the beginning of the record lookup;
-    # remove the duplicated tail from the original after replacement below.
-    tail="'Provider exit item is not verified.',409,['id'=>$item['id']]);$type=$item['type']==='asset'?'asset':'derivative';$record=RecordStore::get($type,(string)$item['id']);if(!$record)throw new Error('provider_exit_record_missing'"
-    start=s.find(old)
-    end=s.find(tail,start)
-    if end<0: raise SystemExit('round 90 provider switch tail missing')
-    end += len(tail)
-    s=s[:start]+new+s[end:]
-elif new not in s:
-    raise SystemExit('round 90 provider switch hold anchor missing')
-
-old="foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='purged')continue;if(($item['status']??'')!=='switched')throw new Error('provider_exit_item_not_switched','Provider exit item was not switched.',409,['id'=>$item['id']]);$type="
-new="foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='purged')continue;if(($item['status']??'')!=='switched')throw new Error('provider_exit_item_not_switched','Provider exit item was not switched.',409,['id'=>$item['id']]);$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');$type="
-if old not in s and new not in s: raise SystemExit('round 90 provider purge hold anchor missing')
+old="""    public static function markReady(string $transferId): array {$t=RecordStore::get('transfer',$transferId);if(!$t)throw new Error('transfer_not_found','Transfer not found.',404);$asset=RecordStore::get('asset',(string)($t['asset_id']??''));if(!$asset||($asset['status']??'')!=='ready')throw new Error('transfer_asset_not_ready','Transfer asset is not ready.',409);Auth::transferParties($t,'transfer_ready');$decision=DomainRegistry::decision('file17','authorize_transfer_ready',['transfer'=>$t,'asset'=>$asset]);foreach(['relationship_allowed','consent_valid','copyright_valid','confidentiality_allowed','abuse_policy_allowed','recipient_authorized'] as $flag)if(($decision[$flag]??false)!==true)throw new Error('transfer_policy_denied','Transfer revalidation failed.',403,['flag'=>$flag]);$t['status']='ready';$t['ready_at']=Utils::now();$t=RecordStore::put('transfer',(string)$t['id'],$t,(int)$t['version']);self::notify('transfer.ready',$t);return $t;}"""
+new="""    public static function markReady(string $transferId): array {$t=RecordStore::get('transfer',$transferId);if(!$t)throw new Error('transfer_not_found','Transfer not found.',404);if(($t['status']??'')!=='processing'||(int)($t['expires_at']??0)<=Utils::now())throw new Error('transfer_ready_state_denied','Only an active processing transfer can become ready.',409);$asset=RecordStore::get('asset',(string)($t['asset_id']??''));if(!$asset||($asset['status']??'')!=='ready')throw new Error('transfer_asset_not_ready','Transfer asset is not ready.',409);Auth::transferParties($t,'transfer_ready');$decision=DomainRegistry::decision('file17','authorize_transfer_ready',['transfer'=>$t,'asset'=>$asset]);if((int)$decision['object_version']!==(int)$t['native_transfer_version']||(int)$decision['object_version']!==(int)($asset['object_version']??0))throw new Error('transfer_ready_version_stale','Transfer readiness authorization is stale.',409);foreach(['relationship_allowed','consent_valid','copyright_valid','confidentiality_allowed','abuse_policy_allowed','recipient_authorized'] as $flag)if(($decision[$flag]??false)!==true)throw new Error('transfer_policy_denied','Transfer revalidation failed.',403,['flag'=>$flag]);$t['status']='ready';$t['ready_at']=Utils::now();$t=RecordStore::put('transfer',(string)$t['id'],$t,(int)$t['version']);self::notify('transfer.ready',$t);return $t;}"""
+if old not in s and new not in s: raise SystemExit('round 91 markReady anchor missing')
 s=s.replace(old,new,1)
 
-# Repair rollback: fresh owner authorization and recoverable manifest transition.
-old="""    $previous=RecordStore::get('manifest',(string)$repair['previous_manifest_id']);if(!$previous||($previous['asset_id']??'')!==$asset['id'])throw new Error('repair_rollback_manifest_missing','Previous manifest is unavailable.',409);
-    $current=!empty($asset['active_manifest_id'])?RecordStore::get('manifest',(string)$asset['active_manifest_id']):null;
-    if($current&&($current['status']??'')==='active'){$current['status']='rolled_back';$current['rolled_back_to']=$previous['id'];RecordStore::put('manifest',(string)$current['id'],$current,(int)$current['version']);}
-    $previous['status']='active';unset($previous['superseded_by']);RecordStore::put('manifest',(string)$previous['id'],$previous,(int)$previous['version']);
-    $asset['active_manifest_id']=$previous['id'];$asset['manifest_version']=max((int)$asset['manifest_version'],(int)$previous['manifest_version']);$asset['status']='ready';$asset['processing_status']='completed';unset($asset['reprocess_context']);
-    RecordStore::put('asset',(string)$asset['id'],$asset,(int)$asset['version']);
-"""
-new="""    $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_reprocess',['asset'=>$asset,'actor_id'=>$actor,'reason'=>'rollback:'.(string)$repair['reason'],'target_kinds'=>$repair['target_kinds']??[],'preset'=>$repair['preset']??[],'rollback_to_manifest'=>$repair['previous_manifest_id']]);
-    if((int)$decision['object_version']!==(int)$asset['object_version']||(int)$decision['object_version']!==(int)($repair['owner_object_version']??0))throw new Error('domain_object_version_stale','Repair rollback authorization is stale.',409);
-    $previous=RecordStore::get('manifest',(string)$repair['previous_manifest_id']);if(!$previous||($previous['asset_id']??'')!==$asset['id'])throw new Error('repair_rollback_manifest_missing','Previous manifest is unavailable.',409);
-    $current=!empty($asset['active_manifest_id'])?RecordStore::get('manifest',(string)$asset['active_manifest_id']):null;
-    $previousOriginal=$previous;$previous['status']='active';unset($previous['superseded_by']);$previous=RecordStore::put('manifest',(string)$previous['id'],$previous,(int)$previous['version']);
-    try{$asset['active_manifest_id']=$previous['id'];$asset['manifest_version']=max((int)$asset['manifest_version'],(int)$previous['manifest_version']);$asset['status']='ready';$asset['processing_status']='completed';unset($asset['reprocess_context']);$asset=RecordStore::put('asset',(string)$asset['id'],$asset,(int)$asset['version']);}
-    catch(\\Throwable $exception){try{$freshPrevious=RecordStore::get('manifest',(string)$previous['id']);if($freshPrevious){$restore=$previousOriginal;unset($restore['id'],$restore['version'],$restore['created_at'],$restore['updated_at']);foreach($restore as $k=>$v)$freshPrevious[$k]=$v;if(($previousOriginal['superseded_by']??null)===null)unset($freshPrevious['superseded_by']);RecordStore::put('manifest',(string)$freshPrevious['id'],$freshPrevious,(int)$freshPrevious['version']);}}catch(\\Throwable){Audit::record('repair_rollback_reconciliation_required',['repair_id'=>$repairId,'asset_id'=>$asset['id'],'reason'=>'asset_switch_failed_previous_restore_failed']);}throw $exception;}
-    if($current&&($current['id']??'')!==$previous['id']&&($current['status']??'')==='active'){try{$freshCurrent=RecordStore::get('manifest',(string)$current['id']);if($freshCurrent&&($freshCurrent['status']??'')==='active'){$freshCurrent['status']='rolled_back';$freshCurrent['rolled_back_to']=$previous['id'];RecordStore::put('manifest',(string)$freshCurrent['id'],$freshCurrent,(int)$freshCurrent['version']);}}catch(\\Throwable){Audit::record('repair_rollback_reconciliation_required',['repair_id'=>$repairId,'asset_id'=>$asset['id'],'reason'=>'previous_activated_current_retire_failed']);}}
-"""
-if old not in s and new not in s: raise SystemExit('round 90 repair rollback block missing')
+old="""    public static function issueRecipientGrant(string $transferId,int $recipient,string $sessionId,array $context=[]): string {Auth::assertActor($recipient);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer||($transfer['status']??'')!=='ready'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_not_ready','Transfer is not ready or expired.',409);if($transfer['recipient_type']==='user'&&(int)$transfer['recipient_user_id']!==$recipient)throw new Error('transfer_recipient_denied','Recipient does not match the transfer.',403);Auth::transferParties($transfer,'transfer_download');$decision=DomainRegistry::decision('file17','authorize_transfer_delivery',['transfer'=>$transfer,'recipient_user_id'=>$recipient,'session_id'=>$sessionId,'context'=>Utils::redact($context)]);if(($decision['recipient_authorized']??false)!==true)throw new Error('transfer_recipient_denied','Recipient is not authorized.',403);$audience=$transfer['recipient_type']==='user'?['type'=>'user','user_id'=>$recipient]:['type'=>'group','group_id'=>$transfer['recipient_group_id'],'user_id'=>$recipient];$deliveryContext=array_replace($context,['audience_type'=>'recipient','territory'=>$context['territory']??'GLOBAL']);return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,300,50);}"""
+new="""    public static function issueRecipientGrant(string $transferId,int $recipient,string $sessionId,array $context=[]): string {Auth::assertActor($recipient);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer||($transfer['status']??'')!=='ready'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_not_ready','Transfer is not ready or expired.',409);if($transfer['recipient_type']==='user'&&(int)$transfer['recipient_user_id']!==$recipient)throw new Error('transfer_recipient_denied','Recipient does not match the transfer.',403);$asset=RecordStore::get('asset',(string)($transfer['asset_id']??''));if(!$asset||($asset['status']??'')!=='ready')throw new Error('transfer_asset_not_ready','Transfer asset is not ready.',409);Auth::transferParties($transfer,'transfer_download');$decision=DomainRegistry::decision('file17','authorize_transfer_delivery',['transfer'=>$transfer,'asset'=>$asset,'recipient_user_id'=>$recipient,'session_id'=>$sessionId,'context'=>Utils::redact($context)]);if((int)$decision['object_version']!==(int)$transfer['native_transfer_version']||(int)$decision['object_version']!==(int)($asset['object_version']??0))throw new Error('transfer_delivery_version_stale','Transfer delivery authorization is stale.',409);if(($decision['recipient_authorized']??false)!==true)throw new Error('transfer_recipient_denied','Recipient is not authorized.',403);$audience=$transfer['recipient_type']==='user'?['type'=>'user','user_id'=>$recipient]:['type'=>'group','group_id'=>$transfer['recipient_group_id'],'user_id'=>$recipient];$deliveryContext=array_replace($context,['audience_type'=>'recipient','territory'=>$context['territory']??'GLOBAL']);return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,300,50);}"""
+if old not in s and new not in s: raise SystemExit('round 91 recipient grant anchor missing')
 s=s.replace(old,new,1)
 
-# Restore authorization: permit exact recovery of a partial restore-row-first transition.
-old="""    if(!$restore||!$gate||($gate['restore_id']??'')!==$restoreId||($restore['status']??'')!=='reconciled'||($gate['status']??'')!=='reconciled')throw new Error('restore_gate_blocked','Restore reconciliation has not passed.',503);
-    $restore['status']='serve_authorized';$restore['serve_authorized_at']=Utils::now();RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);
-    $gate['status']='serve_authorized';$gate['serve_authorized_at']=Utils::now();$gate['updated_at']=Utils::now();RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);
-"""
-new="""    if(!$restore||!$gate||($gate['restore_id']??'')!==$restoreId)throw new Error('restore_gate_blocked','Restore reconciliation has not passed.',503);
-    $restoreStatus=(string)($restore['status']??'');$gateStatus=(string)($gate['status']??'');
-    if(!in_array($restoreStatus,['reconciled','serve_authorized'],true)||!in_array($gateStatus,['reconciled','serve_authorized'],true))throw new Error('restore_gate_blocked','Restore reconciliation has not passed.',503);
-    if($restoreStatus!=='serve_authorized'){$restore['status']='serve_authorized';$restore['serve_authorized_at']=Utils::now();$restore=RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);}
-    $gate=RecordStore::get('restore_gate','current')??$gate;if(($gate['restore_id']??'')!==$restoreId||!in_array(($gate['status']??''),['reconciled','serve_authorized'],true))throw new Error('restore_gate_mismatch','Restore gate changed during serve authorization.',409);
-    if(($gate['status']??'')!=='serve_authorized'){$gate['status']='serve_authorized';$gate['serve_authorized_at']=Utils::now();$gate['updated_at']=Utils::now();RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);}
-"""
-if old not in s and new not in s: raise SystemExit('round 90 restore authorize block missing')
+old="""    public static function revoke(string $transferId,int $actor,string $reason): array {Auth::assertActor($actor,'manage_options');$reason=Utils::key($reason,64);if($reason==='')throw new Error('transfer_revoke_reason_required','Transfer revoke reason required.',400);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if(($transfer['status']??'')==='revoked')return $transfer;if($actor!==(int)$transfer['sender_user_id'])Auth::capability('media_reprocess');DomainRegistry::decision('file17','authorize_transfer_revoke',['transfer'=>$transfer,'actor_id'=>$actor,'reason'=>$reason]);$transfer['status']='revoked';$transfer['revoked_at']=Utils::now();$transfer['revoke_reason']=$reason;$transfer=RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);if(!empty($transfer['asset_id']))DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');self::notify('transfer.revoked',$transfer);return $transfer;}"""
+new="""    public static function revoke(string $transferId,int $actor,string $reason): array {Auth::assertActor($actor,'manage_options');$reason=Utils::key($reason,64);if($reason==='')throw new Error('transfer_revoke_reason_required','Transfer revoke reason required.',400);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if(($transfer['status']??'')==='revoked')return $transfer;if($actor!==(int)$transfer['sender_user_id'])Auth::capability('media_reprocess');$decision=DomainRegistry::decision('file17','authorize_transfer_revoke',['transfer'=>$transfer,'actor_id'=>$actor,'reason'=>$reason]);if((int)$decision['object_version']!==(int)$transfer['native_transfer_version'])throw new Error('transfer_revoke_version_stale','Transfer revocation authorization is stale.',409);$transfer['status']='revoked';$transfer['revoked_at']=Utils::now();$transfer['revoke_reason']=$reason;$transfer=RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);if(!empty($transfer['asset_id']))DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');self::notify('transfer.revoked',$transfer);return $transfer;}"""
+if old not in s and new not in s: raise SystemExit('round 91 revoke anchor missing')
+s=s.replace(old,new,1)
+
+old="""    public static function grant(string $downloadId,int $actor,string $sessionId,array $context=[]): string {Auth::assertActor($actor);$download=RecordStore::get('download',$downloadId);if(!$download||($download['status']??'')!=='authorized'||(int)$download['expires_at']<=Utils::now())throw new Error('download_task_invalid','Download task invalid or expired.',403);if((int)$download['actor_id']!==$actor)throw new Error('download_actor_denied','Download task belongs to another user.',403);$audience=['type'=>'user','user_id'=>$actor];return DeliveryService::issue((string)$download['asset_id'],$download['derivative_id']?:null,$actor,'file20-download-manager',$audience,array_replace($context,['audience_type'=>'private']),(string)$download['mode'],['allow_ranges'=>true,'max_range_bytes'=>8388608],$sessionId,300,20);}"""
+new="""    public static function grant(string $downloadId,int $actor,string $sessionId,array $context=[]): string {Auth::assertActor($actor);$download=RecordStore::get('download',$downloadId);if(!$download||($download['status']??'')!=='authorized'||(int)$download['expires_at']<=Utils::now())throw new Error('download_task_invalid','Download task invalid or expired.',403);if((int)$download['actor_id']!==$actor)throw new Error('download_actor_denied','Download task belongs to another user.',403);$asset=RecordStore::get('asset',(string)$download['asset_id']);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);if((int)($download['object_version']??0)!==(int)($asset['object_version']??0))throw new Error('download_authorization_stale','Download task owner version is stale.',409);$decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'derivative_id'=>$download['derivative_id']?:null,'actor_id'=>$actor,'mode'=>$download['mode'],'context'=>Utils::redact($context),'phase'=>'grant']);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('download_authorization_stale','Download authorization is stale.',409);$audience=['type'=>'user','user_id'=>$actor];return DeliveryService::issue((string)$download['asset_id'],$download['derivative_id']?:null,$actor,'file20-download-manager',$audience,array_replace($context,['audience_type'=>'private']),(string)$download['mode'],['allow_ranges'=>true,'max_range_bytes'=>8388608],$sessionId,300,20);}"""
+if old not in s and new not in s: raise SystemExit('round 91 download grant anchor missing')
 s=s.replace(old,new,1)
 
 p.write_text(s)
 
-t=ROOT/'tests/review-round-90-operations-recovery.php'
+t=ROOT/'tests/review-round-91-transfer-action-boundaries.php'
 t.write_text(r'''<?php
 declare(strict_types=1);
-$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-operations.php');
-function r90($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 90 FAIL: $m\n");exit(1);}echo "ROUND 90 PASS: $m\n";}
-r90(substr_count($s,"LegalHoldService::assertNoHold(\$holdAssetId,'provider_exit')")>=3,'provider exit rechecks newly placed holds during copy, switch and source purge');
-r90(str_contains($s,"rollback_to_manifest")&&str_contains($s,"Repair rollback authorization is stale."),'repair rollback is freshly owner-authorized and object-version bound');
-r90(str_contains($s,"repair_rollback_reconciliation_required")&&str_contains($s,"asset_switch_failed_previous_restore_failed"),'repair rollback has explicit recovery/reconciliation for partial manifest transition');
-r90(str_contains($s,"in_array(\$restoreStatus,['reconciled','serve_authorized'],true)")&&str_contains($s,"if(\$restoreStatus!=='serve_authorized')"),'restore serve authorization can resume a safe partial transition');
-r90(str_contains($s,"\$gate=RecordStore::get('restore_gate','current')??\$gate"),'restore gate is refreshed before the final unblock write');
-echo "REVIEW ROUND 90 OPERATIONS RECOVERY: PASS\n";
+$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-transfer.php');
+function r91($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 91 FAIL: $m\n");exit(1);}echo "ROUND 91 PASS: $m\n";}
+r91(str_contains($s,'transfer_asset_actor_mismatch')&&str_contains($s,'transfer_bind_version_stale'),'asset binding is sender-bound and canonical-version bound');
+r91(str_contains($s,'transfer_ready_state_denied')&&str_contains($s,'transfer_ready_version_stale'),'ready transition cannot resurrect an expired/revoked transfer and rejects stale owner truth');
+r91(str_contains($s,'transfer_delivery_version_stale'),'recipient grant issuance rejects stale native/asset owner version');
+r91(str_contains($s,'transfer_revoke_version_stale'),'transfer revocation rejects stale owner authorization');
+r91(str_contains($s,'download_authorization_stale')&&substr_count($s,'authorize_download')>=2,'download grant performs fresh owner-domain authorization at actual grant time');
+echo "REVIEW ROUND 91 TRANSFER ACTION BOUNDARIES: PASS\n";
 ''')
 
 q=ROOT/'tools/quality-check.sh';x=q.read_text()
-anchor='php "$ROOT/tests/review-round-89-lifecycle-reauthorization.php"\n'
-line='php "$ROOT/tests/review-round-90-operations-recovery.php"\n'
+anchor='php "$ROOT/tests/review-round-90-operations-recovery.php"\n'
+line='php "$ROOT/tests/review-round-91-transfer-action-boundaries.php"\n'
 if line not in x:
-    if anchor not in x: raise SystemExit('round 90 quality anchor missing')
+    if anchor not in x: raise SystemExit('round 91 quality anchor missing')
     q.write_text(x.replace(anchor,anchor+line,1))
