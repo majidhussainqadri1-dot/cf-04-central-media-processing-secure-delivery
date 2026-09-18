@@ -58,7 +58,7 @@ final class Plugin {
         }finally{self::release('cron-jobs',$token);}
     }
     public static function cronRetention(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('retention',1800);if($token===null)return;try{RetentionService::run();}finally{self::release('retention',$token);}}
-    public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();}finally{self::release('deletions',$token);}}
+    public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();DeliveryService::reconcilePublicPurges();}finally{self::release('deletions',$token);}}
     public static function cronIntegrity(): void {
         if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;
         try{
