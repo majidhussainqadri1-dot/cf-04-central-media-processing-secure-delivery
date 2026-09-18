@@ -1,0 +1,196 @@
+CONTRACT RUNTIME: PASS
+SOURCE INTEGRATION: PASS
+PASS: FR-001 complete asset policy envelope
+PASS: FR-001 denied consent fails closed [consent_not_granted]
+PASS: FR-002 purpose-bound upload credential
+PASS: FR-002 pause
+PASS: FR-002 resume
+PASS: FR-002 progress and verified part
+PASS: FR-002 abort and reservation release
+PASS: FR-002 end-to-end streaming completion
+PASS: FR-003 hash, fingerprint and policy/rights-bound object identity
+PASS: FR-004 client metadata distrusted and server-detected
+PASS: FR-004 disguised source rejected [declared_mime_mismatch]
+PASS: FR-005 atomic quota reserve/settle
+PASS: FR-005 abuse score blocks [abuse_policy_block]
+PASS: FR-006 private encrypted quarantine/provider identity
+PASS: FR-007 magic/MIME/container validation
+PASS: FR-008 required fail-closed scanner evidence
+PASS: FR-009 actual metadata strip/preserve attestation
+PASS: FR-010 versioned safety signals never make autonomous policy decisions
+PASS: FR-010 reviewer provenance
+PASS: FR-011 sandboxed worker attestation
+PASS: FR-012 persisted idempotent job graph
+PASS: FR-012 orphan recovery
+PASS: FR-013 image derivatives/orientation/color/pixel-safe provider pipeline
+PASS: FR-014 adaptive AV pipeline, manifests, poster, waveform
+PASS: FR-015 document preview/text/OCR policy pipeline
+PASS: FR-016 derivative lineage and atomic manifest switch
+PASS: FR-017 encrypted streaming storage and key identity
+PASS: FR-018 fully bound signed grant claims
+PASS: FR-018 range-bound grant consumption
+PASS: FR-018 session binding [grant_binding_mismatch]
+PASS: FR-018 revocation [grant_revoked]
+PASS: FR-019 public derivative immutable CDN publication
+PASS: FR-020 private proxy security headers
+PASS: FR-021 actual byte delivery and safe disposition
+PASS: FR-022 source/derivative integrity and bit-rot sampling
+PASS: FR-023 rights operation enforcement [rights_operation_denied]
+PASS: CHAT-XFER-001 sender/recipient verified private 1 GiB contract
+PASS: FR-024 class-specific retention schedule
+PASS: FR-026 active hold blocks deletion [asset_on_hold]
+PASS: FR-026 authorized hold review/release
+PASS: FR-025 ordered revoke→purge→delete→mapping→backup-ledger→tombstone
+PASS: FR-027 provider exit verification/switch/purge
+PASS: FR-028 priority, tenant fairness and starvation aging
+PASS: FR-029 capability-aware provider abstraction
+PASS: FR-030 domain/purpose cost ledger, budget and invoice reconciliation
+PASS: FR-031 governed reprocess preserves previous manifest
+PASS: FR-031 repair rollback
+PASS: FR-032 restore reconciliation
+PASS: FR-032 pre-serve authorization gate
+PASS: FR-017 managed key rotation/re-encryption
+PASS: FR-033 observability, audit chain, synthetic checks and runbooks
+PASS: service request replay denied [service_replay_denied]
+PASS: signed webhook replay handling
+PASS: image workspace privacy and transform contract
+PASS: coded runtime test gate ready while production default remains disabled in plugin bootstrap
+ALL 33 CF-04 REQUIREMENTS + CHAT-XFER-001: SOURCE TESTS PASSED
+PASS: NEW-PLAN data-class constitution is C0-C5
+PASS: NEW-PLAN CF04-CEN-01 through CF04-CEN-10 registered
+PASS: NEW-PLAN native journeys registered
+PASS: NEW-PLAN C0 public policy
+PASS: NEW-PLAN C1 authenticated/private-to-account policy
+PASS: NEW-PLAN C2-C5 public CDN denied [public_cdn_privacy_denied]
+PASS: NEW-PLAN lawful basis required [policy_incomplete]
+PASS: NEW-PLAN revocation hook required [policy_incomplete]
+PASS: CF04-CEN-01 typed owner/lawful-basis/revocation envelope
+PASS: CF04-CEN-02 fail-closed ingest reaches ready only after scan/process
+PASS: CF04-CEN-04 public CDN mapping bound to C0 policy/rights
+PASS: CF04-CEN-05 C2-C5 asset cannot reach public CDN [public_cdn_denied]
+PASS: CF04-CEN-04 grant purpose/privacy binding
+PASS: CF04-CEN-06 high-risk accessibility provenance approved
+PASS: CF04-CEN-06 high-risk unreviewed metadata blocked [qualified_review_required]
+PASS: CF04-CEN-07 explicit low-bandwidth rendition
+PASS: CF04-CEN-09 no silent quality/original substitution
+PASS: CF04-CEN-10 user-level media telemetry denied [privacy_metric_label_denied]
+PASS: CF04-CEN-10 private-content telemetry denied [privacy_metric_label_denied]
+PASS: CF04-CEN-08 rights expiry reconciliation executed
+PASS: CF04-CEN-08 stale derivatives removed after rights expiry
+PASS: CF04-CEN-08 downstream index/backup propagation evidence recorded
+PASS: REVIEW-62 rights reconciliation processes an exactly-full bounded batch without record_scan_limit
+CF-04 CURRENT NEW-PLAN PARITY: PASS
+PASS: FUTURE40 registry has 40 governed capabilities
+PASS: CF04-FUT-001/002 provenance and synthetic declaration
+PASS: CF04-FUT-003/004 perceptual fingerprint and safe near-duplicate detection
+PASS: CF04-FUT-005 same-envelope physical dedupe eligibility
+PASS: CF04-FUT-006 content disarm/reconstruction
+PASS: CF04-FUT-007 automatic re-scan scheduling
+PASS: CF04-FUT-008 emergency format kill switch [format_emergency_blocked]
+PASS: CF04-FUT-009 content-aware encoding plan
+PASS: CF04-FUT-010 objective quality score
+PASS: CF04-FUT-011 codec capability negotiation
+PASS: CF04-FUT-012 color/HDR lineage policy
+PASS: CF04-FUT-013 audio technical QC
+PASS: CF04-FUT-014 smart poster/storyboard
+PASS: CF04-FUT-015 chapter/timecode manifest
+PASS: CF04-FUT-016 rich SDH/forced caption tracks
+PASS: CF04-FUT-017 audio-description track
+PASS: CF04-FUT-018 sign-language synchronized track
+PASS: CF04-FUT-019 OCR confidence/coordinate map
+PASS: CF04-FUT-020 accessibility manifest
+PASS: CF04-FUT-021 sensitive-data detection
+PASS: CF04-FUT-022 governed redaction derivative
+PASS: CF04-FUT-023 multi-CDN failover
+PASS: CF04-FUT-024 origin shield/cache protection
+PASS: CF04-FUT-025 edge authorization without ownership transfer
+PASS: CF04-FUT-026 network-adaptive upload
+PASS: CF04-FUT-027 encrypted bounded offline grant with consume-time reauthorization
+PASS: CF04-FUT-028 cross-session/device resume requires fresh session/device authorization
+PASS: CF04-FUT-029 unapproved region fails closed [residency_region_denied]
+PASS: CF04-FUT-029 regional residency pinning
+PASS: CF04-FUT-030 active object lock cannot be shortened [object_lock_reduction_denied]
+PASS: CF04-FUT-030 normal physical deletion cannot bypass WORM lock [object_lock_active]
+PASS: CF04-FUT-030 WORM/object-lock evidence
+PASS: CF04-FUT-031 per-asset envelope encryption key reference
+PASS: CF04-FUT-032 crypto-agility policy
+PASS: CF04-FUT-033 multi-region disaster recovery plan
+PASS: CF04-FUT-034 intelligent policy-aware storage tier
+PASS: CF04-FUT-035 pre-processing cost estimate
+PASS: CF04-FUT-036 approved-provider auto-routing
+PASS: CF04-FUT-037 privacy-minimal QoE telemetry
+PASS: CF04-FUT-038 staging/test-only chaos exercise
+PASS: CF04-FUT-039 signed migration/export bundle
+PASS: CF04-FUT-040 versioned SDK/contract kit
+CF-04 FUTURE-40: PASS
+PASS: ROUND 57 retried part is not double-counted
+PASS: ROUND 57 projected upload bytes cannot exceed declared size [upload_size_exceeded]
+PASS: ROUND 57 PDF page scanner avoids overlap double-counting
+REVIEW ROUND 57 UPLOAD/VALIDATION: PASS
+ROUND 59 PASS: completion has an explicit retryable reconciliation finalizer
+ROUND 59 PASS: completion entry permits only the three reconciliation-safe states
+ROUND 59 PASS: retry reconciles an already-created matching asset and rejects mismatches
+ROUND 59 PASS: upload persists explicit finalizing and completed phases
+ROUND 59 PASS: finalizer covers quota, multipart cleanup and idempotency completion
+ROUND 59 PASS: durable completed state precedes idempotency completion so retry cannot strand a finalizing upload
+REVIEW ROUND 59 UPLOAD FINALIZATION: PASS
+ROUND 60 PASS: unattached graph jobs are cleaned after asset CAS failure without deleting a concurrently attached graph
+ROUND 60 PASS: manifest activation failure has rollback and reconciliation evidence
+ROUND 60 PASS: old-manifest supersede conflict is explicitly reconcilable
+REVIEW ROUND 60 PROCESSING ATOMICITY: PASS
+ROUND 61 PASS: deletion request captures the exact prior asset lifecycle state
+ROUND 61 PASS: deletion-record persistence failure restores the prior status instead of forcing ready
+ROUND 61 PASS: rollback restores prior deletion metadata exactly
+REVIEW ROUND 61 LIFECYCLE ROLLBACK: PASS
+ROUND 63 PASS: upload-part creation is create-only instead of an implicit upsert
+ROUND 63 PASS: concurrent identical upload-part winner is reconciled without deleting its object
+ROUND 63 PASS: asset creation is create-only under concurrent completion
+ROUND 63 PASS: concurrent asset winner is reloaded and reconciled before finalization
+REVIEW ROUND 63 UPLOAD CREATE RACES: PASS
+ROUND 64 PASS: deterministic processing-job creation is create-only
+ROUND 64 PASS: concurrent graph creator reloads and validates the authoritative job
+ROUND 64 PASS: existing deterministic jobs are generation/tenant bound
+ROUND 64 PASS: orphan recovery treats a concurrent heartbeat/CAS winner as benign and continues
+REVIEW ROUND 64 JOB CONCURRENCY: PASS
+ROUND 65 PASS: service nonce is create-only when no prior nonce exists
+ROUND 65 PASS: concurrent service nonce conflict is mapped to replay denial
+ROUND 65 PASS: webhook first acceptance is create-only
+ROUND 65 PASS: concurrent webhook winner is reloaded and returned only as replay
+REVIEW ROUND 65 REPLAY ATOMICITY: PASS
+ROUND 66 PASS: absent runtime lock acquisition is create-only while expired replacement remains CAS-bound
+ROUND 66 PASS: active runtime lock remains fail-closed
+ROUND 66 PASS: runtime lock release is token-owner bound
+REVIEW ROUND 66 RUNTIME LOCK: PASS
+ROUND 67 PASS: lease selection iterates ranked eligible jobs instead of committing to one stale candidate
+ROUND 67 PASS: lease CAS contention retries another eligible job while preserving non-conflict failures
+ROUND 67 PASS: lease revalidates dependencies immediately before CAS acquisition
+ROUND 67 PASS: lease revalidates retry timing immediately before CAS acquisition
+REVIEW ROUND 67 LEASE CONTENTION: PASS
+ROUND 68 PASS: derivative expiry operations map to deletion hold scope
+ROUND 68 PASS: derivative expiry path remains protected by the centralized hold assertion
+ROUND 68 PASS: legal-hold accepted scopes remain canonical and bounded
+REVIEW ROUND 68 LEGAL HOLD SCOPE: PASS
+ROUND 69 PASS: public CDN mapping reuse is privacy-class bound
+ROUND 69 PASS: public CDN mapping reuse is current upload/delivery-policy bound
+ROUND 69 PASS: public CDN mapping reuse is current rights-policy bound
+ROUND 69 PASS: new CDN cache keys remain rights-aware
+REVIEW ROUND 69 CDN POLICY REUSE: PASS
+ROUND 70 PASS: provider exit inventories derivatives independently of source-object provider placement
+ROUND 70 PASS: provider exit filters derivative inventory by its own storage provider
+ROUND 70 PASS: orphaned source-provider derivatives fail the exit plan closed
+ROUND 70 PASS: provider-exit legal holds are enforced for independently discovered derivatives
+REVIEW ROUND 70 PROVIDER EXIT INVENTORY: PASS
+ROUND 71 PASS: failed persistent create re-reads the authoritative record to distinguish contention from infrastructure failure
+ROUND 71 PASS: concurrent create conflict retains expected-version-zero CAS evidence
+ROUND 71 PASS: duplicate-key create races surface as record_version_conflict
+ROUND 71 PASS: true infrastructure insert failure remains fail-closed as record_write_failed
+ROUND 71 PASS: rights reconciliation discovers the complete explicitly bounded inventory rather than repeatedly reading only the newest page
+ROUND 71 PASS: expired rights are prioritized ahead of non-expired records, preventing head-page starvation
+ROUND 71 PASS: reconciliation mutation/check work remains bounded by the caller limit
+PHP Warning:  Undefined variable $limit in /home/runner/work/cf-04-central-media-processing-secure-delivery/cf-04-central-media-processing-secure-delivery/tests/review-round-71-final-adversarial.php on line 29
+Warning: Undefined variable $limit in /home/runner/work/cf-04-central-media-processing-secure-delivery/cf-04-central-media-processing-secure-delivery/tests/review-round-71-final-adversarial.php on line 29
+PHP Warning:  Undefined variable $asset in /home/runner/work/cf-04-central-media-processing-secure-delivery/cf-04-central-media-processing-secure-delivery/tests/review-round-71-final-adversarial.php on line 29
+Warning: Undefined variable $asset in /home/runner/work/cf-04-central-media-processing-secure-delivery/cf-04-central-media-processing-secure-delivery/tests/review-round-71-final-adversarial.php on line 29
+ROUND 71 PASS: starving head-page-only reconciliation pattern is absent
+REVIEW ROUND 71 FINAL ADVERSARIAL: PASS
+PHP diagnostic output is a quality-gate failure.
