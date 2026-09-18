@@ -12,5 +12,5 @@ $overflow=false;
 try{RecordStore::all('r72',0,null,3);}catch(Error $e){$overflow=$e->errorCode==='record_scan_limit';}
 r72($overflow,'true record population beyond the explicit maximum still fails closed');
 $src=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-scm-persistence.php');
-r72(str_contains($src,'$probe=self::list($type,$actor,$status,1,$offset)'),'boundary overflow is determined by an explicit one-record probe');
+r72(str_contains($src,'$probe=self::scanPage($type,$actor,$status,1,$after)'),'boundary overflow is determined by an explicit stable-keyset one-record probe');
 echo "REVIEW ROUND 72 RECORD SCAN BOUNDARY: PASS\n";

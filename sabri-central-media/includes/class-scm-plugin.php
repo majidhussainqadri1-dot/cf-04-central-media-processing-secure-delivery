@@ -5,14 +5,19 @@ namespace Sabri\CentralMedia;
 final class Activator {
     private const CAPS=['manage_sabri_media','operate_sabri_media','audit_sabri_media','media_manage_providers','media_review_safety_signals','media_hold','media_reprocess','media_download','media_transfer'];
     public static function activate(): void {
-        if(function_exists('add_option')&&!add_option('scm_activation_lock',['at'=>Utils::now(),'request'=>Utils::id('act')],'','no')){$lock=function_exists('get_option')?get_option('scm_activation_lock'):null;if(is_array($lock)&&(int)($lock['at']??0)>Utils::now()-300)throw new Error('activation_in_progress','CF-04 activation is already in progress.',409);if(function_exists('update_option'))update_option('scm_activation_lock',['at'=>Utils::now(),'request'=>Utils::id('act')],false);}
+        $lockRequest=self::claimActivationLock();
         try{
             Schema::install();if(!Schema::ready()&&!(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true))throw new Error('schema_install_failed','CF-04 schema installation failed.',500);
             if(function_exists('get_role')){$role=get_role('administrator');if($role)foreach(self::CAPS as $cap)$role->add_cap($cap);}
             if(function_exists('update_option')){update_option('scm_runtime_activated',false,false);update_option('scm_installed_version',defined('SCM_VERSION')?SCM_VERSION:'unknown',false);update_option('scm_contract_version',defined('SCM_CONTRACT_VERSION')?SCM_CONTRACT_VERSION:'unknown',false);}
             self::schedule();if(function_exists('flush_rewrite_rules'))flush_rewrite_rules(false);Audit::record('plugin_activated',['runtime_enabled'=>false,'version'=>defined('SCM_VERSION')?SCM_VERSION:'unknown']);
-        }finally{if(function_exists('delete_option'))delete_option('scm_activation_lock');}
+        }finally{self::releaseActivationLock($lockRequest);}
     }
+    private static function claimActivationLock(): string {
+        $request=Utils::id('act');if(!function_exists('add_option')||!function_exists('get_option'))return $request;$row=['at'=>Utils::now(),'request'=>$request];if(add_option('scm_activation_lock',$row,'','no'))return $request;$current=get_option('scm_activation_lock');if(!is_array($current)||(int)($current['at']??0)>Utils::now()-300)throw new Error('activation_in_progress','CF-04 activation is already in progress.',409);
+        global $wpdb;if(!isset($wpdb)||!is_object($wpdb)||!isset($wpdb->options)||!method_exists($wpdb,'query')||!method_exists($wpdb,'prepare'))throw new Error('activation_lock_recovery_unavailable','Stale activation lock cannot be recovered atomically.',503);$serialized=function_exists('maybe_serialize')?maybe_serialize($current):serialize($current);$deleted=$wpdb->query($wpdb->prepare('DELETE FROM '.$wpdb->options.' WHERE option_name=%s AND option_value=%s','scm_activation_lock',$serialized));if($deleted!==1||!add_option('scm_activation_lock',$row,'','no'))throw new Error('activation_in_progress','Another activation won stale-lock recovery.',409);return $request;
+    }
+    private static function releaseActivationLock(string $request): void {if(!function_exists('get_option')||!function_exists('delete_option'))return;$current=get_option('scm_activation_lock');if(is_array($current)&&hash_equals((string)($current['request']??''),$request))delete_option('scm_activation_lock');}
     public static function deactivate(): void {try{Audit::record('plugin_deactivated',['runtime_enabled'=>RuntimeGuard::enabled()]);}catch(\Throwable){}finally{self::unschedule();if(function_exists('flush_rewrite_rules'))flush_rewrite_rules(false);}}
     private static function schedule(): void {
         if(!function_exists('wp_next_scheduled')||!function_exists('wp_schedule_event'))return;
@@ -57,8 +62,8 @@ final class Plugin {
             if($scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[])Observability::alert('warning','processing_inventory_scan_truncated',['scanned'=>$scanned]);
         }finally{self::release('cron-jobs',$token);}
     }
-    public static function cronRetention(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('retention',1800);if($token===null)return;try{RetentionService::run();}finally{self::release('retention',$token);}}
-    public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();DeliveryService::reconcilePublicPurges();KeyRotationService::reconcileDeferredCleanup();}finally{self::release('deletions',$token);}}
+    public static function cronRetention(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('retention',1800);if($token===null)return;try{RetentionService::run();}catch(\Throwable $e){self::cronAlert('retention_cron_failed',$e);throw $e;}finally{self::release('retention',$token);}}
+    public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();DeliveryService::reconcilePublicPurges();KeyRotationService::reconcileDeferredCleanup();}catch(\Throwable $e){self::cronAlert('deletion_reconciliation_cron_failed',$e);throw $e;}finally{self::release('deletions',$token);}}
     public static function cronIntegrity(): void {
         if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;
         try{
@@ -68,6 +73,7 @@ final class Plugin {
             $cursorRow=['actor_id'=>0,'status'=>'active','name'=>'integrity','offset'=>$nextOffset,'last_scanned'=>$scanned,'last_sampled'=>count($selected),'updated_at'=>Utils::now()];RecordStore::put('cron_cursor','integrity',$cursorRow,$cursor?(int)$cursor['version']:0);
         }finally{self::release('integrity',$token);}
     }
-    private static function acquire(string $name,int $ttl): ?string {$id=Utils::key($name,48);$now=Utils::now();$current=RecordStore::get('runtime_lock',$id);if($current&&(int)($current['expires_at']??0)>$now)return null;$token=Utils::id('lock');try{RecordStore::put('runtime_lock',$id,['actor_id'=>0,'status'=>'held','token_hash'=>hash('sha256',$token),'expires_at'=>$now+$ttl,'created_at'=>$now],$current?(int)$current['version']:0);return $token;}catch(\Throwable){return null;}}
-    private static function release(string $name,string $token): void {$id=Utils::key($name,48);$current=RecordStore::get('runtime_lock',$id);if(!$current||!hash_equals((string)($current['token_hash']??''),hash('sha256',$token)))return;try{$current['status']='released';$current['expires_at']=Utils::now();RecordStore::put('runtime_lock',$id,$current,(int)$current['version']);}catch(\Throwable){}}
+    private static function acquire(string $name,int $ttl): ?string {$id=Utils::key($name,48);$now=Utils::now();$current=RecordStore::get('runtime_lock',$id);if($current&&(int)($current['expires_at']??0)>$now)return null;$token=Utils::id('lock');try{RecordStore::put('runtime_lock',$id,['actor_id'=>0,'status'=>'held','token_hash'=>hash('sha256',$token),'expires_at'=>$now+$ttl,'created_at'=>$now],$current?(int)$current['version']:0);return $token;}catch(Error $e){if($e->errorCode==='record_version_conflict')return null;self::cronAlert('runtime_lock_acquire_failed',$e);throw $e;}}
+    private static function release(string $name,string $token): void {$id=Utils::key($name,48);$current=RecordStore::get('runtime_lock',$id);if(!$current||!hash_equals((string)($current['token_hash']??''),hash('sha256',$token)))return;try{$current['status']='released';$current['expires_at']=Utils::now();RecordStore::put('runtime_lock',$id,$current,(int)$current['version']);}catch(\Throwable $e){self::cronAlert('runtime_lock_release_failed',$e);}}
+    private static function cronAlert(string $code,\Throwable $e): void {try{Observability::alert('critical',$code,['exception'=>get_class($e)]);}catch(\Throwable){}}
 }

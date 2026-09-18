@@ -104,7 +104,7 @@ final class PartStore {
             $hash=hash_final($ctx);if($size!==$expectedSize||!hash_equals($expectedHash,$hash))throw new Error('upload_integrity_failed','Assembled upload integrity failed.',422,['size'=>$size]);rewind($out);return $out;
         }catch(\Throwable $e){fclose($out);throw $e;}
     }
-    public static function purge(string $uploadId): void {foreach(self::list($uploadId) as $p){$provider=ProviderRegistry::get((string)($p['provider_id']??ProviderRegistry::activeId()));$key=(string)$p['object_key'];if(!$provider->delete($key)&&$provider->exists($key))throw new Error('part_delete_failed','Upload part could not be deleted.',500,['part_id'=>$p['id']]);RecordStore::delete('upload_part',(string)$p['id']);}}
+    public static function purge(string $uploadId): void {foreach(self::list($uploadId) as $p){$provider=ProviderRegistry::get((string)($p['provider_id']??ProviderRegistry::activeId()));$key=(string)$p['object_key'];if(!$provider->delete($key)&&$provider->exists($key))throw new Error('part_delete_failed','Upload part could not be deleted.',500,['part_id'=>$p['id']]);RecordStore::delete('upload_part',(string)$p['id'],(int)$p['version']);}}
 }
 
 final class UploadService {

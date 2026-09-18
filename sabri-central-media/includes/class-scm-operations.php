@@ -254,7 +254,7 @@ final class RestoreService {
     $id=Utils::id('rst');$hash=hash('sha256',Utils::canonicalJson($inventory));
     $row=['actor_id'=>$actor,'restore_id'=>$id,'inventory'=>Utils::redact($inventory),'inventory_hash'=>$hash,'status'=>'rebuilding','checks'=>[],'created_at'=>Utils::now()];
     $row=RecordStore::put('restore',$id,$row);
-    try{RecordStore::put('restore_gate','current',['actor_id'=>$actor,'restore_id'=>$id,'inventory_hash'=>$hash,'status'=>'rebuilding','updated_at'=>Utils::now()],$gate?(int)$gate['version']:0);}catch(\Throwable $gateError){try{RecordStore::delete('restore',$id);}catch(\Throwable){Audit::record('restore_start_reconciliation_required',['restore_id'=>$id,'reason'=>'gate_write_failed_restore_cleanup_failed']);}throw $gateError;}
+    try{RecordStore::put('restore_gate','current',['actor_id'=>$actor,'restore_id'=>$id,'inventory_hash'=>$hash,'status'=>'rebuilding','updated_at'=>Utils::now()],$gate?(int)$gate['version']:0);}catch(\Throwable $gateError){try{RecordStore::delete('restore',$id,(int)$row['version']);}catch(\Throwable){Audit::record('restore_start_reconciliation_required',['restore_id'=>$id,'reason'=>'gate_write_failed_restore_cleanup_failed']);}throw $gateError;}
     Audit::record('restore_started',['restore_id'=>$id,'actor_id'=>$actor,'inventory_hash'=>$hash]);
     return $row;
 }
@@ -302,14 +302,10 @@ final class Observability {
     return RecordStore::put('trace',Utils::id('trc'),['actor_id'=>Auth::currentUser(),'operation'=>$operation,'trace_id'=>$traceId,'span_id'=>$spanId,'context'=>Utils::redact($context),'status'=>'recorded','created_at'=>Utils::now()]);
 }
     public static function health(): array {
-    $providers=ProviderRegistry::health();$jobs=RecordStore::all('job',0,null,200000);
-    $queued=count(array_filter($jobs,fn($job)=>in_array(($job['status']??''),['queued','retry','leased'],true)));$oldest=0;
-    foreach($jobs as $job)if(in_array(($job['status']??''),['queued','retry'],true))$oldest=max($oldest,Utils::now()-(int)$job['created_at']);
-    $dead=count(array_filter($jobs,fn($job)=>($job['status']??'')==='dead_letter'));
-    $pendingDeletion=count(array_filter(RecordStore::all('deletion',0,null,100000),fn($deletion)=>!in_array(($deletion['status']??''),['completed','cancelled'],true)));
-    $gate=RecordStore::get('restore_gate','current');$restoreBlocking=$gate&&!in_array(($gate['status']??''),['serve_authorized','cancelled'],true);
-    $status=RuntimeGuard::enabled()&&Schema::ready()&&$providers!==[]&&!in_array(false,array_map(fn($provider)=>($provider['healthy']??false)===true,$providers),true)&&!$restoreBlocking?'ready':'disabled_or_degraded';
-    return ['status'=>$status,'runtime_enabled'=>RuntimeGuard::enabled(),'schema_ready'=>Schema::ready(),'providers'=>$providers,'queue_depth'=>$queued,'oldest_queue_age_seconds'=>$oldest,'dead_letters'=>$dead,'pending_deletions'=>$pendingDeletion,'restore_gate'=>$gate?['restore_id'=>$gate['restore_id']??'','status'=>$gate['status']??'unknown']:null,'audit_chain'=>Audit::verifyChain(),'manifest'=>IntegrationRegistry::manifest(),'runbooks'=>['provider-outage'=>'docs/runbooks/PROVIDER-OUTAGE.md','scanner-outage'=>'docs/runbooks/SCANNER-OUTAGE.md','deletion-pending'=>'docs/runbooks/DELETION-RECONCILIATION.md','restore'=>'docs/runbooks/RESTORE.md']];
+    $providers=ProviderRegistry::health();$queued=RecordStore::countStatuses('job',['queued','retry','leased']);$oldestRow=RecordStore::oldestByStatuses('job',['queued','retry']);$oldest=$oldestRow?max(0,Utils::now()-(int)($oldestRow['created_at']??$oldestRow['updated_at']??Utils::now())):0;$dead=RecordStore::countStatuses('job',['dead_letter']);$pendingDeletion=RecordStore::countStatuses('deletion',['completed','cancelled'],true);$pendingCdn=RecordStore::countStatuses('cdn_mapping',['purge_pending']);$degraded=RecordStore::countStatuses('degraded_state',['degraded']);
+    $gate=RecordStore::get('restore_gate','current');$restoreBlocking=$gate&&!in_array(($gate['status']??''),['serve_authorized','cancelled'],true);$schemaReady=Schema::ready();$auditChain=Audit::verifyChain();$providersHealthy=$providers!==[]&&!in_array(false,array_map(fn($provider)=>($provider['healthy']??false)===true,$providers),true);
+    $status=RuntimeGuard::enabled()&&$schemaReady&&$providersHealthy&&!$restoreBlocking&&$auditChain&&$dead===0&&$pendingCdn===0&&$degraded===0?'ready':'disabled_or_degraded';
+    return ['status'=>$status,'runtime_enabled'=>RuntimeGuard::enabled(),'schema_ready'=>$schemaReady,'providers'=>$providers,'queue_depth'=>$queued,'oldest_queue_age_seconds'=>$oldest,'dead_letters'=>$dead,'pending_deletions'=>$pendingDeletion,'pending_cdn_purges'=>$pendingCdn,'degraded_states'=>$degraded,'restore_gate'=>$gate?['restore_id'=>$gate['restore_id']??'','status'=>$gate['status']??'unknown']:null,'audit_chain'=>$auditChain,'manifest'=>IntegrationRegistry::manifest(),'runbooks'=>['provider-outage'=>'docs/runbooks/PROVIDER-OUTAGE.md','scanner-outage'=>'docs/runbooks/SCANNER-OUTAGE.md','deletion-pending'=>'docs/runbooks/DELETION-RECONCILIATION.md','restore'=>'docs/runbooks/RESTORE.md']];
 }
     public static function synthetic(): array {return ['provider'=>self::check(fn()=>ProviderRegistry::store()),'keyring'=>self::check(fn()=>Keyring::assertReady()),'audit_chain'=>Audit::verifyChain(),'schema'=>Schema::ready(),'domain_file00'=>DomainRegistry::has('file00'),'domain_file17'=>DomainRegistry::has('file17')];}
     private static function check(callable $f): bool {try{$f();return true;}catch(\Throwable){return false;}}
