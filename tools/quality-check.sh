@@ -84,4 +84,5 @@ root=pathlib.Path(sys.argv[1]);version=sys.argv[2];commit=sys.argv[3];sha=sys.ar
 evidence={'module':'CF-04','version':version,'source_commit':commit,'package_sha256':sha,'runtime_default':'disabled','source_requirements':'33/33','current_plan_requirements':'CF04-CEN-01..10','native_journeys':'CF04-NJ-01..06','future40_source_capabilities':'CF04-FUT-001..040','cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'quality_gate':'passed','external_acceptance':'pending'}
 (root/'dist/RELEASE-EVIDENCE.json').write_text(json.dumps(evidence,sort_keys=True,separators=(',',':'))+'\n')
 PY
+(cd "$ROOT/dist" && sha256sum RELEASE-EVIDENCE.json > RELEASE-EVIDENCE.sha256 && sha256sum -c RELEASE-EVIDENCE.sha256)
 echo "CF-04 QUALITY GATE: PASS ($VERSION $PACKAGE_SHA)"
