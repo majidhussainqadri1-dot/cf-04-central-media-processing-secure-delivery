@@ -66,3 +66,4 @@ line='php "$ROOT/tests/review-round-91-transfer-action-boundaries.php"\n'
 if line not in x:
     if anchor not in x: raise SystemExit('round 91 quality anchor missing')
     q.write_text(x.replace(anchor,anchor+line,1))
+# Review 92 exact-head verification marker — no additional correction outside the completed round.
