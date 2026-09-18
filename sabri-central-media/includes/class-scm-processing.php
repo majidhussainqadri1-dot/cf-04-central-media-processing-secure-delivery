@@ -185,6 +185,9 @@ final class ProcessingService {
     private static function executeNode(string $type,string $assetId,string $jobId,array $derivatives): array {
     $asset=RecordStore::get('asset',$assetId);
     if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+    LegalHoldService::assertNoHold($assetId,'processing');
+    $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_processing',['asset'=>$asset,'operation'=>'execute','job_type'=>$type,'job_id'=>$jobId]);
+    if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Processing authorization is stale.',409);
     $provider=ProviderRegistry::get((string)($asset['storage']['provider_id']??ProviderRegistry::activeId()));
     $source=$provider->openStream((string)$asset['object_key']);
     try{return match($type){
