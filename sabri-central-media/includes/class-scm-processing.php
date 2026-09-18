@@ -35,9 +35,9 @@ final class DerivativeService {
     $mime=self::mime($kind,$lineage,$policy);
     $id=Utils::id('drv');
     $objectKey=hash('sha256','derivative|'.$assetId.'|'.$id.'|'.$kind.'|'.$stats['sha256'].'|'.$policy['policy_hash']);
-    $store=ProviderRegistry::store();
+    $providerId=ProviderRegistry::activeId();ResidencyCryptoService::assertProviderRegion($assetId,$providerId);$store=ProviderRegistry::store($providerId);
     $stored=$store->putStream($objectKey,$stream,['scope'=>'derivative','asset_id'=>$assetId,'kind'=>$kind,'mime'=>$mime,'privacy_class'=>$policy['privacy_class']]);
-    $stored['provider_id']=ProviderRegistry::activeId();
+    $stored['provider_id']=$providerId;
     $record=['actor_id'=>0,'derivative_id'=>$id,'asset_id'=>$assetId,'kind'=>$kind,'mime'=>$mime,'status'=>'validated','sha256'=>$stats['sha256'],'size'=>$stats['size'],'object_key'=>$stored['object_key'],'storage'=>$stored,'lineage'=>self::lineage($lineage+['mime'=>$mime]),'created_at'=>Utils::now(),'superseded_by'=>null];
     try{return RecordStore::put('derivative',$id,$record);}
     catch(\Throwable $exception){try{$store->delete((string)$stored['object_key']);}catch(\Throwable){}throw $exception;}
