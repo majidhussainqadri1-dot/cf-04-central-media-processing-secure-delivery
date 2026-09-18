@@ -77,5 +77,6 @@ jobs:
             dist/SBOM.json
             dist/CHECKSUMS.sha256
             dist/RELEASE-EVIDENCE.json
+            dist/RELEASE-EVIDENCE.sha256
           if-no-files-found: error
           retention-days: 30
