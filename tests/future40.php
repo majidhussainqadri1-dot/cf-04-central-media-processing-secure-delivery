@@ -49,7 +49,7 @@ $near=PerceptualMediaService::nearDuplicates($private['id'],11,0.9);ok($near!==[
 $dedupe=PerceptualMediaService::dedupeDecision($private['id'],$clone['id'],11);ok($dedupe['status']==='eligible','CF04-FUT-005 same-envelope physical dedupe eligibility');
 
 $cdr=ContentSafetyUpgradeService::disarm($private['id'],11,'document-safe-v1');ok($cdr['status']==='validated','CF04-FUT-006 content disarm/reconstruction');
-$rescan=ContentSafetyUpgradeService::scheduleRescan('scanner-signature-update',['media_class'=>'document'],100);ok($rescan['queued']>=2,'CF04-FUT-007 automatic re-scan scheduling');
+$rescan=ContentSafetyUpgradeService::scheduleRescan('scanner-signature-update',['media_class'=>'document'],100,11);ok($rescan['queued']>=2,'CF04-FUT-007 automatic re-scan scheduling');
 ContentSafetyUpgradeService::killSwitch('application/x-danger',11,true,'critical parser CVE');err(fn()=>ContentSafetyUpgradeService::assertAllowed('application/x-danger'),'format_emergency_blocked','CF04-FUT-008 emergency format kill switch');ContentSafetyUpgradeService::killSwitch('application/x-danger',11,false,'patched');
 
 $plan=MediaOptimizationService::encodingPlan($video['id'],11,['max_bitrate'=>2000000]);ok(count($plan['renditions'])===2,'CF04-FUT-009 content-aware encoding plan');
