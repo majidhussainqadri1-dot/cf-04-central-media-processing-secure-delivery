@@ -14,3 +14,5 @@ This completes the source-review sequence only. Exact-head CI remains mandatory 
 
 ## Post-correction verification repair
 The first exact-head verification exposed an obsolete Round-94 source-shape assertion. Round 123 had correctly centralized upload continuation/completion authorization in `reauthorizeActiveUpload()`, but the old regression still searched for the former inline completion-only error text. The regression was updated to verify the centralized complete-phase call, owner-decision phase binding and stale-version rejection. No runtime behavior was weakened.
+
+The next exact-head verification reached the new Round-123 regression and exposed a test-only PHP interpolation bug: the assertion string interpolated `$actor` while constructing the expected source text. The regression was corrected to use explicit escaped source needles for part/resume/complete calls. This was a test defect, not an application-runtime failure, and was corrected before Round 130 verification could be accepted.
