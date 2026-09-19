@@ -29,7 +29,7 @@ No external-environment claim may be inferred from source completion.
 
 - CF04-CEN-01 through CF04-CEN-10: implemented and source-tested in candidate `1.3.0-rc.1`.
 - CF04-NJ-01 through CF04-NJ-06: source paths/negative gates represented in the automated suite.
-- Data constitution: `C0 Public`, `C1 Account`, `C2 Private Communication`, `C3 Professional Evidence`, `C4 Financial/Legal`, `C5 Clinical/High Sensitivity`.
+- Data constitution: `C0 Public`, `C1 Account`, `C2 Private Communication`, `C3 Professional Evidence`, `C4 Clinical-Sensitive`, `C5 Security Secret`.
 - Runtime remains disabled by default. Hostinger/real-provider/browser/accessibility/load/penetration/migration/restore/rollback/live/operational acceptance is still pending.
 
 ## Future-40 extension — 2026-09-16
