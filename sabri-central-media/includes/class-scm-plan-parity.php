@@ -17,7 +17,7 @@ final class PlanParityRegistry {
                 'CF04-CEN-02'=>'fail-closed quarantine, scan and MIME/content verification',
                 'CF04-CEN-03'=>'idempotent versioned checksum-linked derivatives with stale-state blocking',
                 'CF04-CEN-04'=>'audience/object/purpose/expiry-scoped grants and privacy/rights-aware CDN keys',
-                'CF04-CEN-05'=>'C2-C5 never public CDN/index; encrypted owner-authorized access',
+                'CF04-CEN-05'=>'C0-only public CDN/index; C1-C5 require non-public owner-authorized delivery',
                 'CF04-CEN-06'=>'caption/transcript/alt-text provenance, human correction and domain review',
                 'CF04-CEN-07'=>'low-bandwidth/audio/text alternatives, resumable transfer and explicit degraded state',
                 'CF04-CEN-08'=>'rights/delete/correction propagation to grants, derivatives, CDN and downstream projections',

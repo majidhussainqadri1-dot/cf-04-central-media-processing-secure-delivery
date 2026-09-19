@@ -20,11 +20,13 @@ ok($manifest['data_classes']===['C0','C1','C2','C3','C4','C5'],'NEW-PLAN data-cl
 ok(count($manifest['requirements'])===10&&isset($manifest['requirements']['CF04-CEN-01'],$manifest['requirements']['CF04-CEN-10']),'NEW-PLAN CF04-CEN-01 through CF04-CEN-10 registered');
 ok($manifest['native_journeys']===['CF04-NJ-01','CF04-NJ-02','CF04-NJ-03','CF04-NJ-04','CF04-NJ-05','CF04-NJ-06'],'NEW-PLAN native journeys registered');
 
-// C0 is public. C1 is authenticated/account data. C2-C5 can never opt into public CDN.
+// C0 is public. C1-C5 are non-public classes and can never opt into public CDN.
 $c0=policy('document','C0',['view','download']);
 ok($c0['privacy_class']==='C0'&&$c0['delivery']['public_cdn']===true&&in_array('public',$c0['rights']['allowed_audiences'],true),'NEW-PLAN C0 public policy');
 $c1=policy('document','C1',['view','download']);
 ok($c1['privacy_class']==='C1'&&$c1['delivery']['public_cdn']===false&&!in_array('public',$c1['rights']['allowed_audiences'],true),'NEW-PLAN C1 authenticated/private-to-account policy');
+$badC1=policy('document','C1',['view']);$badC1['delivery']['public_cdn']=true;$badC1['rights']=rights(['view'],true);
+err(fn()=>Policy::normalize($badC1,true),'public_cdn_privacy_denied','NEW-PLAN C1 public CDN denied');
 $bad=policy('document','C2',['view']);$bad['delivery']['public_cdn']=true;$bad['rights']=rights(['view'],true);
 err(fn()=>Policy::normalize($bad,true),'public_cdn_privacy_denied','NEW-PLAN C2-C5 public CDN denied');
 
@@ -38,11 +40,13 @@ $asset=np_asset('message:typed-owner','C3');
 ok(($asset['owner_type']??'')==='message'&&($asset['policy']['lawful_basis']??'')!==''&&($asset['policy']['revocation_hook']??'')!=='','CF04-CEN-01 typed owner/lawful-basis/revocation envelope');
 ok($asset['status']==='ready'&&$asset['scan_status']==='passed'&&$asset['processing_status']==='completed','CF04-CEN-02 fail-closed ingest reaches ready only after scan/process');
 
-// C0 CDN mapping is rights/policy aware. C1/C2-C5 never publish publicly.
+// C0 CDN mapping is rights/policy aware. C1-C5 never publish publicly.
 $public=np_asset('message:public-current-plan','C0');
 $pd=DerivativeService::forAsset($public['id'])[0];
 $cdn=DeliveryService::publishPublic($public['id'],$pd['id']);
 ok(($cdn['privacy_class']??'')==='C0'&&($cdn['policy_hash']??'')===$public['policy_hash']&&($cdn['rights_hash']??'')===$public['rights']['policy_hash'],'CF04-CEN-04 public CDN mapping bound to C0 policy/rights');
+$accountAsset=np_asset('message:account-current-plan','C1');
+err(fn()=>DeliveryService::publishPublic($accountAsset['id'],DerivativeService::forAsset($accountAsset['id'])[0]['id']),'public_cdn_denied','CF04-CEN-05 C1 asset cannot reach public CDN');
 err(fn()=>DeliveryService::publishPublic($asset['id'],DerivativeService::forAsset($asset['id'])[0]['id']),'public_cdn_denied','CF04-CEN-05 C2-C5 asset cannot reach public CDN');
 
 // Signed grant explicitly binds purpose and privacy class as well as existing owner/policy/rights claims.
