@@ -17,3 +17,7 @@ Review completed in full before correction.
 ## Release boundary
 
 This round is a repository/source-evidence review only. Exact-head CI must pass after this correction. Hostinger staging, real providers, database/migration state, deployed artifact parity, live smoke tests and operational monitoring remain unverified external gates.
+
+## Post-correction verification repair
+
+The first exact-head CI verification exposed an obsolete Round-102 regression assertion that required the literal historical range `72–101`. That assertion contradicted the Round-120 evidence-freshness correction by failing whenever the review range legitimately advanced. The assertion was corrected to require a monotonic review endpoint of at least 101, while Round-120 separately requires the current `72–120` range. This repair was made before accepting the Round-120 correction as verified.
