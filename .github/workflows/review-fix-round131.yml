@@ -23,8 +23,7 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('sabri-central-media/includes/class-scm-future40.php')
-          s=p.read_text()
+          p=Path('sabri-central-media/includes/class-scm-future40.php');s=p.read_text()
           old="$similarity=(float)($score['similarity']??0.0);if($similarity>=$threshold)$matches[]=['asset_id'=>$other['id'],'similarity'=>$similarity];"
           new="$similarity=(float)($score['similarity']??NAN);if(!is_finite($similarity)||$similarity<0.0||$similarity>1.0)throw new Error('perceptual_similarity_invalid','Near-duplicate adapter returned invalid similarity.',503);if($similarity>=$threshold)$matches[]=['asset_id'=>$other['id'],'similarity'=>$similarity];"
           if old not in s: raise SystemExit('Round 131 similarity anchor missing')
@@ -32,21 +31,17 @@ jobs:
           old="$confidence=(float)($item['confidence']??-1);$box=(array)($item['box']??[]);if($confidence<0||$confidence>1||count($box)!==4)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);"
           new="$confidence=(float)($item['confidence']??NAN);$box=(array)($item['box']??[]);if(!is_finite($confidence)||$confidence<0||$confidence>1||count($box)!==4)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);foreach($box as $coordinate){$coordinate=(float)$coordinate;if(!is_finite($coordinate)||$coordinate<0.0||$coordinate>1.0)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);}"
           if old not in s: raise SystemExit('Round 131 OCR anchor missing')
-          s=s.replace(old,new,1)
-          p.write_text(s)
-
-          t=Path('tests/review-round-131-future-numeric-boundaries.php')
-          t.write_text('''<?php\ndeclare(strict_types=1);\n$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-future40.php');\nfunction r131($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 131 FAIL: $m\\n");exit(1);}echo "ROUND 131 PASS: $m\\n";}\nr131(str_contains($s,"perceptual_similarity_invalid")&&str_contains($s,"!is_finite($similarity)")&&str_contains($s,"$similarity>1.0"),'near-duplicate adapter similarity is finite and normalized');\nr131(str_contains($s,"!is_finite($confidence)")&&str_contains($s,"foreach($box as $coordinate)")&&str_contains($s,"!is_finite($coordinate)"),'OCR confidence and normalized box coordinates reject non-finite/out-of-range values');\necho "REVIEW ROUND 131 FUTURE NUMERIC BOUNDARIES: PASS\\n";\n''')
-
-          q=Path('tools/quality-check.sh');x=q.read_text();line='php "$ROOT/tests/review-round-131-future-numeric-boundaries.php"\n'
+          p.write_text(s.replace(old,new,1))
+          Path('tests/review-round-131-future-numeric-boundaries.php').write_text('''<?php\ndeclare(strict_types=1);\n$root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-future40.php');\nfunction r131($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 131 FAIL: $m\\n");exit(1);}echo "ROUND 131 PASS: $m\\n";}\nr131(str_contains($s,"perceptual_similarity_invalid")&&str_contains($s,"!is_finite($similarity)")&&str_contains($s,"$similarity>1.0"),'near-duplicate adapter similarity is finite and normalized');\nr131(str_contains($s,"!is_finite($confidence)")&&str_contains($s,"foreach($box as $coordinate)")&&str_contains($s,"!is_finite($coordinate)"),'OCR confidence and normalized box coordinates reject non-finite/out-of-range values');\necho "REVIEW ROUND 131 FUTURE NUMERIC BOUNDARIES: PASS\\n";\n''')
+          q=Path('tools/quality-check.sh');x=q.read_text();line='php "$ROOT/tests/review-round-131-future-numeric-boundaries.php"\n';anchor='php "$ROOT/tests/review-round-130-final-evidence.php"\n'
           if line not in x:
-              anchor='php "$ROOT/tests/review-round-130-final-evidence.php"\n'
               if anchor not in x: raise SystemExit('quality anchor missing')
-              x=x.replace(anchor,anchor+line,1);q.write_text(x)
-
-          d=Path('docs/reviews/REVIEW-ROUND-131-FUTURE-NUMERIC-BOUNDARIES-2026-09-21.md')
-          d.write_text('''# Review Round 131 — Future-40 numeric trust boundaries\n\nReview completed before correction.\n\n## Frozen defect ledger\n1. `PerceptualMediaService::nearDuplicates()` accepted non-finite/out-of-range adapter similarity values; positive infinity could satisfy the threshold.\n2. `RichMediaMetadataService::ocrMap()` range-checked confidence without rejecting NaN and did not validate that four box coordinates were finite normalized values.\n\n## Correction\n- Similarity must now be finite and within `0.0..1.0`, otherwise fail closed.\n- OCR confidence must be finite and within `0.0..1.0`; every box coordinate must also be finite and normalized.\n- Added permanent Round 131 regression coverage and wired it into the quality gate.\n\nNo staging/live claim is made.\n''')
-          r=Path('README.md');z=r.read_text();z=z.replace('72–130','72–131');r.write_text(z)
+              q.write_text(x.replace(anchor,anchor+line,1))
+          d=Path('docs/reviews/REVIEW-ROUND-131-FUTURE-NUMERIC-BOUNDARIES-2026-09-21.md');d.write_text('''# Review Round 131 — Future-40 numeric trust boundaries\n\nReview completed before correction.\n\n## Frozen defect ledger\n1. `PerceptualMediaService::nearDuplicates()` accepted non-finite/out-of-range adapter similarity values; positive infinity could satisfy the threshold.\n2. `RichMediaMetadataService::ocrMap()` range-checked confidence without rejecting NaN and did not validate that four box coordinates were finite normalized values.\n\n## Correction\n- Similarity must now be finite and within `0.0..1.0`, otherwise fail closed.\n- OCR confidence must be finite and within `0.0..1.0`; every box coordinate must also be finite and normalized.\n- Added permanent Round 131 regression coverage and wired it into the quality gate.\n- Post-correction verification exposed a test-only Round-130 ledger assertion frozen at 130; it was repaired inside Round 131 to require a monotonic ledger endpoint >=130.\n\nNo staging/live claim is made.\n''')
+          r=Path('README.md');z=r.read_text().replace('72–130','72–131');r.write_text(z)
+          t=Path('tests/review-round-130-final-evidence.php');y=t.read_text();old="r130(str_contains($readme,'subsequent focused rounds 72–130'),'repository-facing review ledger reaches Round 130');";new="preg_match('/subsequent focused rounds 72–(\\d+)/u',$readme,$ledger);r130(isset($ledger[1])&&(int)$ledger[1]>=130,'repository-facing review ledger reaches Round 130 or later');"
+          if old not in y: raise SystemExit('Round 130 ledger assertion anchor missing')
+          t.write_text(y.replace(old,new,1))
           PY
       - name: Verify Round 131 correction
         run: |
@@ -57,7 +52,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add sabri-central-media/includes/class-scm-future40.php tests/review-round-131-future-numeric-boundaries.php tools/quality-check.sh docs/reviews/REVIEW-ROUND-131-FUTURE-NUMERIC-BOUNDARIES-2026-09-21.md README.md
+          git add sabri-central-media/includes/class-scm-future40.php tests/review-round-131-future-numeric-boundaries.php tests/review-round-130-final-evidence.php tools/quality-check.sh docs/reviews/REVIEW-ROUND-131-FUTURE-NUMERIC-BOUNDARIES-2026-09-21.md README.md
           git diff --cached --check
           git commit -m 'CF-04 Round 131: reject invalid Future-40 numeric evidence'
           git push origin HEAD:codex/cf04-three-plan-complete-1.2.0
