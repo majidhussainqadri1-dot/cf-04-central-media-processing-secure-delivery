@@ -83,7 +83,6 @@ final class RightsPolicy {
         if($ops===[]||$aud===[]||$territories===[]||count($ops)!==count(array_unique($rawOps))||array_diff($ops,$allowedOps)!==[]||count($aud)!==count(array_unique($rawAud))||array_diff($aud,$allowedAudiences)!==[]||array_filter($territories,fn($v)=>$v!=='GLOBAL'&&!preg_match('/^[A-Z]{2}$/',$v)))throw new Error('rights_policy_incomplete','Rights policy contains empty or unsupported values.',400);
         if(!in_array((string)$input['consent_status'],['granted','not_required'],true))throw new Error('consent_not_granted','Required consent is not granted.',403);
         $expires=(int)$input['expires_at'];if($expires>0&&$expires<=Utils::now())throw new Error('rights_expired','Rights policy expired.',403);
-        $minimumConfidence=(float)($input['safety']['minimum_confidence']??0.80);if(!is_finite($minimumConfidence)||$minimumConfidence<0.0||$minimumConfidence>1.0)throw new Error('safety_confidence_invalid','Safety minimum confidence must be finite and normalized.',400);
         $normalized=[
             'rights_id'=>Utils::text((string)$input['rights_id'],96),'rights_version'=>max(1,(int)$input['rights_version']),
             'copyright_basis'=>Utils::key((string)$input['copyright_basis'],48),'license_id'=>Utils::text((string)($input['license_id']??''),96),
@@ -121,6 +120,7 @@ final class Policy {
         $delivery=(array)$input['delivery'];Utils::requireFields($delivery,['modes','grant_ttl_seconds','allow_ranges','allow_download','public_cdn'],'delivery_policy_incomplete');
         $modes=array_values(array_filter(array_unique(array_map(fn($m)=>Utils::key((string)$m,32),(array)$delivery['modes']))));$allowedModes=['same_origin_proxy','token_endpoint','public_cdn'];if($modes===[]||array_diff($modes,$allowedModes)!==[])throw new Error('delivery_mode_invalid','Delivery mode is missing or unsupported.',400);
         $rights=RightsPolicy::normalize((array)$input['rights']);
+        $minimumConfidence=(float)($input['safety']['minimum_confidence']??0.80);if(!is_finite($minimumConfidence)||$minimumConfidence<0.0||$minimumConfidence>1.0)throw new Error('safety_confidence_invalid','Safety minimum confidence must be finite and normalized.',400);
         $normalized=[
             'policy_id'=>Utils::text((string)$input['policy_id'],96),'policy_version'=>max(1,(int)$input['policy_version']),
             'owner_domain'=>Utils::key((string)$input['owner_domain'],64),'purpose'=>Utils::key((string)$input['purpose'],96),'lawful_basis'=>Utils::key((string)$input['lawful_basis'],64),'revocation_hook'=>Utils::key((string)$input['revocation_hook'],96),
