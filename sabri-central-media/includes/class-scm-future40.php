@@ -132,7 +132,7 @@ final class PerceptualMediaService {
         return RecordStore::put('perceptual_fingerprint',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'algorithm'=>$algorithm,'algorithm_version'=>$version,'fingerprint'=>$value,'privacy_class'=>$asset['privacy_class'],'owner_domain'=>$asset['owner_domain'],'policy_hash'=>$asset['policy_hash'],'created_at'=>Utils::now()]);
     }
     public static function nearDuplicates(string $assetId,int $actor,float $threshold=0.9): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'audit_sabri_media');$asset=Future40Registry::asset($assetId,true);$threshold=max(0.5,min(1.0,$threshold));
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'audit_sabri_media');$asset=Future40Registry::asset($assetId,true);if(!is_finite($threshold)||$threshold<0.5||$threshold>1.0)throw new Error('perceptual_threshold_invalid','Near-duplicate threshold must be finite and within 0.5..1.0.',400);
         $source=array_values(array_filter(RecordStore::all('perceptual_fingerprint',0,'active',100000),fn($r)=>($r['asset_id']??'')===$assetId));
         if($source===[])throw new Error('perceptual_fingerprint_missing','Perceptual fingerprint is required first.',409);
         $matches=[];
@@ -182,8 +182,8 @@ final class MediaOptimizationService {
     public static function encodingPlan(string $assetId,int $actor,array $constraints=[]): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);ContentSafetyUpgradeService::assertAllowed((string)$asset['mime']);
         $result=FutureAdapterRegistry::call('future_009',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'media_class'=>$asset['media_class'],'size'=>$asset['size'],'constraints'=>$constraints]);
-        $ladder=(array)($result['renditions']??[]);if($ladder===[])throw new Error('encoding_plan_invalid','Encoding adapter returned no renditions.',503);
-        return RecordStore::put('encoding_plan',hash('sha256',$assetId.'|'.Utils::canonicalJson($constraints)),['actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,'renditions'=>$ladder,'complexity'=>(float)($result['complexity']??0.0),'constraints'=>Utils::redact($constraints),'created_at'=>Utils::now()]);
+        $ladder=(array)($result['renditions']??[]);if($ladder===[])throw new Error('encoding_plan_invalid','Encoding adapter returned no renditions.',503);$complexity=(float)($result['complexity']??0.0);if(!is_finite($complexity)||$complexity<0.0)throw new Error('encoding_complexity_invalid','Encoding complexity must be finite and non-negative.',503);
+        return RecordStore::put('encoding_plan',hash('sha256',$assetId.'|'.Utils::canonicalJson($constraints)),['actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,'renditions'=>$ladder,'complexity'=>$complexity,'constraints'=>Utils::redact($constraints),'created_at'=>Utils::now()]);
     }
     public static function qualityScore(string $assetId,string $derivativeId,int $actor,array $thresholds): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);$derivative=RecordStore::get('derivative',$derivativeId);if(!$derivative||($derivative['asset_id']??'')!==$assetId)throw new Error('derivative_not_found','Derivative not found.',404);
@@ -251,7 +251,7 @@ final class DeliveryResilienceService {
         return ['asset_id'=>$assetId,'mode'=>'edge_verify_origin_authoritative','ttl_seconds'=>$ttl,'claims'=>['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];
     }
     public static function adaptiveUpload(array $network,array $bounds): array {
-        $rtt=max(0,(int)($network['rtt_ms']??0));$down=max(0.0,(float)($network['mbps']??0));$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));
+        $rtt=max(0,(int)($network['rtt_ms']??0));$down=(float)($network['mbps']??0);if(!is_finite($down)||$down<0.0)throw new Error('network_profile_invalid','Network throughput must be finite and non-negative.',400);$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));
         $part=$unstable||$rtt>400||$down<2?min($maxPart,1048576):($down<10?min($maxPart,4194304):min($maxPart,16777216));$parallel=$unstable?1:($down>=20?4:2);
         return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,'retry'=>'exponential-jitter','checkpoint_each_part'=>true];
     }
