@@ -18,7 +18,7 @@ $stream=stream_of('safe');
 try{err(fn()=>SafetySignalService::evaluate($stream,['asset_id'=>'r133-signal','policy'=>policy()]),'safety_signal_invalid','Round 133 scanner confidence rejects NaN');}finally{fclose($stream);}
 
 $p=policy('video','C3',['view','download','transform','reprocess']);
-$asset=['actor_id'=>11,'asset_id'=>'r133-a','id'=>'r133-a','status'=>'ready','sha256'=>hash('sha256','r133'),'media_class'=>'video','mime'=>'video/mp4','owner_domain'=>'file17','owner_object'=>'message:r133','object_version'=>1,'privacy_class'=>'C3','policy'=>$p,'policy_hash'=>$p['policy_hash'],'rights'=>$p['rights']];
+$asset=['actor_id'=>11,'asset_id'=>'r133-a','id'=>'r133-a','status'=>'ready','sha256'=>hash('sha256','r133'),'size'=>4,'media_class'=>'video','mime'=>'video/mp4','owner_domain'=>'file17','owner_object'=>'message:r133','object_version'=>1,'privacy_class'=>'C3','policy'=>$p,'policy_hash'=>$p['policy_hash'],'rights'=>$p['rights']];
 RecordStore::put('asset','r133-a',$asset);
 $other=$asset;$other['asset_id']=$other['id']='r133-b';$other['owner_object']='message:r133-b';RecordStore::put('asset','r133-b',$other);
 RecordStore::put('perceptual_fingerprint','r133-fa',['actor_id'=>11,'status'=>'active','asset_id'=>'r133-a','algorithm'=>'phash','algorithm_version'=>'1','fingerprint'=>'a']);
