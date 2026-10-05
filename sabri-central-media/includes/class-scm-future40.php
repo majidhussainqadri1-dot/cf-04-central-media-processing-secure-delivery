@@ -179,6 +179,16 @@ final class ContentSafetyUpgradeService {
 }
 
 final class MediaOptimizationService {
+    private static function finiteNumericMap(array $values,string $errorCode,string $label): array {
+        $safe=[];
+        foreach($values as $name=>$value){
+            $key=Utils::key((string)$name,64);
+            if($key===''||isset($safe[$key])||!(is_int($value)||is_float($value)||(is_string($value)&&is_numeric($value))))throw new Error($errorCode,$label.' must contain uniquely named numeric values.',503,['metric'=>$key]);
+            $number=(float)$value;if(!is_finite($number))throw new Error($errorCode,$label.' must contain finite numeric values.',503,['metric'=>$key]);
+            $safe[$key]=$number;
+        }
+        return $safe;
+    }
     public static function encodingPlan(string $assetId,int $actor,array $constraints=[]): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);ContentSafetyUpgradeService::assertAllowed((string)$asset['mime']);
         $result=FutureAdapterRegistry::call('future_009',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'media_class'=>$asset['media_class'],'size'=>$asset['size'],'constraints'=>$constraints]);
@@ -187,8 +197,8 @@ final class MediaOptimizationService {
     }
     public static function qualityScore(string $assetId,string $derivativeId,int $actor,array $thresholds): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);$derivative=RecordStore::get('derivative',$derivativeId);if(!$derivative||($derivative['asset_id']??'')!==$assetId)throw new Error('derivative_not_found','Derivative not found.',404);
-        $result=FutureAdapterRegistry::call('future_010',['asset_sha256'=>$asset['sha256'],'derivative_sha256'=>$derivative['sha256'],'kind'=>$derivative['kind'],'thresholds'=>$thresholds]);
-        $passed=($result['passed']??false)===true;$row=RecordStore::put('quality_score',hash('sha256',$assetId.'|'.$derivativeId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'derivative_id'=>$derivativeId,'metrics'=>(array)($result['metrics']??[]),'thresholds'=>$thresholds,'created_at'=>Utils::now()]);if(!$passed)throw new Error('derivative_quality_failed','Derivative failed objective quality policy.',409,['derivative_id'=>$derivativeId]);return $row;
+        $safeThresholds=self::finiteNumericMap($thresholds,'quality_threshold_invalid','Quality thresholds');$result=FutureAdapterRegistry::call('future_010',['asset_sha256'=>$asset['sha256'],'derivative_sha256'=>$derivative['sha256'],'kind'=>$derivative['kind'],'thresholds'=>$safeThresholds]);
+        $metrics=self::finiteNumericMap((array)($result['metrics']??[]),'quality_metric_invalid','Quality metrics');if($metrics===[])throw new Error('quality_metric_invalid','Quality adapter returned no objective metrics.',503);$passed=($result['passed']??false)===true;$row=RecordStore::put('quality_score',hash('sha256',$assetId.'|'.$derivativeId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'derivative_id'=>$derivativeId,'metrics'=>$metrics,'thresholds'=>$safeThresholds,'created_at'=>Utils::now()]);if(!$passed)throw new Error('derivative_quality_failed','Derivative failed objective quality policy.',409,['derivative_id'=>$derivativeId]);return $row;
     }
     public static function negotiateCodec(array $client,array $approved): string {
         $client=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$client));$approved=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$approved));foreach($approved as $codec)if(in_array($codec,$client,true))return $codec;throw new Error('codec_unavailable','No approved compatible codec is available.',406);
@@ -199,7 +209,7 @@ final class MediaOptimizationService {
     }
     public static function audioQc(string $assetId,int $actor,array $thresholds=[]): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);if(!in_array($asset['media_class'],['audio','video'],true))throw new Error('audio_qc_not_applicable','Audio QC is only applicable to audio/video assets.',400);
-        $result=FutureAdapterRegistry::call('future_013',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'thresholds'=>$thresholds]);$passed=($result['passed']??false)===true;$row=RecordStore::put('audio_qc',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'metrics'=>(array)($result['metrics']??[]),'issues'=>(array)($result['issues']??[]),'created_at'=>Utils::now()]);if(!$passed)throw new Error('audio_qc_failed','Audio technical quality policy failed.',409);return $row;
+        $safeThresholds=self::finiteNumericMap($thresholds,'audio_qc_threshold_invalid','Audio QC thresholds');$result=FutureAdapterRegistry::call('future_013',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'thresholds'=>$safeThresholds]);$metrics=self::finiteNumericMap((array)($result['metrics']??[]),'audio_qc_metric_invalid','Audio QC metrics');if($metrics===[])throw new Error('audio_qc_metric_invalid','Audio QC adapter returned no technical metrics.',503);$passed=($result['passed']??false)===true;$row=RecordStore::put('audio_qc',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'metrics'=>$metrics,'issues'=>(array)($result['issues']??[]),'created_at'=>Utils::now()]);if(!$passed)throw new Error('audio_qc_failed','Audio technical quality policy failed.',409);return $row;
     }
 }
 
