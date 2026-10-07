@@ -95,11 +95,13 @@ final class RightsPolicy {
     }
     public static function assert(array $rights,string $operation,array $context): void {
         $operation=Utils::key($operation,32);
+        Utils::requireFields($rights,['expires_at'],'rights_policy_incomplete');
+        $expires=Utils::integer($rights['expires_at'],'rights_integer_invalid',0);
+        if($expires>0&&$expires<=Utils::now())throw new Error('rights_expired','Rights policy expired.',403);
         if(!in_array($operation,(array)($rights['allowed_operations']??[]),true))throw new Error('rights_operation_denied','Operation not allowed by rights policy.',403,['operation'=>$operation]);
         $territory=strtoupper(Utils::text((string)($context['territory']??'GLOBAL'),8));
         $allowed=(array)($rights['allowed_territories']??[]);if(!in_array('GLOBAL',$allowed,true)&&!in_array($territory,$allowed,true))throw new Error('rights_territory_denied','Territory not allowed.',403);
         $aud=Utils::key((string)($context['audience_type']??'private'),64);if(!in_array($aud,(array)($rights['allowed_audiences']??[]),true))throw new Error('rights_audience_denied','Audience not allowed.',403);
-        $expires=(int)($rights['expires_at']??0);if($expires>0&&$expires<=Utils::now())throw new Error('rights_expired','Rights policy expired.',403);
     }
 }
 

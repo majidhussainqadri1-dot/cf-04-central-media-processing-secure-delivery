@@ -145,25 +145,40 @@ final class PrivacyTelemetry {
 }
 
 final class RightsRevocationService {
+    private static function expiry(array $asset): ?int {
+        try{return Utils::integer($asset['rights']['expires_at']??null,'rights_integer_invalid',0);}
+        catch(Error){return null;}
+    }
+
+    private static function rightsFingerprint(array $asset): string {
+        return hash('sha256',Utils::canonicalJson((array)($asset['rights']??[])));
+    }
+
+    private static function alreadyReconciled(array $asset): bool {
+        return in_array(($asset['rights_reconciled_reason']??''),['rights_expired','rights_invalid'],true)
+            &&hash_equals((string)($asset['rights_reconciled_hash']??''),self::rightsFingerprint($asset));
+    }
+
     public static function reconcileExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['checked'=>0,'revoked'=>0,'failed'=>0];
         $inventory=RecordStore::all('asset',0,null,1000000);
         usort($inventory,static function(array $a,array $b)use($now): int {
             $rank=static function(array $asset)use($now): int {
-                if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))return 2;
-                $expires=(int)($asset['rights']['expires_at']??0);
-                return $expires>0&&$expires<=$now?0:1;
+                if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)||self::alreadyReconciled($asset))return 2;
+                $expires=self::expiry($asset);
+                return $expires===null||($expires>0&&$expires<=$now)?0:1;
             };
             $ar=$rank($a);$br=$rank($b);if($ar!==$br)return $ar<=>$br;
-            if($ar===0){$ae=(int)($a['rights']['expires_at']??0);$be=(int)($b['rights']['expires_at']??0);if($ae!==$be)return $ae<=>$be;}
+            if($ar===0){$ae=self::expiry($a)??-1;$be=self::expiry($b)??-1;if($ae!==$be)return $ae<=>$be;}
             return strcmp((string)($a['id']??''),(string)($b['id']??''));
         });
         foreach(array_slice($inventory,0,$limit) as $asset){
             $result['checked']++;
-            if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))continue;
-            $expires=(int)($asset['rights']['expires_at']??0);
-            if($expires<1||$expires>$now)continue;
-            try{self::invalidate((string)$asset['id'],'rights_expired',$now);$result['revoked']++;}
+            if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)||self::alreadyReconciled($asset))continue;
+            $expires=self::expiry($asset);
+            if($expires===0||($expires!==null&&$expires>$now))continue;
+            $reason=$expires===null?'rights_invalid':'rights_expired';
+            try{self::invalidate((string)$asset['id'],$reason,$now);$result['revoked']++;}
             catch(\Throwable $exception){$result['failed']++;DegradedStateService::record('rights-reconciliation',$exception instanceof Error?$exception->errorCode:'unexpected',['asset_ref'=>Utils::hashReference((string)$asset['id'])]);}
         }
         return $result;
@@ -182,6 +197,15 @@ final class RightsRevocationService {
         ]);
         Audit::record('media_rights_revocation_propagated',['asset_id'=>$assetId,'reason'=>$reason,'projection_revocation_id'=>$row['id']]);
         if(function_exists('do_action'))do_action('scm.media.revoked',['asset_id'=>$assetId,'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],'reason'=>$reason,'projection_revocation_id'=>$row['id']]);
+        if(in_array($reason,['rights_expired','rights_invalid'],true)){
+            $fresh=RecordStore::get('asset',$assetId);
+            if($fresh){
+                $fresh['rights_reconciled_reason']=$reason;
+                $fresh['rights_reconciled_hash']=self::rightsFingerprint($fresh);
+                $fresh['rights_reconciled_at']=$effectiveAt?:Utils::now();
+                RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);
+            }
+        }
         return ['propagation'=>$propagation,'projection'=>$row];
     }
 }
