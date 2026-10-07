@@ -94,10 +94,10 @@ final class RightsPolicy {
         if($normalized['rights_id']===''||$normalized['copyright_basis']==='')throw new Error('rights_policy_incomplete','Rights identity and copyright basis are required.',400);if($normalized['clinical_confidentiality']&&in_array('public',$normalized['allowed_audiences'],true))throw new Error('clinical_public_audience_denied','Clinically confidential media cannot have a public audience.',400);$normalized['policy_hash']=hash('sha256',Utils::canonicalJson($normalized));return $normalized;
     }
     public static function assert(array $rights,string $operation,array $context): void {
+        $hasHash=array_key_exists('policy_hash',$rights);$providedHash=$rights['policy_hash']??null;
+        $rights=self::normalize($rights);
+        if($hasHash&&(!is_string($providedHash)||!hash_equals($rights['policy_hash'],$providedHash)))throw new Error('rights_policy_hash_mismatch','Rights policy integrity mismatch.',403);
         $operation=Utils::key($operation,32);
-        Utils::requireFields($rights,['expires_at'],'rights_policy_incomplete');
-        $expires=Utils::integer($rights['expires_at'],'rights_integer_invalid',0);
-        if($expires>0&&$expires<=Utils::now())throw new Error('rights_expired','Rights policy expired.',403);
         if(!in_array($operation,(array)($rights['allowed_operations']??[]),true))throw new Error('rights_operation_denied','Operation not allowed by rights policy.',403,['operation'=>$operation]);
         $territory=strtoupper(Utils::text((string)($context['territory']??'GLOBAL'),8));
         $allowed=(array)($rights['allowed_territories']??[]);if(!in_array('GLOBAL',$allowed,true)&&!in_array($territory,$allowed,true))throw new Error('rights_territory_denied','Territory not allowed.',403);
