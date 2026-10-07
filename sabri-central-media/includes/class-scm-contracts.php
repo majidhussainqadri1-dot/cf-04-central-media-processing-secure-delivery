@@ -40,7 +40,7 @@ final class DomainRegistry {
     public static function decision(string $domain,string $operation,array $context,bool $requireObjectVersion=true): array {
         $decision=self::call($domain,$operation,$context);
         if(($decision['allowed']??$decision['authorized']??false)!==true) throw new Error('domain_authorization_denied','Owning domain denied operation.',403,['domain'=>$domain,'operation'=>$operation,'reason'=>$decision['reason']??'denied']);
-        if($requireObjectVersion && (int)($decision['object_version']??0)<1) throw new Error('domain_authorization_incomplete','Owning domain omitted current object version.',503,['domain'=>$domain,'operation'=>$operation]);
+        if($requireObjectVersion)$decision['object_version']=Utils::integer($decision['object_version']??null,'domain_authorization_incomplete',1);
         return $decision;
     }
     public static function manifest(): array { $out=[];foreach(self::$domains as $id=>$entry)$out[$id]=['version'=>$entry['version'],'operations'=>array_keys($entry['callbacks']),'capabilities'=>$entry['capabilities']];return $out; }
@@ -56,11 +56,11 @@ final class Auth {
         $assertion=DomainRegistry::call('file00','verify_user',['user_id'=>$userId,'action'=>Utils::key($action,64),'service_id'=>Utils::key($serviceId,64),'context'=>Utils::redact($context)]);
         foreach(['verified','approved','active','eligible'] as $flag)if(($assertion[$flag]??false)!==true)throw new Error('account_not_verified','Account is not eligible.',403,['flag'=>$flag]);
         foreach(['suspended','rejected','erasure_pending','expired','sanctioned'] as $flag)if(!empty($assertion[$flag]))throw new Error('account_blocked','Account is blocked.',403,['state'=>$flag]);
-        if((int)($assertion['assertion_version']??0)<1)throw new Error('verification_incomplete','Verification assertion incomplete.',503);
+        $assertion['assertion_version']=Utils::integer($assertion['assertion_version']??null,'verification_incomplete',1);$assertionUser=Utils::integer($assertion['user_id']??null,'verification_incomplete',1);if($assertionUser!==$userId)throw new Error('verification_subject_mismatch','Verification assertion is bound to another user.',503);$assertion['user_id']=$assertionUser;
         return Utils::redact($assertion);
     }
     public static function transferParties(array $envelope,string $action): array {
-        $sender=(int)($envelope['sender_user_id']??0);$type=Utils::key((string)($envelope['recipient_type']??''),16);$recipient=(int)($envelope['recipient_user_id']??0);$group=Utils::text((string)($envelope['recipient_group_id']??''),96);
+        $sender=Utils::integer($envelope['sender_user_id']??null,'transfer_party_invalid',1);$type=Utils::key((string)($envelope['recipient_type']??''),16);$recipient=$type==='user'?Utils::integer($envelope['recipient_user_id']??null,'transfer_party_invalid',1):0;$group=Utils::text((string)($envelope['recipient_group_id']??''),96);
         $senderAssertion=self::verifiedUser($sender,$action,'file17',['party'=>'sender']);
         $recipientAssertion=null;
         if($type==='user')$recipientAssertion=self::verifiedUser($recipient,$action,'file17',['party'=>'recipient','sender_user_id'=>$sender]);
