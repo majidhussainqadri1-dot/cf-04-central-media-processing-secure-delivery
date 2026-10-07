@@ -14,7 +14,7 @@ $inventory=<<<'PATTERN'
 $inventory=RecordStore::all('asset',0,null,1000000)
 PATTERN;
 $priority=<<<'PATTERN'
-return $expires>0&&$expires<=$now?0:1
+return $expires===null||($expires>0&&$expires<=$now)?0:1
 PATTERN;
 $bounded=<<<'PATTERN'
 foreach(array_slice($inventory,0,$limit) as $asset)
@@ -24,7 +24,7 @@ r71(str_contains($p,$expected),'concurrent create conflict retains expected-vers
 r71(str_contains($p,"throw new Error('record_version_conflict','Concurrent record creation won before this insert.'"),'duplicate-key create races surface as record_version_conflict');
 r71(str_contains($p,"throw new Error('record_write_failed','Persistent insert failed.'"),'true infrastructure insert failure remains fail-closed as record_write_failed');
 r71(str_contains($r,$inventory),'rights reconciliation discovers the complete explicitly bounded inventory rather than repeatedly reading only the newest page');
-r71(str_contains($r,$priority),'expired rights are prioritized ahead of non-expired records, preventing head-page starvation');
+r71(str_contains($r,$priority),'expired and malformed rights are prioritized ahead of non-expired records, preventing head-page starvation');
 r71(str_contains($r,$bounded),'reconciliation mutation/check work remains bounded by the caller limit');
 $legacy=<<<'PATTERN'
 foreach(RecordStore::list('asset',0,null,$limit) as $asset)
