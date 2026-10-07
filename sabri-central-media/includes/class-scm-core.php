@@ -19,6 +19,16 @@ final class Utils {
     public static function id(string $prefix='scm'): string { return self::key($prefix,16).'-'.bin2hex(random_bytes(16)); }
     public static function now(): int { return time(); }
     public static function bool(mixed $v): bool { return $v===true||$v===1||$v==='1'||$v==='true'; }
+    public static function integer(mixed $value,string $code='integer_invalid',int $min=PHP_INT_MIN,int $max=PHP_INT_MAX): int {
+        if(is_int($value))$integer=$value;
+        elseif(is_string($value)&&preg_match('/^(?:0|[1-9][0-9]*)$/D',$value)){
+            $validated=filter_var($value,FILTER_VALIDATE_INT,['options'=>['min_range'=>$min,'max_range'=>$max]]);
+            if($validated===false)throw new Error($code,'Integer value is outside the supported range.',400);
+            $integer=$validated;
+        }else throw new Error($code,'A canonical integer value is required.',400);
+        if($integer<$min||$integer>$max)throw new Error($code,'Integer value is outside the supported range.',400);
+        return $integer;
+    }
     public static function canonicalize(mixed $v): mixed { if(!is_array($v))return $v; if(array_is_list($v))return array_map([self::class,'canonicalize'],$v); ksort($v,SORT_STRING); foreach($v as $k=>$i)$v[$k]=self::canonicalize($i); return $v; }
     public static function json(array $data): string { return json_encode($data,JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR); }
     public static function canonicalJson(array $data): string { return self::json(self::canonicalize($data)); }
