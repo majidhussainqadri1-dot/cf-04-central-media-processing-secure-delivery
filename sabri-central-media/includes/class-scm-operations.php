@@ -146,14 +146,71 @@ final class KeyRotationService {
         return $count;
     }
     private static function deferCleanup(string $runId,string $providerId,string $oldKey,array $group): void {
-        $assetIds=[];$notBefore=Utils::now()+3600;foreach($group as $entry){$assetId=$entry['type']==='asset'?(string)$entry['record']['id']:(string)($entry['record']['asset_id']??'');if($assetId==='')continue;$assetIds[$assetId]=true;$lock=RecordStore::get('object_lock',hash('sha256',$assetId));$notBefore=max($notBefore,(int)($lock['locked_until']??0));}
-        $id=hash('sha256',$providerId.'|'.$oldKey);$existing=RecordStore::get('key_rotation_cleanup',$id);$row=['actor_id'=>0,'status'=>'deferred_lock','provider_id'=>$providerId,'object_key'=>$oldKey,'object_key_hash'=>hash('sha256',$oldKey),'asset_ids'=>array_keys($assetIds),'not_before'=>$notBefore,'rotation_id'=>$runId,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()];RecordStore::put('key_rotation_cleanup',$id,$row,$existing?(int)$existing['version']:0);
+        $assetIds=[];$notBefore=Utils::now()+3600;
+        foreach($group as $entry){
+            $assetId=$entry['type']==='asset'?(string)$entry['record']['id']:(string)($entry['record']['asset_id']??'');
+            if($assetId==='')throw new Error('cleanup_identity_invalid','Deferred cleanup requires a policy parent.',409);
+            $assetIds[$assetId]=true;
+            $lockedUntil=ResidencyCryptoService::lockUntil($assetId);
+            if($lockedUntil!==null)$notBefore=max($notBefore,$lockedUntil);
+        }
+        if($assetIds===[])throw new Error('cleanup_identity_invalid','Deferred cleanup requires asset references.',409);
+        $id=hash('sha256',$providerId.'|'.$oldKey);$existing=RecordStore::get('key_rotation_cleanup',$id);
+        $row=['actor_id'=>0,'status'=>'deferred_lock','provider_id'=>$providerId,'object_key'=>$oldKey,'object_key_hash'=>hash('sha256',$oldKey),'asset_ids'=>array_keys($assetIds),'not_before'=>$notBefore,'rotation_id'=>$runId,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()];
+        RecordStore::put('key_rotation_cleanup',$id,$row,$existing?(int)$existing['version']:0);
     }
     public static function reconcileDeferredCleanup(int $limit=200): array {
         $limit=max(1,min(2000,$limit));$out=['checked'=>0,'completed'=>0,'pending'=>0,'failed'=>0];
-        foreach(RecordStore::all('key_rotation_cleanup',0,null,100000) as $snapshot){if($out['checked']>=$limit)break;if(in_array(($snapshot['status']??''),['completed','cancelled'],true))continue;$out['checked']++;$id=(string)$snapshot['id'];$row=RecordStore::get('key_rotation_cleanup',$id)??$snapshot;if((int)($row['not_before']??0)>Utils::now()){$out['pending']++;continue;}$locked=false;$next=0;foreach((array)($row['asset_ids']??[]) as $assetId){$lock=RecordStore::get('object_lock',hash('sha256',(string)$assetId));if($lock&&($lock['status']??'')==='locked'&&(int)($lock['locked_until']??0)>Utils::now()){$locked=true;$next=max($next,(int)$lock['locked_until']);}}if($locked){$row['status']='deferred_lock';$row['not_before']=$next;$row['updated_at']=Utils::now();RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['pending']++;continue;}
-            $providerId=Utils::key((string)($row['provider_id']??''),64);$objectKey=(string)($row['object_key']??'');if($providerId===''||$objectKey===''){$row['status']='failed';$row['last_error']='cleanup_identity_invalid';RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['failed']++;continue;}if(self::liveReferences($providerId,$objectKey)!==[]){$row['status']='pending_reference';$row['not_before']=Utils::now()+3600;$row['updated_at']=Utils::now();RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['pending']++;continue;}
-            try{$provider=ProviderRegistry::get($providerId);if($provider->exists($objectKey)&&!$provider->delete($objectKey)&&$provider->exists($objectKey))throw new Error('key_rotation_cleanup_failed','Deferred old ciphertext cleanup failed.',503);$row['status']='completed';$row['completed_at']=Utils::now();$row['updated_at']=Utils::now();RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['completed']++;}catch(\Throwable $e){$row=RecordStore::get('key_rotation_cleanup',$id)??$row;$row['status']='pending_retry';$row['last_error']=$e instanceof Error?$e->errorCode:'unexpected';$row['not_before']=Utils::now()+3600;$row['updated_at']=Utils::now();try{RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);}catch(\Throwable){}$out['failed']++;}
+        foreach(RecordStore::all('key_rotation_cleanup',0,null,100000) as $snapshot){
+            if($out['checked']>=$limit)break;
+            if(in_array(($snapshot['status']??null),['completed','cancelled'],true))continue;
+            $out['checked']++;$id=(string)$snapshot['id'];$row=RecordStore::get('key_rotation_cleanup',$id)??$snapshot;
+            try{
+                if(!in_array(($row['status']??null),['deferred_lock','pending_reference','pending_retry','failed'],true))
+                    throw new Error('cleanup_identity_invalid','Deferred cleanup state is invalid.',409);
+                $providerId=$row['provider_id']??null;$objectKey=$row['object_key']??null;
+                if(!is_string($providerId)||$providerId===''||Utils::key($providerId,64)!==$providerId||
+                   !is_string($objectKey)||!preg_match('/^[a-f0-9]{64}$/D',$objectKey)||
+                   ($row['object_key_hash']??null)!==hash('sha256',$objectKey)||
+                   $id!==hash('sha256',$providerId.'|'.$objectKey))
+                    throw new Error('cleanup_identity_invalid','Deferred cleanup provider or object identity is invalid.',409);
+                $assetIds=$row['asset_ids']??null;
+                if(!is_array($assetIds)||!array_is_list($assetIds)||$assetIds===[])
+                    throw new Error('cleanup_identity_invalid','Deferred cleanup asset references are missing.',409);
+                foreach($assetIds as $assetId){
+                    if(!is_string($assetId)||!preg_match('/^[A-Za-z0-9._:-]{1,96}$/D',$assetId))
+                        throw new Error('cleanup_identity_invalid','Deferred cleanup asset reference is invalid.',409);
+                }
+                if(count(array_unique($assetIds))!==count($assetIds))
+                    throw new Error('cleanup_identity_invalid','Deferred cleanup asset references are duplicated.',409);
+                $notBefore=Utils::integer($row['not_before']??null,'cleanup_identity_invalid',1,PHP_INT_MAX);
+                if($notBefore>Utils::now()){$out['pending']++;continue;}
+                $next=0;
+                foreach($assetIds as $assetId){
+                    $lockedUntil=ResidencyCryptoService::lockUntil($assetId);
+                    if($lockedUntil!==null&&$lockedUntil>Utils::now())$next=max($next,$lockedUntil);
+                }
+                if($next>0){
+                    $row['status']='deferred_lock';$row['not_before']=$next;$row['updated_at']=Utils::now();
+                    RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['pending']++;continue;
+                }
+                if(self::liveReferences($providerId,$objectKey)!==[]){
+                    $row['status']='pending_reference';$row['not_before']=Utils::now()+3600;$row['updated_at']=Utils::now();
+                    RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['pending']++;continue;
+                }
+                $provider=ProviderRegistry::get($providerId);
+                if($provider->exists($objectKey)&&!$provider->delete($objectKey)&&$provider->exists($objectKey))
+                    throw new Error('key_rotation_cleanup_failed','Deferred old ciphertext cleanup failed.',503);
+                $row['status']='completed';$row['completed_at']=Utils::now();$row['updated_at']=Utils::now();
+                RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);$out['completed']++;
+            }catch(\Throwable $e){
+                $row=RecordStore::get('key_rotation_cleanup',$id)??$row;
+                $invalid=$e instanceof Error&&in_array($e->errorCode,['cleanup_identity_invalid','object_lock_record_invalid'],true);
+                $row['status']=$invalid?'failed':'pending_retry';$row['last_error']=$e instanceof Error?$e->errorCode:'unexpected';
+                $row['not_before']=$invalid?($row['not_before']??null):Utils::now()+3600;$row['updated_at']=Utils::now();
+                try{RecordStore::put('key_rotation_cleanup',$id,$row,(int)$row['version']);}catch(\Throwable){}
+                $out['failed']++;
+            }
         }
         return $out;
     }

@@ -355,19 +355,29 @@ final class ResidencyCryptoService {
     public static function assertPublicCdnAllowed(string $assetId): void {
         if(self::hasPolicy($assetId))throw new Error('residency_cdn_region_unverified','Public CDN publication is denied while CDN residency is not provider-attested.',503);
     }
-    public static function isLocked(string $assetId): bool {
+    public static function lockUntil(string $assetId): ?int {
         $lock=RecordStore::get('object_lock',hash('sha256',$assetId));
-        return (bool)($lock&&($lock['status']??'')==='locked'&&(int)($lock['locked_until']??0)>Utils::now());
+        if($lock===null)return null;
+        if(($lock['asset_id']??null)!==$assetId||($lock['status']??null)!=='locked')
+            throw new Error('object_lock_record_invalid','Persisted object-lock identity or state is invalid.',409);
+        return Utils::integer($lock['locked_until']??null,'object_lock_record_invalid',1,PHP_INT_MAX);
+    }
+    public static function isLocked(string $assetId): bool {
+        $until=self::lockUntil($assetId);
+        return $until!==null&&$until>Utils::now();
     }
     public static function assertUnlocked(string $assetId,string $operation): void {
-        if(self::isLocked($assetId)){$lock=RecordStore::get('object_lock',hash('sha256',$assetId));throw new Error('object_lock_active','Physical mutation is blocked by active WORM/object lock.',423,['operation'=>Utils::key($operation,64),'locked_until'=>(int)($lock['locked_until']??0)]);}
+        $until=self::lockUntil($assetId);
+        if($until!==null&&$until>Utils::now())
+            throw new Error('object_lock_active','Physical mutation is blocked by active WORM/object lock.',423,['operation'=>Utils::key($operation,64),'locked_until'=>$until]);
     }
     public static function objectLock(string $assetId,int $actor,int $until,string $reason): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_hold');$asset=Future40Registry::asset($assetId);$reason=Utils::text($reason,255);
         if($until<=Utils::now()||$reason==='')throw new Error('object_lock_invalid','Object-lock expiry and reason are required.',400);
         $id=hash('sha256',$assetId);$existing=RecordStore::get('object_lock',$id);
-        if($existing&&($existing['status']??'')==='locked'&&(int)($existing['locked_until']??0)>Utils::now()&&$until<(int)$existing['locked_until'])throw new Error('object_lock_reduction_denied','An active compliance lock cannot be shortened.',409);
-        $until=max($until,(int)($existing['locked_until']??0));$holds=LegalHoldService::active($assetId);
+        $previousUntil=self::lockUntil($assetId);
+        if($previousUntil!==null&&$previousUntil>Utils::now()&&$until<$previousUntil)throw new Error('object_lock_reduction_denied','An active compliance lock cannot be shortened.',409);
+        $until=max($until,$previousUntil??0);$holds=LegalHoldService::active($assetId);
         $row=RecordStore::put('object_lock',$id,['actor_id'=>$actor,'status'=>'locked','asset_id'=>$assetId,'locked_until'=>$until,'reason'=>$reason,'mode'=>'compliance','retention_class'=>(string)($asset['policy']['retention']['class']??''),'legal_hold_ids'=>array_values(array_map('strval',array_column($holds,'id'))),'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
         Audit::record('future40_object_lock_set',['asset_id'=>$assetId,'actor_id'=>$actor,'locked_until'=>$until,'retention_class'=>$row['retention_class'],'legal_hold_count'=>count($row['legal_hold_ids'])]);return $row;
     }
