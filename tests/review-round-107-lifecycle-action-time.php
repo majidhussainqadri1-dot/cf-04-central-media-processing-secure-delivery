@@ -3,7 +3,7 @@ declare(strict_types=1);
 $root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-lifecycle.php');
 function r107($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 107 FAIL: $m\n");exit(1);}echo "ROUND 107 PASS: $m\n";}
 $objectVersion=<<<'PATTERN'
-'object_version'=>(int)$asset['object_version']
+'object_version'=>$decision['object_version']
 PATTERN;
 $purgePending=<<<'PATTERN'
 if((int)$purge['pending']>0)
