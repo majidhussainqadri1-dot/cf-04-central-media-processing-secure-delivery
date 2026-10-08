@@ -171,48 +171,73 @@ final class KeyRotationService {
 }
 
 final class CostService {
+    private static function amount(mixed $value,string $code,bool $positive=false): float {
+        if(is_int($value)||is_float($value))$n=(float)$value;
+        elseif(is_string($value)&&preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$value))$n=(float)$value;
+        else throw new Error($code,'Canonical non-negative decimal required.',400);
+        if(!is_finite($n)||$n<0||$n>1000000000||($positive&&$n<=0))throw new Error($code,'Amount outside supported range.',400);
+        return $n;
+    }
+    private static function ledgerTime(mixed $v,string $code): int {return Utils::integer($v,$code,1,253402300799);}
     public static function record(string $assetId,string $provider,string $purpose,array $units,array $rates): array {
-    $asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
-    $provider=Utils::key($provider,64);$purpose=Utils::key($purpose,64);
-    if($provider===''||$purpose===''||$units===[])throw new Error('cost_identity_invalid','Cost provider, purpose and units are required.',400);
-    $safeUnits=[];$safeRates=[];$cost=0.0;
-    foreach($units as $name=>$value){
-        $key=Utils::key((string)$name,64);$unit=(float)$value;
-        if($key===''||isset($safeUnits[$key]))throw new Error('cost_unit_duplicate','Cost unit names must be unique after normalization.',400,['unit'=>$key]);
-        $rateKey=array_key_exists($name,$rates)?$name:$key;$rate=(float)($rates[$rateKey]??0);
-        if(!is_finite($unit)||!is_finite($rate)||$unit<0||$rate<0)throw new Error('cost_value_invalid','Cost units and rates must be finite and non-negative.',400);
-        $safeUnits[$key]=$unit;$safeRates[$key]=$rate;$cost+=$unit*$rate;
+        $asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+        $domain=$asset['owner_domain']??null;
+        if(!is_string($domain)||$domain===''||Utils::key($domain,64)!==$domain)throw new Error('cost_identity_invalid','Owner domain is missing or noncanonical.',409);
+        $provider=Utils::key($provider,64);$purpose=Utils::key($purpose,64);
+        if($provider===''||$purpose===''||$units===[])throw new Error('cost_identity_invalid','Cost provider, purpose and units are required.',400);
+        $safeUnits=[];$safeRates=[];$cost=0.0;
+        foreach($units as $name=>$value){
+            $key=Utils::key((string)$name,64);
+            if($key===''||array_key_exists($key,$safeUnits))throw new Error('cost_unit_duplicate','Duplicate cost unit.',400);
+            $unit=self::amount($value,'cost_value_invalid');
+            $rateKey=array_key_exists($name,$rates)?$name:$key;
+            if(!array_key_exists($rateKey,$rates))throw new Error('cost_rate_missing','Explicit unit rate required.',400);
+            $rate=self::amount($rates[$rateKey],'cost_value_invalid');
+            $safeUnits[$key]=$unit;$safeRates[$key]=$rate;$cost+=$unit*$rate;
+            if(!is_finite($cost)||$cost>1000000000)throw new Error('cost_value_invalid','Cost exceeds ceiling.',400);
+        }
+        $cost=round($cost,8);$threshold=self::checkBudget($domain,$cost);
+        $id=Utils::id('cost');$row=RecordStore::put('cost',$id,['actor_id'=>0,'cost_id'=>$id,'asset_id'=>$assetId,'owner_domain'=>$domain,'purpose'=>$purpose,'provider'=>$provider,'units'=>$safeUnits,'rates'=>$safeRates,'cost'=>$cost,'currency'=>'USD','status'=>'recorded','created_at'=>Utils::now()]);
+        if($threshold!==null){$details=['domain'=>$domain,'spent'=>$threshold['spent'],'limit'=>$threshold['limit'],'cost_id'=>$row['id']];Audit::record('budget_threshold_exceeded',$details);if(function_exists('do_action'))do_action('scm.budget.threshold',$details);}
+        return $row;
     }
-    if(!is_finite($cost)||$cost>1_000_000_000)throw new Error('cost_value_invalid','Calculated cost is invalid or exceeds the safety ceiling.',400);
-    $id=Utils::id('cost');$row=['actor_id'=>0,'cost_id'=>$id,'asset_id'=>$assetId,'owner_domain'=>$asset['owner_domain'],'purpose'=>$purpose,'provider'=>$provider,'units'=>$safeUnits,'rates'=>$safeRates,'cost'=>round($cost,8),'currency'=>'USD','status'=>'recorded','created_at'=>Utils::now()];
-    $row=RecordStore::put('cost',$id,$row);self::checkBudget($asset['owner_domain'],$row);return $row;
-}
     public static function setBudget(string $domain,string $period,float $limit,int $actor): array {
-    Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
-    $domain=Utils::key($domain,64);$period=trim($period);
-    $date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));
-    $validPeriod=$date!==false&&$date->format('Y-m')===$period;
-    if($domain===''||!$validPeriod||!is_finite($limit)||$limit<=0||$limit>1_000_000_000)throw new Error('budget_invalid','Budget domain, valid month and bounded positive limit are required.',400);
-    $id=hash('sha256',$domain.'|'.$period);$existing=RecordStore::get('budget',$id);
-    return RecordStore::put('budget',$id,['actor_id'=>$actor,'domain'=>$domain,'period'=>$period,'limit'=>round($limit,8),'status'=>'active','created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
-}
-    private static function checkBudget(string $domain,array $row): void {
-    $period=gmdate('Y-m');$budget=RecordStore::get('budget',hash('sha256',$domain.'|'.$period));if(!$budget||($budget['status']??'')!=='active')return;
-    $spent=0.0;foreach(RecordStore::all('cost',0,null,500000) as $cost)if(($cost['owner_domain']??'')===$domain&&gmdate('Y-m',(int)$cost['created_at'])===$period)$spent+=(float)$cost['cost'];
-    if($spent>(float)$budget['limit']){
-        Audit::record('budget_threshold_exceeded',['domain'=>$domain,'spent'=>$spent,'limit'=>$budget['limit'],'cost_id'=>$row['id']]);
-        if(function_exists('do_action'))do_action('scm.budget.threshold',['domain'=>$domain,'spent'=>$spent,'limit'=>$budget['limit']]);
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $domain=Utils::key($domain,64);$date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));
+        $valid=$date!==false&&$date->format('Y-m')===$period;$limit=round(self::amount($limit,'budget_invalid',true),8);
+        if($domain===''||!$valid||$limit<=0)throw new Error('budget_invalid','Budget domain, period or limit invalid.',400);
+        $id=hash('sha256',$domain.'|'.$period);$existing=RecordStore::get('budget',$id);
+        return RecordStore::put('budget',$id,['actor_id'=>$actor,'domain'=>$domain,'period'=>$period,'limit'=>$limit,'status'=>'active','created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
     }
-}
+    private static function checkBudget(string $domain,float $pending): ?array {
+        $period=gmdate('Y-m');$budget=RecordStore::get('budget',hash('sha256',$domain.'|'.$period));
+        if(!$budget||($budget['status']??'')!=='active')return null;
+        $limit=self::amount($budget['limit']??null,'budget_ledger_invalid',true);$spent=$pending;
+        foreach(RecordStore::all('cost',0,null,500000) as $row){
+            if(($row['owner_domain']??null)!==$domain)continue;
+            $time=self::ledgerTime($row['created_at']??null,'budget_ledger_invalid');
+            $amount=self::amount($row['cost']??null,'budget_ledger_invalid');
+            if(gmdate('Y-m',$time)===$period)$spent+=$amount;
+            if(!is_finite($spent)||$spent>1000000000)throw new Error('budget_ledger_invalid','Budget ledger overflow.',409);
+        }
+        return $spent>$limit?['spent'=>$spent,'limit'=>$limit]:null;
+    }
     public static function reconcile(string $provider,array $invoice): array {
-    $provider=Utils::key($provider,64);$reported=(float)($invoice['total']??-1);$tolerance=(float)($invoice['tolerance']??0.01);
-    if($provider===''||!is_finite($reported)||!is_finite($tolerance)||$reported<0||$tolerance<0||$tolerance>1_000_000)throw new Error('invoice_invalid','Invoice provider, total and tolerance are invalid.',400);
-    $period=trim((string)($invoice['period']??''));
-    if($period!==''){$date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));if($date===false||$date->format('Y-m')!==$period)throw new Error('invoice_period_invalid','Invoice period is invalid.',400);}
-    $calculated=0.0;foreach(RecordStore::all('cost',0,null,500000) as $cost)if(($cost['provider']??'')===$provider&&($period===''||gmdate('Y-m',(int)$cost['created_at'])===$period))$calculated+=(float)$cost['cost'];
-    $delta=abs($calculated-$reported);$result=['actor_id'=>0,'provider'=>$provider,'period'=>$period,'calculated'=>round($calculated,8),'reported'=>round($reported,8),'tolerance'=>$tolerance,'delta'=>round($delta,8),'status'=>$delta<=$tolerance?'reconciled':'mismatch','created_at'=>Utils::now()];
-    return RecordStore::put('invoice_reconciliation',Utils::id('inv'),$result);
-}
+        $provider=Utils::key($provider,64);$reported=self::amount($invoice['total']??null,'invoice_invalid');
+        $tolerance=self::amount($invoice['tolerance']??0.01,'invoice_invalid');$period=$invoice['period']??'';
+        if($provider===''||!is_string($period))throw new Error('invoice_invalid','Invoice provider or period invalid.',400);
+        if($period!==''){$date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));if($date===false||$date->format('Y-m')!==$period)throw new Error('invoice_period_invalid','Invoice month invalid.',400);}
+        $calculated=0.0;
+        foreach(RecordStore::all('cost',0,null,500000) as $row){
+            if(($row['provider']??null)!==$provider)continue;
+            $time=self::ledgerTime($row['created_at']??null,'invoice_ledger_invalid');
+            $amount=self::amount($row['cost']??null,'invoice_ledger_invalid');
+            if($period===''||gmdate('Y-m',$time)===$period)$calculated+=$amount;
+            if(!is_finite($calculated)||$calculated>1000000000)throw new Error('invoice_ledger_invalid','Invoice ledger overflow.',409);
+        }
+        $delta=abs($calculated-$reported);
+        return RecordStore::put('invoice_reconciliation',Utils::id('inv'),['actor_id'=>0,'provider'=>$provider,'period'=>$period,'calculated'=>round($calculated,8),'reported'=>$reported,'tolerance'=>$tolerance,'delta'=>round($delta,8),'status'=>$delta<=$tolerance?'reconciled':'mismatch','created_at'=>Utils::now()]);
+    }
 }
 
 final class RepairService {
