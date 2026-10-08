@@ -80,24 +80,34 @@ final class KeyRotationService {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
     $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0,'locked_old_objects_retained'=>0,'envelopes_reconciled'=>0,'deferred_cleanup_reconciled'=>0];
     $groups=[];
-    foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'asset','record'=>$record];}
-    foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groups[($record['storage']['provider_id']??ProviderRegistry::activeId()).'|'.$record['object_key']][]=['type'=>'derivative','record'=>$record];}
-    $groups=array_filter($groups,static function(array $group)use($active): bool {foreach($group as $entry)if(($entry['record']['storage']['key_id']??'')!==$active)return true;return false;});
+    foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'asset','record'=>$record];}
+    foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'derivative','record'=>$record];}
+    $groups=array_filter($groups,static function(array $group)use($active): bool {foreach($group as $entry){if(($entry['record']['storage']['key_id']??'')!==$active)return true;try{self::rotationIdentity($entry['record']);}catch(\Throwable){return true;}}return false;});
     RecordStore::put('key_rotation',$runId,['actor_id'=>$actor,'rotation_id'=>$runId,'active_key_id'=>$active,'status'=>'running','groups_total'=>count($groups),'result'=>$result,'created_at'=>Utils::now()]);
     $result['envelopes_reconciled']=self::reconcileCurrentEnvelopes($active,$runId);$result['deferred_cleanup_reconciled']=self::reconcileDeferredCleanup(200)['completed'];
     foreach($groups as $groupKey=>$group){
-        $first=$group[0]['record'];$providerId=Utils::key((string)($first['storage']['provider_id']??ProviderRegistry::activeId()),64);$oldKey=(string)$first['object_key'];$newKey='';
-        foreach($group as $entry){$candidate=$entry['record'];if(!hash_equals((string)$first['sha256'],(string)($candidate['sha256']??''))||(int)$first['size']!==(int)($candidate['size']??-1)||($candidate['object_key']??'')!==$oldKey||Utils::key((string)($candidate['storage']['provider_id']??ProviderRegistry::activeId()),64)!==$providerId)throw new Error('key_rotation_shared_identity_mismatch','Shared storage references disagree about physical content identity.',409,['group_hash'=>hash('sha256',$groupKey)]);}
+        $first=$group[0]['record'];$providerId='';$oldKey='';$newKey='';$stored=[];$writeAttempted=false;
         try{
-            $provider=ProviderRegistry::get($providerId);$source=$provider->openStream($oldKey);$newKey=hash('sha256','rekey|'.$oldKey.'|'.$active.'|'.$first['sha256']);
-            try{$stored=$provider->putStream($newKey,$source,['scope'=>'key-rotation','source_key_hash'=>hash('sha256',$oldKey),'rotation_id'=>$runId]);}finally{fclose($source);}
-            if(!hash_equals((string)$first['sha256'],(string)$stored['sha256'])||(int)$first['size']!==(int)$stored['size'])throw new Error('key_rotation_integrity_failed','Re-encrypted object integrity failed.',500);
+            $identity=self::rotationIdentity($first);$providerId=$identity['provider_id'];$oldKey=$identity['object_key'];
+            foreach($group as $entry){$candidate=self::rotationIdentity($entry['record']);if(!hash_equals($identity['sha256'],$candidate['sha256'])||$identity['size']!==$candidate['size']||($candidate['object_key']??'')!==$oldKey||$candidate['provider_id']!==$providerId)throw new Error('key_rotation_shared_identity_mismatch','Shared storage references disagree about physical content identity.',409,['group_hash'=>hash('sha256',$groupKey)]);}
+            $provider=ProviderRegistry::get($providerId);$source=$provider->openStream($oldKey);
+            try{
+                $sourceStats=Utils::streamHash($source,1073741824);
+                if($sourceStats['size']!==$identity['size']||!hash_equals($identity['sha256'],$sourceStats['sha256']))throw new Error('key_rotation_source_identity_mismatch','Source bytes differ from the persisted content identity.',409);
+                $newKey=hash('sha256','rekey|'.$oldKey.'|'.$active.'|'.$identity['sha256']);
+                $writeAttempted=true;$stored=$provider->putStream($newKey,$source,['scope'=>'key-rotation','source_key_hash'=>hash('sha256',$oldKey),'rotation_id'=>$runId]);
+            }finally{fclose($source);}
+            if(!is_array($stored))throw new Error('key_rotation_integrity_failed','Re-encrypted storage result is invalid.',500);
+            $storedSize=Utils::integer($stored['size']??null,'key_rotation_integrity_failed',0,1073741824);
+            if(!is_string($stored['sha256']??null)||!preg_match('/^[a-f0-9]{64}$/D',$stored['sha256'])||!hash_equals($identity['sha256'],$stored['sha256'])||$identity['size']!==$storedSize||($stored['key_id']??null)!==$active)throw new Error('key_rotation_integrity_failed','Re-encrypted object identity or active key is invalid.',500);
             $stored['provider_id']=$providerId;$updated=0;
             foreach($group as $entry){
                 $record=RecordStore::get($entry['type'],(string)$entry['record']['id']);
                 if(!$record)throw new Error('key_rotation_record_missing','Key-rotation record disappeared.',409);
+                $fresh=self::rotationIdentity($record);$expected=self::rotationIdentity($entry['record']);
+                if($fresh['provider_id']!==$expected['provider_id']||$fresh['size']!==$expected['size']||!hash_equals($fresh['sha256'],$expected['sha256']))throw new Error('key_rotation_mapping_stale','Content identity changed during key rotation.',409);
                 if(($record['object_key']??'')===$newKey&&($record['storage']['key_id']??'')===$active){$updated++;continue;}
-                if(($record['object_key']??'')!==$oldKey)throw new Error('key_rotation_mapping_stale','Object mapping changed during key rotation.',409);
+                if(($record['object_key']??'')!==$oldKey||$fresh['key_id']!==$expected['key_id'])throw new Error('key_rotation_mapping_stale','Object mapping changed during key rotation.',409);
                 $previousKeyId=$record['storage']['key_id']??null;$record['object_key']=$newKey;$record['storage']=$stored;$record['previous_key_id']=$previousKeyId;$record['rotated_at']=Utils::now();$record['rotation_id']=$runId;
                 $record=RecordStore::put($entry['type'],(string)$record['id'],$record,(int)$record['version']);if($entry['type']==='asset')self::syncAssetEnvelope($record,$active,$runId);$updated++;$result['rotated']++;
             }
@@ -110,7 +120,7 @@ final class KeyRotationService {
             RecordStore::put('key_rotation_group',hash('sha256',$runId.'|'.$groupKey),['actor_id'=>$actor,'rotation_id'=>$runId,'group_hash'=>hash('sha256',$groupKey),'status'=>'completed','records'=>$updated,'completed_at'=>Utils::now()]);
         }catch(\Throwable $exception){
             $result['failed']++;
-            if($newKey!==''){$mapped=false;foreach($group as $entry){$fresh=RecordStore::get($entry['type'],(string)$entry['record']['id']);if(($fresh['object_key']??'')===$newKey){$mapped=true;break;}}if(!$mapped){try{ProviderRegistry::get($providerId)->delete($newKey);}catch(\Throwable){$result['orphan_cleanup_pending']++;}}}
+            if($newKey!==''&&$providerId!==''&&$writeAttempted){$mapped=self::liveReferences($providerId,$newKey)!==[];if(!$mapped){if(($stored['reused']??null)===false){try{$cleanupProvider=ProviderRegistry::get($providerId);if($cleanupProvider->exists($newKey)&&!$cleanupProvider->delete($newKey)&&$cleanupProvider->exists($newKey))$result['orphan_cleanup_pending']++;}catch(\Throwable){$result['orphan_cleanup_pending']++;}}else{$result['orphan_cleanup_pending']++;}}}
             RecordStore::put('key_rotation_group',hash('sha256',$runId.'|'.$groupKey),['actor_id'=>$actor,'rotation_id'=>$runId,'group_hash'=>hash('sha256',$groupKey),'status'=>'failed','error'=>$exception instanceof Error?$exception->errorCode:'unexpected','created_at'=>Utils::now()]);
             Observability::alert('critical','key_rotation_failed',['rotation_id'=>$runId,'object_key_hash'=>hash('sha256',$oldKey),'exception'=>get_class($exception)]);
         }
@@ -118,6 +128,19 @@ final class KeyRotationService {
     $run=RecordStore::get('key_rotation',$runId);if($run){$run['status']=$result['failed']===0?'completed':'completed_with_failures';$run['result']=$result;$run['completed_at']=Utils::now();RecordStore::put('key_rotation',$runId,$run,(int)$run['version']);}
     Audit::record('key_rotation_completed',$result+['actor_id'=>$actor]);return $result;
 }
+    private static function rotationIdentity(array $record): array {
+        $storage=$record['storage']??null;
+        if(!is_array($storage))throw new Error('key_rotation_identity_invalid','Key-rotation storage identity is missing.',409);
+        $size=Utils::integer($record['size']??null,'key_rotation_identity_invalid',0,1073741824);
+        $sha=$record['sha256']??null;$objectKey=$record['object_key']??null;
+        $provider=$storage['provider_id']??null;$keyId=$storage['key_id']??null;
+        if(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha)||
+           !is_string($objectKey)||!preg_match('/^[a-f0-9]{64}$/D',$objectKey)||
+           !is_string($provider)||$provider===''||Utils::key($provider,64)!==$provider||
+           !is_string($keyId)||$keyId===''||Utils::key($keyId,64)!==$keyId)
+            throw new Error('key_rotation_identity_invalid','Key-rotation content or storage identity is noncanonical.',409);
+        return ['size'=>$size,'sha256'=>$sha,'object_key'=>$objectKey,'provider_id'=>$provider,'key_id'=>$keyId];
+    }
     private static function reconcileCurrentEnvelopes(string $activeKeyId,string $runId): int {
         $count=0;foreach(RecordStore::all('asset',0,null,100000) as $asset){if(($asset['status']??'')==='deleted'||empty($asset['storage']['key_id'])||(string)$asset['storage']['key_id']!==$activeKeyId)continue;$id=hash('sha256',(string)$asset['id']);$envelope=RecordStore::get('asset_key_envelope',$id);if(!$envelope)continue;$stale=!hash_equals((string)($envelope['key_id']??''),$activeKeyId)||!hash_equals((string)($envelope['asset_sha256']??''),(string)$asset['sha256'])||(string)($envelope['algorithm']??'')!=='aes-256-gcm';if(!$stale)continue;self::syncAssetEnvelope($asset,$activeKeyId,$runId);$count++;}
         return $count;
