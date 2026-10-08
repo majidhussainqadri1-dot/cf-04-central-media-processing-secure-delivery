@@ -471,10 +471,48 @@ final class OperationsFutureService {
     public static function qoe(string $name,float $value,array $labels=[]): array {return PrivacyTelemetry::metric($name,$value,$labels);}
     public static function chaos(int $actor,string $scenario,array $context=[]): array {Auth::assertActor($actor,'media_manage_providers');if(!(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true)){if(!function_exists('apply_filters')||apply_filters('scm_environment','production')!=='staging')throw new Error('chaos_staging_only','Chaos/fault injection is permitted only in approved staging/test.',403);} $scenario=Utils::key($scenario,64);$allowed=['scanner_down','object_store_timeout','corrupt_derivative','key_unavailable','cdn_purge_failure','queue_saturation','region_outage'];if(!in_array($scenario,$allowed,true))throw new Error('chaos_scenario_invalid','Chaos scenario is not approved.',400);$id=Utils::id('chaos');$row=RecordStore::put('chaos_exercise',$id,['actor_id'=>$actor,'status'=>'scheduled','scenario'=>$scenario,'context'=>Utils::redact($context),'rollback_required'=>true,'created_at'=>Utils::now()]);Audit::record('future40_chaos_scheduled',['scenario'=>$scenario,'exercise_id'=>$id]);return $row;}
     public static function migrationBundle(array $assetIds,int $actor,string $target): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$target=Utils::key($target,64);if($target===''||$assetIds===[])throw new Error('migration_bundle_invalid','Target and assets are required.',400);$items=[];
-        foreach(array_values(array_unique(array_map('strval',$assetIds))) as $assetId){$asset=RecordStore::get('asset',$assetId);$tombstone=RecordStore::get('tombstone',$assetId);if(!$asset&&!$tombstone)throw new Error('migration_asset_unavailable','Migration bundle asset/tombstone is unavailable.',404,['asset_id'=>$assetId]);$items[]=['asset_id'=>$assetId,'sha256'=>(string)($asset['sha256']??''),'privacy_class'=>(string)($asset['privacy_class']??''),'policy_hash'=>(string)($asset['policy_hash']??($tombstone['policy_hash']??'')),'rights_hash'=>(string)($asset['rights']['policy_hash']??($tombstone['rights_hash']??'')),'status'=>(string)($asset['status']??($tombstone['status']??'deleted')),'object_version'=>(int)($asset['object_version']??($tombstone['object_version']??0)),'tombstone_hash'=>$tombstone?hash('sha256',Utils::canonicalJson($tombstone)):null,'tombstone_state'=>$tombstone?['status'=>$tombstone['status']??'deleted','deleted_at'=>$tombstone['deleted_at']??0,'backup_expiry_at'=>$tombstone['backup_expiry_at']??0]:null];}
-        $kid=Keyring::activeId();$bundle=['format'=>'SCM-MIGRATION-1','target'=>$target,'signing_kid'=>$kid,'created_at'=>Utils::now(),'items'=>$items];$payload=Utils::canonicalJson($bundle);$bundle['signature']=hash_hmac('sha256',$payload,Keyring::hashKey($kid));$bundle['bundle_hash']=hash('sha256',$payload);$id=Utils::id('migration');RecordStore::put('migration_bundle',$id,['actor_id'=>$actor,'status'=>'signed','target'=>$target,'signing_kid'=>$kid,'bundle_hash'=>$bundle['bundle_hash'],'signature'=>$bundle['signature'],'item_count'=>count($items),'created_at'=>Utils::now()]);return ['bundle_id'=>$id,'bundle'=>$bundle];
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');
+        $target=Utils::key($target,64);
+        if($target===''||$assetIds===[]||count($assetIds)>10000)throw new Error('migration_bundle_invalid','Target and bounded asset set required.',400);
+        $ids=[];
+        foreach($assetIds as $value){
+            if(!is_string($value)||$value===''||strlen($value)>96||Utils::text($value,96)!==$value)throw new Error('migration_bundle_invalid','Asset identity must be canonical.',400);
+            $ids[$value]=true;
+        }
+        $items=[];
+        foreach(array_keys($ids) as $assetId){
+            $asset=RecordStore::get('asset',$assetId);$tombstone=RecordStore::get('tombstone',$assetId);
+            if(!$asset&&!$tombstone)throw new Error('migration_asset_unavailable','Asset/tombstone unavailable.',404,['asset_id'=>$assetId]);
+            if(($asset['status']??'')==='deleted'&&!$tombstone)throw new Error('migration_tombstone_missing','Deleted asset has no tombstone.',409);
+            $version=Utils::integer($asset['object_version']??($tombstone['object_version']??null),'migration_asset_identity_invalid',1,PHP_INT_MAX);
+            $sha=$asset['sha256']??'';
+            if($asset&&($asset['status']??'')!=='deleted'&&(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha)))throw new Error('migration_asset_identity_invalid','Active asset digest is invalid.',409);
+            $policy=$asset['policy_hash']??($tombstone['policy_hash']??'');
+            $rights=$asset['rights']['policy_hash']??($tombstone['rights_hash']??'');
+            if(!is_string($policy)||!preg_match('/^[a-f0-9]{64}$/D',$policy)||!is_string($rights)||!preg_match('/^[a-f0-9]{64}$/D',$rights))
+                throw new Error('migration_asset_identity_invalid','Policy/rights identity is invalid.',409);
+            $state=null;
+            if($tombstone){
+                $deletedAt=Utils::integer($tombstone['deleted_at']??null,'migration_tombstone_invalid',0,PHP_INT_MAX);
+                $backupAt=Utils::integer($tombstone['backup_expiry_at']??null,'migration_tombstone_invalid',0,PHP_INT_MAX);
+                $state=['status'=>$tombstone['status']??'deleted','deleted_at'=>$deletedAt,'backup_expiry_at'=>$backupAt];
+            }
+            $items[]=['asset_id'=>$assetId,'sha256'=>is_string($sha)?$sha:'','privacy_class'=>(string)($asset['privacy_class']??''),'policy_hash'=>$policy,'rights_hash'=>$rights,'status'=>(string)($asset['status']??($tombstone['status']??'deleted')),'object_version'=>$version,'tombstone_hash'=>$tombstone?hash('sha256',Utils::canonicalJson($tombstone)):null,'tombstone_state'=>$state];
+        }
+        $kid=Keyring::activeId();$bundle=['format'=>'SCM-MIGRATION-1','target'=>$target,'signing_kid'=>$kid,'created_at'=>Utils::now(),'items'=>$items];
+        $payload=Utils::canonicalJson($bundle);$bundle['signature']=hash_hmac('sha256',$payload,Keyring::hashKey($kid));$bundle['bundle_hash']=hash('sha256',$payload);
+        $id=Utils::id('migration');
+        RecordStore::put('migration_bundle',$id,['actor_id'=>$actor,'status'=>'signed','target'=>$target,'signing_kid'=>$kid,'bundle_hash'=>$bundle['bundle_hash'],'signature'=>$bundle['signature'],'item_count'=>count($items),'created_at'=>Utils::now()]);
+        return ['bundle_id'=>$id,'bundle'=>$bundle];
     }
-    public static function verifyMigrationBundle(array $bundle): bool {$signature=(string)($bundle['signature']??'');$kid=Utils::key((string)($bundle['signing_kid']??''),64);unset($bundle['signature'],$bundle['bundle_hash']);if($signature===''||$kid==='')return false;try{$key=Keyring::hashKey($kid);}catch(\Throwable){return false;}return hash_equals(hash_hmac('sha256',Utils::canonicalJson($bundle),$key),$signature);}
+    public static function verifyMigrationBundle(array $bundle): bool {
+        $signature=$bundle['signature']??null;$bundleHash=$bundle['bundle_hash']??null;$kid=$bundle['signing_kid']??null;
+        if(!is_string($signature)||!preg_match('/^[a-f0-9]{64}$/D',$signature)||!is_string($bundleHash)||!preg_match('/^[a-f0-9]{64}$/D',$bundleHash)||!is_string($kid)||$kid===''||Utils::key($kid,64)!==$kid)return false;
+        if(($bundle['format']??null)!=='SCM-MIGRATION-1'||!is_string($bundle['target']??null)||$bundle['target']===''||!is_array($bundle['items']??null)||count($bundle['items'])<1||count($bundle['items'])>10000)return false;
+        try{Utils::integer($bundle['created_at']??null,'migration_bundle_invalid',1,PHP_INT_MAX);$key=Keyring::hashKey($kid);}catch(\Throwable){return false;}
+        unset($bundle['signature'],$bundle['bundle_hash']);
+        $payload=Utils::canonicalJson($bundle);
+        return hash_equals(hash('sha256',$payload),$bundleHash)&&hash_equals(hash_hmac('sha256',$payload,$key),$signature);
+    }
     public static function sdkManifest(): array {return ['sdk_contract'=>'CF04-MEDIA-SDK-1','contract_version'=>defined('SCM_CONTRACT_VERSION')?SCM_CONTRACT_VERSION:'unknown','base_routes'=>['POST /api/media/v1/uploads','GET /api/media/v1/assets/{id}','GET /media/d/{grant}'],'required_headers'=>['X-SCM-Contract-Version'],'idempotency_header'=>'Idempotency-Key','idempotent_routes'=>['POST /api/media/v1/uploads','POST /api/media/v1/uploads/{id}/complete'],'consumer_rules'=>['no_direct_bucket_access','no_provider_id_as_public_identity','owner_authorization_rechecked_at_action','events_are_facts_not_commands'],'future40'=>array_keys(Future40Registry::REQUIREMENTS)];}
 }
