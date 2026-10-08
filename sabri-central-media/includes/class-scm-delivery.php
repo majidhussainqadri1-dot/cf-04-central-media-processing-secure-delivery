@@ -13,7 +13,11 @@ final class DeliveryService {
     if($audience['type']==='public'&&($asset['privacy_class']!=='C0'||!Utils::bool($asset['policy']['delivery']['public_cdn']??false)))throw new Error('public_delivery_denied','Public delivery requires an explicit public policy.',403);
     $rightsContext=array_replace($context,['audience_type'=>$audience['type']]);RightsPolicy::assert($asset['rights'],$operation,$rightsContext);self::assertDeliverable($asset,$target,$operation);
     $assetRange=(array)$asset['policy']['delivery'];
-    $effectiveRange=['allow_ranges'=>Utils::bool($assetRange['allow_ranges'])&&Utils::bool($rangePolicy['allow_ranges']??$assetRange['allow_ranges']),'max_range_bytes'=>min((int)$assetRange['max_range_bytes'],max(1,(int)($rangePolicy['max_range_bytes']??$assetRange['max_range_bytes'])))];
+    $policyMax=Utils::integer($assetRange['max_range_bytes']??null,'delivery_range_integer_invalid',0);
+    $requestMax=Utils::integer($rangePolicy['max_range_bytes']??($policyMax>0?$policyMax:1),'delivery_range_integer_invalid',1);
+    $ranges=Utils::bool($assetRange['allow_ranges'])&&Utils::bool($rangePolicy['allow_ranges']??$assetRange['allow_ranges']);
+    if($ranges&&$policyMax<1)throw new Error('delivery_range_integer_invalid','Range policy requires a positive maximum.',400);
+    $effectiveRange=['allow_ranges'=>$ranges,'max_range_bytes'=>min($policyMax,$requestMax)];
     $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_delivery',['asset'=>$asset,'derivative'=>$target,'actor_id'=>$actor,'service_id'=>$serviceId,'audience'=>$audience,'context'=>Utils::redact($context),'operation'=>$operation,'session_id'=>$sessionId,'range_policy'=>$effectiveRange]);
     if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner authorization is stale.',409);
     $grantId=Utils::id('gr');$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));$sessionHash=Utils::hashReference($sessionId);$rangeHash=Utils::hashReference(Utils::canonicalJson($effectiveRange));
@@ -27,8 +31,7 @@ final class DeliveryService {
     $claims=Crypto::verify($token);Utils::requireFields($claims,['type','grant_id','asset_id','derivative_id','actor_id','service_id','owner_domain','owner_object','object_version','policy_hash','rights_hash','purpose','privacy_class','audience_hash','context_hash','session_hash','operation','range_hash','target_sha256'],'grant_claims_invalid');
     if($claims['type']!=='delivery-grant')throw new Error('grant_type_invalid','Invalid grant type.',403);
     $grant=RecordStore::get('grant',(string)$claims['grant_id']);if(!$grant||($grant['status']??'')!=='active')throw new Error('grant_revoked','Delivery grant unavailable or revoked.',403);
-    if((int)$grant['expires_at']<=Utils::now())throw new Error('grant_expired','Delivery grant expired.',403);
-    if((int)$grant['uses']>=(int)$grant['max_uses'])throw new Error('grant_use_limit','Delivery grant use limit reached.',403);
+    self::assertGrantUsable($grant);
     if(!hash_equals((string)$grant['token_hash'],hash('sha256',$token)))throw new Error('grant_record_mismatch','Delivery grant record mismatch.',403);
     $serviceId=Utils::key($serviceId,64);$sessionId=Utils::text($sessionId,128);$sessionHash=Utils::hashReference($sessionId);$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));
     foreach(['actor_id'=>$actor,'service_id'=>$serviceId,'audience_hash'=>$audienceHash,'context_hash'=>$contextHash,'session_hash'=>$sessionHash] as $field=>$value)if(($claims[$field]??null)!==$value||($grant[$field]??null)!==$value)throw new Error('grant_binding_mismatch','Delivery grant binding mismatch.',403,['field'=>$field]);
@@ -39,36 +42,58 @@ final class DeliveryService {
     RightsPolicy::assert($asset['rights'],(string)$claims['operation'],array_replace($context,['audience_type'=>$audience['type']]));
     $effectiveRange=(array)($grant['range_policy']??[]);
     if(!isset($effectiveRange['allow_ranges'],$effectiveRange['max_range_bytes'])||!hash_equals((string)$claims['range_hash'],Utils::hashReference(Utils::canonicalJson($effectiveRange)))||!hash_equals((string)$grant['range_hash'],(string)$claims['range_hash']))throw new Error('grant_range_policy_changed','Range policy changed.',403);
+    $storedRangeMax=Utils::integer($effectiveRange['max_range_bytes'],'grant_range_integer_invalid',Utils::bool($effectiveRange['allow_ranges'])?1:0);
     $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_delivery',['asset'=>$asset,'derivative'=>$target,'actor_id'=>$actor,'service_id'=>$serviceId,'audience'=>$audience,'context'=>Utils::redact($context),'operation'=>$claims['operation'],'session_id'=>$sessionId,'grant_id'=>$claims['grant_id'],'range_header'=>$rangeHeader]);
     if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner authorization is stale.',409);
-    if((int)$target['size']<1)throw new Error('delivery_target_empty','Delivery target is empty.',409);
+    if($target['size']<1)throw new Error('delivery_target_empty','Delivery target is empty.',409);
     if($rangeHeader!==null&&$rangeHeader!==''&&!Utils::bool($effectiveRange['allow_ranges']))throw new Error('range_denied','Byte ranges are not allowed.',416);
-    $range=$rangeHeader!==null&&$rangeHeader!==''?Validator::range($rangeHeader,(int)$target['size'],(int)$effectiveRange['max_range_bytes']):['start'=>0,'end'=>(int)$target['size']-1,'length'=>(int)$target['size'],'partial'=>false];
+    $range=$rangeHeader!==null&&$rangeHeader!==''?Validator::range($rangeHeader,$target['size'],$storedRangeMax):['start'=>0,'end'=>$target['size']-1,'length'=>$target['size'],'partial'=>false];
     $providerId=Utils::key((string)($target['storage']['provider_id']??''),64);if($providerId==='')throw new Error('storage_provider_missing','Delivery target provider identity missing.',500);ResidencyCryptoService::assertProviderRegion((string)$asset['asset_id'],$providerId);
     $stream=ProviderRegistry::get($providerId)->openStream((string)$target['object_key']);try{$output=self::sliceStream($stream,$range['start'],$range['length']);}finally{fclose($stream);}
     $stats=Utils::streamHash($output);if(!$range['partial']&&!hash_equals((string)$target['sha256'],$stats['sha256'])){fclose($output);IntegrityService::quarantine($asset['asset_id'],'delivery_hash_mismatch');throw new Error('delivery_integrity_failed','Delivery integrity verification failed.',500);}
-    $consumed=false;for($attempt=0;$attempt<5;$attempt++){$freshGrant=RecordStore::get('grant',(string)$claims['grant_id']);if(!$freshGrant||($freshGrant['status']??'')!=='active'){fclose($output);throw new Error('grant_revoked','Delivery grant unavailable or revoked.',403);}if((int)$freshGrant['expires_at']<=Utils::now()){fclose($output);throw new Error('grant_expired','Delivery grant expired.',403);}if((int)$freshGrant['uses']>=(int)$freshGrant['max_uses']){fclose($output);throw new Error('grant_use_limit','Delivery grant use limit reached.',403);}if(!hash_equals((string)$freshGrant['token_hash'],hash('sha256',$token))){fclose($output);throw new Error('grant_record_mismatch','Delivery grant record mismatch.',403);}$freshGrant['uses']=(int)$freshGrant['uses']+1;$freshGrant['last_used_at']=Utils::now();$freshGrant['last_range']=$range;try{$grant=RecordStore::put('grant',(string)$freshGrant['id'],$freshGrant,(int)$freshGrant['version']);$consumed=true;break;}catch(Error $race){if($race->errorCode!=='record_version_conflict'){fclose($output);throw $race;}}}if(!$consumed){fclose($output);throw new Error('grant_contention','Delivery grant changed too frequently to consume safely.',409);}
+    $consumed=false;for($attempt=0;$attempt<5;$attempt++){$freshGrant=RecordStore::get('grant',(string)$claims['grant_id']);if(!$freshGrant||($freshGrant['status']??'')!=='active'){fclose($output);throw new Error('grant_revoked','Delivery grant unavailable or revoked.',403);}try{$used=self::assertGrantUsable($freshGrant);}catch(\Throwable $failure){fclose($output);throw $failure;}if(!hash_equals((string)$freshGrant['token_hash'],hash('sha256',$token))){fclose($output);throw new Error('grant_record_mismatch','Delivery grant record mismatch.',403);}$freshGrant['uses']=$used+1;$freshGrant['last_used_at']=Utils::now();$freshGrant['last_range']=$range;try{$grant=RecordStore::put('grant',(string)$freshGrant['id'],$freshGrant,(int)$freshGrant['version']);$consumed=true;break;}catch(Error $race){if($race->errorCode!=='record_version_conflict'){fclose($output);throw $race;}}}if(!$consumed){fclose($output);throw new Error('grant_contention','Delivery grant changed too frequently to consume safely.',409);}
     Audit::record('delivery_grant_consumed',['grant_id'=>$grant['id'],'asset_id'=>$asset['asset_id'],'actor_id'=>$actor,'service_id'=>$serviceId,'range'=>$range]);
     $download=($claims['operation']==='download');$filename=Utils::filename((string)$asset['declared_name']);
     return ['stream'=>$output,'status'=>$range['partial']?206:200,'headers'=>self::headers($target,$filename,$download,$range,Utils::bool($effectiveRange['allow_ranges'])),'range'=>$range,'grant_uses'=>$grant['uses']];
 }
+    private static function assertGrantUsable(array $grant): int {
+        $expiry=Utils::integer($grant['expires_at']??null,'grant_integer_invalid',1);
+        $uses=Utils::integer($grant['uses']??null,'grant_integer_invalid',0);
+        $limit=Utils::integer($grant['max_uses']??null,'grant_integer_invalid',1,1000);
+        if($expiry<=Utils::now())throw new Error('grant_expired','Delivery grant expired.',403);
+        if($uses>=$limit)throw new Error('grant_use_limit','Delivery grant use limit reached.',403);
+        return $uses;
+    }
     private static function sliceStream($source,int $start,int $length){$output=Utils::tempStream();try{rewind($source);if($start>0&&fseek($source,$start)!==0)throw new Error('delivery_seek_failed','Delivery seek failed.',500);$remaining=$length;while($remaining>0&&!feof($source)){$chunk=fread($source,min(1048576,$remaining));if($chunk===false)throw new Error('delivery_read_failed','Delivery read failed.',500);if($chunk==='')break;Utils::writeAll($output,$chunk);$remaining-=strlen($chunk);}if($remaining!==0)throw new Error('delivery_range_incomplete','Delivery range incomplete.',500);rewind($output);return $output;}catch(\Throwable $exception){fclose($output);throw $exception;}}
     private static function headers(array $target,string $filename,bool $download,array $range,bool $allowRanges): array {$filename=str_replace(["\r","\n"],'',Utils::filename($filename));$headers=['Content-Type'=>(string)($target['mime']??'application/octet-stream'),'Content-Length'=>(string)$range['length'],'Content-Disposition'=>($download?'attachment':'inline').'; filename="'.addcslashes($filename,'"\\').'"; filename*=UTF-8\'\''.rawurlencode($filename),'Cache-Control'=>'private, no-store, max-age=0','Pragma'=>'no-cache','Referrer-Policy'=>'no-referrer','X-Content-Type-Options'=>'nosniff','Content-Security-Policy'=>"default-src 'none'; sandbox",'Cross-Origin-Resource-Policy'=>'same-origin'];if($allowRanges)$headers['Accept-Ranges']='bytes';if($range['partial'])$headers['Content-Range']='bytes '.$range['start'].'-'.$range['end'].'/'.$target['size'];return $headers;}
     private static function audience(array $audience): array {
     $type=Utils::key((string)($audience['type']??''),32);
     if(!in_array($type,['private','user','recipient','group','public'],true))throw new Error('audience_invalid','Delivery audience invalid.',400);
     if(in_array($type,['user','recipient'],true)){
-        $userId=(int)($audience['user_id']??0);if($userId<1)throw new Error('audience_invalid','Audience user identity required.',400);
+        $userId=Utils::integer($audience['user_id']??null,'audience_invalid',1);
         return ['type'=>$type,'user_id'=>$userId];
     }
     if($type==='group'){
         $groupId=Utils::text((string)($audience['group_id']??''),96);if($groupId==='')throw new Error('audience_invalid','Audience group identity required.',400);
-        $out=['type'=>'group','group_id'=>$groupId];if((int)($audience['user_id']??0)>0)$out['user_id']=(int)$audience['user_id'];return $out;
+        $out=['type'=>'group','group_id'=>$groupId];if(array_key_exists('user_id',$audience))$out['user_id']=Utils::integer($audience['user_id'],'audience_invalid',1);return $out;
     }
     return ['type'=>$type];
 }
     private static function asset(string $id): array {$a=RecordStore::get('asset',$id);if(!$a)throw new Error('asset_not_found','Asset not found.',404);return $a;}
-    private static function target(array $asset,?string $derivativeId): array {if($derivativeId===null)return ['id'=>$asset['asset_id'],'sha256'=>$asset['sha256'],'size'=>$asset['size'],'object_key'=>$asset['object_key'],'storage'=>$asset['storage'],'mime'=>$asset['mime'],'status'=>$asset['status']];$manifestId=(string)($asset['active_manifest_id']??'');$manifest=$manifestId!==''?RecordStore::get('manifest',$manifestId):null;if(!$manifest||($manifest['status']??'')!=='active'||($manifest['asset_id']??'')!==$asset['asset_id'])throw new Error('active_manifest_missing','Active derivative manifest unavailable.',409);$allowed=array_column((array)$manifest['derivatives'],'derivative_id');if(!in_array($derivativeId,$allowed,true))throw new Error('derivative_not_active','Derivative is not in the active manifest.',409);$derivative=RecordStore::get('derivative',$derivativeId);if(!$derivative||($derivative['asset_id']??'')!==$asset['asset_id']||($derivative['status']??'')!=='validated'||!empty($derivative['superseded_by']))throw new Error('derivative_not_found','Derivative not found or superseded.',404);return $derivative+['mime'=>$derivative['mime']??$asset['mime']];}
+    private static function target(array $asset,?string $derivativeId): array {
+        if($derivativeId===null)$target=['id'=>$asset['asset_id'],'sha256'=>$asset['sha256'],'size'=>$asset['size']??null,'object_key'=>$asset['object_key'],'storage'=>$asset['storage'],'mime'=>$asset['mime'],'status'=>$asset['status']];
+        else{
+            $manifestId=(string)($asset['active_manifest_id']??'');$manifest=$manifestId!==''?RecordStore::get('manifest',$manifestId):null;
+            if(!$manifest||($manifest['status']??'')!=='active'||($manifest['asset_id']??'')!==$asset['asset_id'])throw new Error('active_manifest_missing','Active derivative manifest unavailable.',409);
+            $allowed=array_column((array)$manifest['derivatives'],'derivative_id');
+            if(!in_array($derivativeId,$allowed,true))throw new Error('derivative_not_active','Derivative is not in the active manifest.',409);
+            $derivative=RecordStore::get('derivative',$derivativeId);
+            if(!$derivative||($derivative['asset_id']??'')!==$asset['asset_id']||($derivative['status']??'')!=='validated'||!empty($derivative['superseded_by']))throw new Error('derivative_not_found','Derivative not found or superseded.',404);
+            $target=$derivative+['mime'=>$derivative['mime']??$asset['mime']];
+        }
+        $target['size']=Utils::integer($target['size']??null,'delivery_target_size_invalid',1);
+        return $target;
+    }
     private static function assertDeliverable(array $asset,array $target,string $operation): void {
     if(($asset['status']??'')!=='ready'||($asset['scan_status']??'')!=='passed'||($asset['processing_status']??'')!=='completed')throw new Error('asset_not_deliverable','Asset has not completed safe processing.',409);
     LegalHoldService::assertNoHold((string)$asset['asset_id'],'delivery');
