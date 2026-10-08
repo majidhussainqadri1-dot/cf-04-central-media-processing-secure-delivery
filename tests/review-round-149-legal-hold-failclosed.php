@@ -17,7 +17,7 @@ err(fn()=>LegalHoldService::active($assetId,'unknown-operation'),'hold_operation
     'Round 149 unknown operation cannot bypass scoped hold');
 foreach(['1e12','10junk',false,[],null,-1] as $index=>$bad){
     err(fn()=>LegalHoldService::place($assetId,11,array_replace($input,['review_at'=>$bad])),
-        'hold_schedule_invalid','Round 149 invalid review timestamp '.$index.' is rejected');
+        ($bad===null?'hold_incomplete':'hold_schedule_invalid'),'Round 149 invalid review timestamp '.$index.' is rejected');
     err(fn()=>LegalHoldService::place($assetId,11,array_replace($input,['expires_at'=>$bad])),
         'hold_schedule_invalid','Round 149 invalid expiry timestamp '.$index.' is rejected');
 }
