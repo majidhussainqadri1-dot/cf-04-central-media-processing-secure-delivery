@@ -385,10 +385,86 @@ final class ResidencyCryptoService {
 }
 
 final class DisasterCostRoutingService {
-    public static function disasterPlan(string $assetId,int $actor,array $input): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId,true);Utils::requireFields($input,['primary_region','secondary_region','rpo_seconds','rto_seconds'],'dr_plan_incomplete');$primary=strtoupper(Utils::text((string)$input['primary_region'],16));$secondary=strtoupper(Utils::text((string)$input['secondary_region'],16));if($primary===$secondary)throw new Error('dr_regions_invalid','Primary and secondary regions must differ.',400);ResidencyCryptoService::assertRegion($assetId,$primary);ResidencyCryptoService::assertRegion($assetId,$secondary);$id=hash('sha256',$assetId);$existing=RecordStore::get('disaster_plan',$id);return RecordStore::put('disaster_plan',$id,['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,'primary_region'=>$primary,'secondary_region'=>$secondary,'rpo_seconds'=>max(0,(int)$input['rpo_seconds']),'rto_seconds'=>max(0,(int)$input['rto_seconds']),'integrity_hash'=>$asset['sha256'],'failback_required'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);}
-    public static function optimizeTier(string $assetId,array $metrics): array {$asset=Future40Registry::asset($assetId,true);$access=max(0,(int)($metrics['accesses_30d']??0));$age=max(0,(int)($metrics['age_days']??0));$cost=(float)($metrics['cost_score']??0.0);if(!is_finite($cost)||$cost<0)throw new Error('storage_tier_metric_invalid','Storage-tier cost score must be finite and non-negative.',400);$objectLock=ResidencyCryptoService::isLocked($assetId);$legalHold=LegalHoldService::active($assetId)!==[];$retentionClass=Utils::key((string)($asset['policy']['retention']['class']??''),64);$privacyClass=Utils::key((string)($asset['privacy_class']??''),16);$rightsExpiry=max(0,(int)($asset['rights']['expires_at']??0));$rightsActive=$rightsExpiry===0||$rightsExpiry>Utils::now();$tier=($objectLock||$legalHold)?'archive_locked':(!$rightsActive?'rights_restricted':($access>100?'hot':($access>10?'warm':($age>180&&$cost>0?'archive':'cold'))));return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>false,'transition_requires_owner_authorization'=>true,'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'cost_score'=>$cost,'object_lock'=>$objectLock,'legal_hold'=>$legalHold,'retention_class'=>$retentionClass,'privacy_class'=>$privacyClass,'rights_active'=>$rightsActive,'rights_expires_at'=>$rightsExpiry,'residency_policy'=>ResidencyCryptoService::hasPolicy($assetId)]];}
-    public static function costEstimate(string $assetId,array $prices,array $plan): array {$asset=Future40Registry::asset($assetId);$safe=[];foreach(['storage_gb_month','transcode_minute','egress_gb'] as $p){if(!array_key_exists($p,$prices))throw new Error('cost_price_invalid','Cost price table is incomplete.',400,['price'=>$p]);$value=(float)$prices[$p];if(!is_finite($value)||$value<0)throw new Error('cost_price_invalid','Cost price must be finite and non-negative.',400,['price'=>$p]);$safe[$p]=$value;}$gb=max(0.000001,(int)$asset['size']/1073741824);$minutes=(float)($plan['minutes']??0);$egress=(float)($plan['egress_gb']??$gb);if(!is_finite($minutes)||!is_finite($egress)||$minutes<0||$egress<0)throw new Error('cost_plan_invalid','Cost-plan quantities must be finite and non-negative.',400);$currency=Utils::key((string)($prices['currency']??'usd'),8);if($currency==='')throw new Error('cost_currency_invalid','Cost currency is invalid.',400);$cost=$gb*$safe['storage_gb_month']+$minutes*$safe['transcode_minute']+$egress*$safe['egress_gb'];if(!is_finite($cost)||$cost>1_000_000_000)throw new Error('cost_estimate_invalid','Estimated cost is invalid or exceeds the safety ceiling.',400);return ['asset_id'=>$assetId,'currency'=>$currency,'estimated_cost'=>round($cost,6),'components'=>['storage_gb'=>$gb,'minutes'=>$minutes,'egress_gb'=>$egress],'estimate_only'=>true];}
-    public static function autoRoute(array $providers,array $requirements): array {$requiredCaps=array_values(array_filter(array_unique(array_map(fn($v)=>Utils::key((string)$v,64),(array)($requirements['capabilities']??[])))));$requiredRegions=array_values(array_filter(array_unique(array_map(fn($v)=>strtoupper(Utils::text((string)$v,16)),(array)($requirements['regions']??[])))));$eligible=[];foreach($providers as $p){if(($p['approved']??false)!==true||($p['healthy']??false)!==true)continue;$id=Utils::key((string)($p['id']??''),64);$region=strtoupper(Utils::text((string)($p['region']??''),16));$cost=(float)($p['cost_score']??PHP_FLOAT_MAX);$latency=(float)($p['latency_score']??PHP_FLOAT_MAX);if($id===''||!is_finite($cost)||!is_finite($latency)||$cost<0||$latency<0)continue;$caps=array_values(array_filter(array_unique(array_map(fn($v)=>Utils::key((string)$v,64),(array)($p['capabilities']??[])))));if(array_diff($requiredCaps,$caps)!==[])continue;if($requiredRegions!==[]&&!in_array($region,$requiredRegions,true))continue;$eligible[]=['id'=>$id,'region'=>$region,'cost'=>$cost,'latency'=>$latency];}if($eligible===[])throw new Error('approved_provider_unavailable','No approved provider satisfies the routing requirements.',503);usort($eligible,fn($a,$b)=>(($a['cost']+$a['latency'])<=>($b['cost']+$b['latency'])) ?: strcmp($a['id'],$b['id']));return ['provider'=>$eligible[0]['id'],'region'=>$eligible[0]['region'],'eligible_count'=>count($eligible),'decision'=>'approved_health_capability_cost_route'];}
+    private static function decimal(mixed $v,string $code): float {
+        if(is_int($v)||is_float($v))$n=(float)$v;
+        elseif(is_string($v)&&preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$v))$n=(float)$v;
+        else throw new Error($code,'Canonical non-negative decimal required.',400);
+        if(!is_finite($n)||$n<0||$n>1000000000)throw new Error($code,'Value outside supported range.',400);
+        return $n;
+    }
+    private static function region(mixed $v): string {
+        if(!is_string($v))throw new Error('dr_regions_invalid','Region must be a string.',400);
+        $region=strtoupper(Utils::text($v,16));
+        if(!preg_match('/^[A-Z0-9-]{2,16}$/D',$region))throw new Error('dr_regions_invalid','Region identity is invalid.',400);
+        return $region;
+    }
+    public static function disasterPlan(string $assetId,int $actor,array $input): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');
+        $asset=Future40Registry::asset($assetId,true);
+        Utils::requireFields($input,['primary_region','secondary_region','rpo_seconds','rto_seconds'],'dr_plan_incomplete');
+        $primary=self::region($input['primary_region']);$secondary=self::region($input['secondary_region']);
+        $rpo=Utils::integer($input['rpo_seconds'],'dr_plan_numeric_invalid',0,PHP_INT_MAX);
+        $rto=Utils::integer($input['rto_seconds'],'dr_plan_numeric_invalid',0,PHP_INT_MAX);
+        if($primary===$secondary)throw new Error('dr_regions_invalid','Regions must differ.',400);
+        ResidencyCryptoService::assertRegion($assetId,$primary);ResidencyCryptoService::assertRegion($assetId,$secondary);
+        $id=hash('sha256',$assetId);$existing=RecordStore::get('disaster_plan',$id);
+        return RecordStore::put('disaster_plan',$id,['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,'primary_region'=>$primary,'secondary_region'=>$secondary,'rpo_seconds'=>$rpo,'rto_seconds'=>$rto,'integrity_hash'=>$asset['sha256'],'failback_required'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+    }
+    public static function optimizeTier(string $assetId,array $metrics): array {
+        $asset=Future40Registry::asset($assetId,true);
+        $access=Utils::integer(array_key_exists('accesses_30d',$metrics)?$metrics['accesses_30d']:0,'storage_tier_metric_invalid',0,PHP_INT_MAX);
+        $age=Utils::integer(array_key_exists('age_days',$metrics)?$metrics['age_days']:0,'storage_tier_metric_invalid',0,PHP_INT_MAX);
+        $cost=self::decimal(array_key_exists('cost_score',$metrics)?$metrics['cost_score']:0.0,'storage_tier_metric_invalid');
+        $rights=$asset['rights']??[];
+        if(!is_array($rights))throw new Error('storage_tier_rights_invalid','Rights envelope is invalid.',409);
+        $rightsExpiry=Utils::integer(array_key_exists('expires_at',$rights)?$rights['expires_at']:0,'storage_tier_rights_invalid',0,PHP_INT_MAX);
+        $objectLock=ResidencyCryptoService::isLocked($assetId);$legalHold=LegalHoldService::active($assetId)!==[];
+        $retentionClass=Utils::key((string)($asset['policy']['retention']['class']??''),64);
+        $privacyClass=Utils::key((string)($asset['privacy_class']??''),16);
+        $rightsActive=$rightsExpiry===0||$rightsExpiry>Utils::now();
+        $tier=($objectLock||$legalHold)?'archive_locked':(!$rightsActive?'rights_restricted':($access>100?'hot':($access>10?'warm':($age>180&&$cost>0?'archive':'cold'))));
+        return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>false,'transition_requires_owner_authorization'=>true,'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'cost_score'=>$cost,'object_lock'=>$objectLock,'legal_hold'=>$legalHold,'retention_class'=>$retentionClass,'privacy_class'=>$privacyClass,'rights_active'=>$rightsActive,'rights_expires_at'=>$rightsExpiry,'residency_policy'=>ResidencyCryptoService::hasPolicy($assetId)]];
+    }
+    public static function costEstimate(string $assetId,array $prices,array $plan): array {
+        $asset=Future40Registry::asset($assetId);
+        $size=Utils::integer($asset['size']??null,'cost_asset_size_invalid',0,1073741824);
+        $safe=[];
+        foreach(['storage_gb_month','transcode_minute','egress_gb'] as $p){
+            if(!array_key_exists($p,$prices))throw new Error('cost_price_invalid','Price table incomplete.',400);
+            $safe[$p]=self::decimal($prices[$p],'cost_price_invalid');
+        }
+        $gb=max(0.000001,$size/1073741824);
+        $minutes=self::decimal(array_key_exists('minutes',$plan)?$plan['minutes']:0,'cost_plan_invalid');
+        $egress=self::decimal(array_key_exists('egress_gb',$plan)?$plan['egress_gb']:$gb,'cost_plan_invalid');
+        $currency=array_key_exists('currency',$prices)?$prices['currency']:'USD';
+        if(!is_string($currency)||!preg_match('/^[A-Za-z]{3}$/D',$currency))throw new Error('cost_currency_invalid','Currency code invalid.',400);
+        $currency=Utils::key($currency,8);
+        $cost=$gb*$safe['storage_gb_month']+$minutes*$safe['transcode_minute']+$egress*$safe['egress_gb'];
+        if(!is_finite($cost)||$cost>1000000000)throw new Error('cost_estimate_invalid','Estimate exceeds ceiling.',400);
+        return ['asset_id'=>$assetId,'currency'=>$currency,'estimated_cost'=>round($cost,6),'components'=>['storage_gb'=>$gb,'minutes'=>$minutes,'egress_gb'=>$egress],'estimate_only'=>true];
+    }
+    public static function autoRoute(array $providers,array $requirements): array {
+        if(!is_array($requirements['capabilities']??[])||!is_array($requirements['regions']??[]))throw new Error('route_requirements_invalid','Routing requirements must be arrays.',400);
+        $requiredCaps=[];foreach($requirements['capabilities']??[] as $v){if(!is_string($v))throw new Error('route_requirements_invalid','Capability identity invalid.',400);$key=Utils::key($v,64);if($key==='')throw new Error('route_requirements_invalid','Capability identity invalid.',400);$requiredCaps[]=$key;}
+        $requiredCaps=array_values(array_unique($requiredCaps));
+        $requiredRegions=[];foreach($requirements['regions']??[] as $v)$requiredRegions[]=self::region($v);
+        $requiredRegions=array_values(array_unique($requiredRegions));
+        $eligible=[];
+        foreach($providers as $p){
+            if(!is_array($p)||($p['approved']??false)!==true||($p['healthy']??false)!==true)continue;
+            if(!is_string($p['id']??null)||!is_string($p['region']??null)||!is_array($p['capabilities']??null))continue;
+            $id=Utils::key($p['id'],64);
+            try{$region=self::region($p['region']);$cost=self::decimal($p['cost_score']??null,'route_score_invalid');$latency=self::decimal($p['latency_score']??null,'route_score_invalid');}catch(\Throwable){continue;}
+            if($id==='')continue;
+            $caps=[];foreach($p['capabilities'] as $v){if(!is_string($v))continue;$key=Utils::key($v,64);if($key!=='')$caps[]=$key;}
+            if(array_diff($requiredCaps,array_unique($caps))!==[])continue;
+            if($requiredRegions!==[]&&!in_array($region,$requiredRegions,true))continue;
+            $eligible[]=['id'=>$id,'region'=>$region,'cost'=>$cost,'latency'=>$latency];
+        }
+        if($eligible===[])throw new Error('approved_provider_unavailable','No approved provider satisfies requirements.',503);
+        usort($eligible,fn($a,$b)=>(($a['cost']+$a['latency'])<=>($b['cost']+$b['latency'])) ?: strcmp($a['id'],$b['id']));
+        return ['provider'=>$eligible[0]['id'],'region'=>$eligible[0]['region'],'eligible_count'=>count($eligible),'decision'=>'approved_health_capability_cost_route'];
+    }
 }
 
 final class OperationsFutureService {
