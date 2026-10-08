@@ -147,6 +147,53 @@ final class DeliveryService {
 }
 
 final class IntegrityService {
-    public static function sample(string $assetId): array {$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);$targets=[['type'=>'source','id'=>$assetId,'key'=>$asset['object_key'],'provider_id'=>$asset['storage']['provider_id']??'','sha256'=>$asset['sha256'],'size'=>$asset['size']]];$manifest=isset($asset['active_manifest_id'])?RecordStore::get('manifest',(string)$asset['active_manifest_id']):null;if($manifest&&($manifest['status']??'')==='active')foreach((array)$manifest['derivatives'] as $item){$derivative=RecordStore::get('derivative',(string)($item['derivative_id']??''));if($derivative&&($derivative['status']??'')==='validated'&&empty($derivative['superseded_by']))$targets[]=['type'=>'derivative','id'=>$derivative['id'],'key'=>$derivative['object_key'],'provider_id'=>$derivative['storage']['provider_id']??'','sha256'=>$derivative['sha256'],'size'=>$derivative['size']];}$results=[];foreach($targets as $target){$providerId=Utils::key((string)$target['provider_id'],64);if($providerId==='')throw new Error('storage_provider_missing','Integrity target provider missing.',500);$stream=ProviderRegistry::get($providerId)->openStream((string)$target['key']);try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}$ok=hash_equals((string)$target['sha256'],$stats['sha256'])&&(int)$target['size']===(int)$stats['size'];$results[]=$target+['ok'=>$ok,'checked_at'=>Utils::now()];if(!$ok)self::quarantine($assetId,'bit_rot_detected');}RecordStore::put('integrity_sample',Utils::id('int'),['actor_id'=>0,'asset_id'=>$assetId,'status'=>array_filter($results,fn($result)=>!$result['ok'])?'failed':'passed','results'=>$results,'created_at'=>Utils::now()]);return $results;}
-    public static function quarantine(string $assetId,string $reason): void {$asset=RecordStore::get('asset',$assetId);if(!$asset)return;$asset['status']='quarantined';$asset['integrity_status']='failed';$asset['integrity_reason']=Utils::key($reason,64);$asset['quarantined_at']=Utils::now();RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);DeliveryService::revokeForAsset($assetId,$reason);Audit::record('asset_integrity_quarantined',['asset_id'=>$assetId,'reason'=>$reason]);}
+    public static function sample(string $assetId): array {
+        $asset=RecordStore::get('asset',$assetId);
+        if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+        $targets=[['type'=>'source','id'=>$assetId,'key'=>$asset['object_key']??null,'provider_id'=>$asset['storage']['provider_id']??null,'sha256'=>$asset['sha256']??null,'size'=>$asset['size']??null]];
+        $manifestId=$asset['active_manifest_id']??null;
+        if($manifestId!==null&&$manifestId!==''){
+            if(!is_string($manifestId))self::reject($assetId,'integrity_manifest_invalid');
+            $manifest=RecordStore::get('manifest',$manifestId);
+            if(!$manifest||($manifest['status']??'')!=='active'||($manifest['asset_id']??'')!==$assetId||!is_array($manifest['derivatives']??null))
+                self::reject($assetId,'integrity_manifest_invalid');
+            foreach($manifest['derivatives'] as $item){
+                if(!is_array($item)||!is_string($item['derivative_id']??null)||$item['derivative_id']==='')
+                    self::reject($assetId,'integrity_derivative_invalid');
+                $derivative=RecordStore::get('derivative',$item['derivative_id']);
+                if(!$derivative||($derivative['asset_id']??'')!==$assetId||($derivative['status']??'')!=='validated'||!empty($derivative['superseded_by']))
+                    self::reject($assetId,'integrity_derivative_invalid');
+                $targets[]=['type'=>'derivative','id'=>$derivative['id'],'key'=>$derivative['object_key']??null,'provider_id'=>$derivative['storage']['provider_id']??null,'sha256'=>$derivative['sha256']??null,'size'=>$derivative['size']??null];
+            }
+        }
+        $results=[];
+        foreach($targets as $target){
+            try{$expectedSize=Utils::integer($target['size'],'integrity_size_invalid',0,1073741824);}
+            catch(Error $invalid){self::reject($assetId,$invalid->errorCode);}
+            $sha=$target['sha256'];
+            if(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha))
+                self::reject($assetId,'integrity_hash_invalid');
+            $key=$target['key'];$providerId=$target['provider_id'];
+            if(!is_string($key)||!preg_match('/^[a-f0-9]{64}$/D',$key)||!is_string($providerId)||$providerId===''||Utils::key($providerId,64)!==$providerId)
+                self::reject($assetId,'integrity_target_invalid');
+            $stream=ProviderRegistry::get($providerId)->openStream($key);
+            try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}
+            $ok=hash_equals($sha,$stats['sha256'])&&$expectedSize===$stats['size'];
+            $results[]=$target+['ok'=>$ok,'checked_at'=>Utils::now()];
+            if(!$ok)self::quarantine($assetId,'bit_rot_detected');
+        }
+        RecordStore::put('integrity_sample',Utils::id('int'),['actor_id'=>0,'asset_id'=>$assetId,'status'=>array_filter($results,fn($result)=>!$result['ok'])?'failed':'passed','results'=>$results,'created_at'=>Utils::now()]);
+        return $results;
+    }
+    private static function reject(string $assetId,string $code): never {
+        self::quarantine($assetId,'integrity_metadata_invalid');
+        throw new Error($code,'Integrity metadata is missing or invalid.',409);
+    }
+    public static function quarantine(string $assetId,string $reason): void {
+        $asset=RecordStore::get('asset',$assetId);if(!$asset)return;
+        $asset['status']='quarantined';$asset['integrity_status']='failed';$asset['integrity_reason']=Utils::key($reason,64);$asset['quarantined_at']=Utils::now();
+        RecordStore::put('asset',$assetId,$asset,(int)$asset['version']);
+        DeliveryService::revokeForAsset($assetId,$reason);
+        Audit::record('asset_integrity_quarantined',['asset_id'=>$assetId,'reason'=>$reason]);
+    }
 }
