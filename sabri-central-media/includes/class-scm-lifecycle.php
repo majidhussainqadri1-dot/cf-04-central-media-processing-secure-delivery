@@ -3,24 +3,147 @@ declare(strict_types=1);
 namespace Sabri\CentralMedia;
 
 final class LegalHoldService {
-    public static function place(string $assetId,int $actor,array $input): array {Auth::capability('media_hold');Auth::assertActor($actor,'manage_options');Utils::requireFields($input,['authority','reason','scope','review_at'],'hold_incomplete');$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);$authority=Utils::text((string)$input['authority'],191);$reason=Utils::text((string)$input['reason'],1000);$scope=array_values(array_filter(array_unique(array_map(fn($value)=>Utils::key((string)$value,32),(array)$input['scope']))));$allowed=['delivery','processing','deletion','reprocess','provider_exit','all'];if($authority===''||$reason===''||$scope===[]||array_diff($scope,$allowed)!==[])throw new Error('hold_incomplete','Hold authority, reason and valid scope are required.',400);$now=Utils::now();$reviewAt=(int)$input['review_at'];$expires=max(0,(int)($input['expires_at']??0));if($reviewAt<=$now||($expires>0&&$expires<=$reviewAt))throw new Error('hold_schedule_invalid','Hold review/expiry schedule invalid.',400);$decision=DomainRegistry::decision($asset['owner_domain'],'authorize_hold',['asset'=>$asset,'actor_id'=>$actor,'hold'=>Utils::redact($input)]);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Hold authorization is stale.',409);if(($decision['hold_allowed']??true)!==true)throw new Error('hold_denied','Owner denied hold.',403);$id=Utils::id('hold');$hold=['actor_id'=>$actor,'hold_id'=>$id,'asset_id'=>$assetId,'object_version'=>(int)$asset['object_version'],'owner_contract_version'=>(string)($decision['contract_version']??''),'authority'=>$authority,'reason'=>$reason,'scope'=>$scope,'status'=>'active','access_restriction'=>Utils::key((string)($input['access_restriction']??'restricted'),32),'review_at'=>$reviewAt,'expires_at'=>$expires,'placed_at'=>$now,'version_number'=>1];$hold=RecordStore::put('hold',$id,$hold);DeliveryService::revokeForAsset($assetId,'legal_hold');Audit::record('legal_hold_placed',['hold_id'=>$id,'asset_id'=>$assetId,'actor_id'=>$actor,'authority'=>$hold['authority']]);return $hold;}
+    private const SCOPES=['delivery','processing','deletion','reprocess','provider_exit','all'];
+    private const RESTRICTIONS=['restricted','blocked'];
+    private const STATES=['active','escalated','released'];
+    private const OPERATIONS=[
+        'delete'=>'deletion','deletion'=>'deletion','expire-derivatives'=>'deletion',
+        'expire_derivatives'=>'deletion','deliver'=>'delivery','delivery'=>'delivery',
+        'process'=>'processing','processing'=>'processing','repair'=>'reprocess',
+        'reprocess'=>'reprocess','provider-exit'=>'provider_exit',
+        'provider_exit'=>'provider_exit','all'=>'all',
+    ];
+    private static function scopeList(mixed $raw,string $code): array {
+        if(!is_array($raw)||!array_is_list($raw)||$raw===[])
+            throw new Error($code,'A nonempty list of legal-hold scopes is required.',400);
+        $scopes=[];
+        foreach($raw as $value){
+            if(!is_string($value)||!in_array($value,self::SCOPES,true)||in_array($value,$scopes,true))
+                throw new Error($code,'Legal-hold scope is unsupported or duplicated.',400);
+            $scopes[]=$value;
+        }
+        return $scopes;
+    }
+    private static function stored(array $hold): array {
+        if(($hold['record_type']??null)!=='hold'
+            ||!is_string($hold['id']??null)||$hold['id']===''
+            ||($hold['hold_id']??null)!==$hold['id']
+            ||!is_string($hold['asset_id']??null)||$hold['asset_id']===''
+            ||!in_array($hold['status']??null,self::STATES,true)
+            ||!in_array($hold['access_restriction']??null,self::RESTRICTIONS,true)
+            ||!is_string($hold['authority']??null)||trim($hold['authority'])===''
+            ||!is_string($hold['reason']??null)||trim($hold['reason'])==='')
+            throw new Error('hold_record_invalid','Persisted legal-hold identity or policy is invalid.',500);
+        try{
+            $hold['version']=Utils::integer($hold['version']??null,'hold_record_invalid',1);
+            $hold['version_number']=Utils::integer($hold['version_number']??null,'hold_record_invalid',1);
+            $hold['object_version']=Utils::integer($hold['object_version']??null,'hold_record_invalid',1);
+            $hold['review_at']=Utils::integer($hold['review_at']??null,'hold_record_invalid',1);
+            $hold['expires_at']=Utils::integer($hold['expires_at']??null,'hold_record_invalid',0);
+            $hold['scope']=self::scopeList($hold['scope']??null,'hold_record_invalid');
+        }catch(Error $e){throw new Error('hold_record_invalid','Persisted legal-hold metadata is invalid.',500);}
+        return $hold;
+    }
+    public static function place(string $assetId,int $actor,array $input): array {
+        Auth::capability('media_hold');Auth::assertActor($actor,'manage_options');
+        Utils::requireFields($input,['authority','reason','scope','review_at'],'hold_incomplete');
+        $asset=RecordStore::get('asset',$assetId);
+        if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+        if(!is_string($input['authority'])||!is_string($input['reason']))
+            throw new Error('hold_incomplete','Hold authority and reason must be text.',400);
+        $authority=Utils::text($input['authority'],191);$reason=Utils::text($input['reason'],1000);
+        $scope=self::scopeList($input['scope'],'hold_scope_invalid');
+        if($authority===''||$reason==='')throw new Error('hold_incomplete','Hold authority and reason are required.',400);
+        $restriction=$input['access_restriction']??'restricted';
+        if(!is_string($restriction)||!in_array($restriction,self::RESTRICTIONS,true))
+            throw new Error('hold_access_restriction_invalid','Unsupported legal-hold access restriction.',400);
+        $now=Utils::now();
+        $reviewAt=Utils::integer($input['review_at'],'hold_schedule_invalid',1);
+        $expires=array_key_exists('expires_at',$input)?Utils::integer($input['expires_at'],'hold_schedule_invalid',0):0;
+        if($reviewAt<=$now||($expires>0&&$expires<$reviewAt))
+            throw new Error('hold_schedule_invalid','Hold review/expiry schedule invalid.',400);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_hold',[
+            'asset'=>$asset,'actor_id'=>$actor,'hold'=>Utils::redact($input),
+        ]);
+        if($decision['object_version']!==Utils::integer($asset['object_version']??null,'hold_asset_version_invalid',1))
+            throw new Error('domain_object_version_stale','Hold authorization is stale.',409);
+        if(($decision['hold_allowed']??null)!==true)throw new Error('hold_denied','Owner denied hold.',403);
+        $id=Utils::id('hold');
+        $hold=[
+            'actor_id'=>$actor,'hold_id'=>$id,'asset_id'=>$assetId,
+            'object_version'=>$decision['object_version'],
+            'owner_contract_version'=>(string)($decision['contract_version']??''),
+            'authority'=>$authority,'reason'=>$reason,'scope'=>$scope,'status'=>'active',
+            'access_restriction'=>$restriction,'review_at'=>$reviewAt,'expires_at'=>$expires,
+            'placed_at'=>$now,'version_number'=>1,
+        ];
+        $hold=RecordStore::put('hold',$id,$hold);
+        DeliveryService::revokeForAsset($assetId,'legal_hold');
+        Audit::record('legal_hold_placed',['hold_id'=>$id,'asset_id'=>$assetId,'actor_id'=>$actor,'authority'=>$hold['authority']]);
+        return $hold;
+    }
     public static function active(string $assetId,?string $operation=null): array {
-    $operation=$operation===null?null:Utils::key($operation,32);
-    $aliases=['delete'=>'deletion','deletion'=>'deletion','expire-derivatives'=>'deletion','expire_derivatives'=>'deletion','deliver'=>'delivery','delivery'=>'delivery','process'=>'processing','processing'=>'processing','repair'=>'reprocess','reprocess'=>'reprocess','provider-exit'=>'provider_exit','provider_exit'=>'provider_exit'];
-    $scope=$operation===null?null:($aliases[$operation]??$operation);
-    return array_values(array_filter(RecordStore::all('hold',0,null,100000),static function($hold)use($assetId,$scope){
-        if(($hold['asset_id']??'')!==$assetId||!in_array(($hold['status']??''),['active','escalated'],true))return false;
-        if((int)($hold['expires_at']??0)>0&&(int)$hold['expires_at']<=Utils::now())return false;
-        if($scope===null)return true;
-        $scopes=(array)($hold['scope']??[]);
-        return in_array('all',$scopes,true)||in_array($scope,$scopes,true);
-    }));
-}
+        $scope=null;
+        if($operation!==null){
+            $normalized=Utils::key($operation,32);
+            if(!array_key_exists($normalized,self::OPERATIONS))
+                throw new Error('hold_operation_invalid','Unknown legal-hold operation.',400);
+            $scope=self::OPERATIONS[$normalized];
+        }
+        $holds=[];
+        foreach(RecordStore::all('hold',0,null,100000) as $raw){
+            if(!is_string($raw['asset_id']??null)||$raw['asset_id']==='')
+                throw new Error('hold_record_invalid','Persisted legal-hold asset identity is invalid.',500);
+            if($raw['asset_id']!==$assetId)continue;
+            $hold=self::stored($raw);
+            if($hold['status']==='released')continue;
+            if($hold['expires_at']>0&&$hold['expires_at']<=Utils::now())continue;
+            if($scope!==null&&!in_array('all',$hold['scope'],true)&&!in_array($scope,$hold['scope'],true))continue;
+            $holds[]=$hold;
+        }
+        return $holds;
+    }
     public static function assertNoHold(string $assetId,string $operation): void {
-    $holds=self::active($assetId,$operation);
-    if($holds!==[])throw new Error('asset_on_hold','Asset is under a scoped legal/security hold.',423,['operation'=>Utils::key($operation,32),'hold_ids'=>array_column($holds,'id')]);
-}
-    public static function review(string $holdId,int $actor,string $decision,string $reason): array {Auth::capability('media_hold');Auth::assertActor($actor,'manage_options');$hold=RecordStore::get('hold',$holdId);if(!$hold)throw new Error('hold_not_found','Hold not found.',404);if(!in_array(($hold['status']??''),['active','escalated'],true))throw new Error('hold_state_invalid','Hold is not reviewable.',409);if(!in_array($decision,['continue','release','escalate'],true))throw new Error('hold_decision_invalid','Invalid hold decision.',400);$reason=Utils::text($reason,1000);if($reason==='')throw new Error('hold_review_reason_required','Hold review reason is required.',400);$asset=RecordStore::get('asset',(string)$hold['asset_id']);if(!$asset)throw new Error('asset_not_found','Held asset not found.',404);$owner=DomainRegistry::decision($asset['owner_domain'],'authorize_hold',['asset'=>$asset,'actor_id'=>$actor,'hold'=>$hold,'phase'=>'review','review_decision'=>$decision,'review_reason'=>$reason]);if((int)$owner['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Hold review authorization is stale.',409);$hold['reviewed_by']=$actor;$hold['review_reason']=$reason;$hold['reviewed_at']=Utils::now();$hold['review_object_version']=(int)$asset['object_version'];$hold['review_contract_version']=(string)($owner['contract_version']??'');$hold['version_number']=(int)$hold['version_number']+1;if($decision==='release'){$hold['status']='released';$hold['released_at']=Utils::now();}elseif($decision==='escalate'){$hold['status']='escalated';$hold['review_at']=Utils::now()+604800;}else{$hold['status']='active';$hold['review_at']=Utils::now()+2592000;}return RecordStore::put('hold',$holdId,$hold,(int)$hold['version']);}
+        $holds=self::active($assetId,$operation);
+        if($holds!==[])throw new Error('asset_on_hold','Asset is under a scoped legal/security hold.',423,[
+            'operation'=>Utils::key($operation,32),'hold_ids'=>array_column($holds,'id'),
+        ]);
+    }
+    public static function review(string $holdId,int $actor,string $decision,string $reason): array {
+        Auth::capability('media_hold');Auth::assertActor($actor,'manage_options');
+        $raw=RecordStore::get('hold',$holdId);
+        if(!$raw)throw new Error('hold_not_found','Hold not found.',404);
+        $hold=self::stored($raw);
+        if(!in_array($hold['status'],['active','escalated'],true))
+            throw new Error('hold_state_invalid','Hold is not reviewable.',409);
+        if(!in_array($decision,['continue','release','escalate'],true))
+            throw new Error('hold_decision_invalid','Invalid hold decision.',400);
+        $reason=Utils::text($reason,1000);
+        if($reason==='')throw new Error('hold_review_reason_required','Hold review reason is required.',400);
+        $asset=RecordStore::get('asset',$hold['asset_id']);
+        if(!$asset)throw new Error('asset_not_found','Held asset not found.',404);
+        $owner=DomainRegistry::decision($asset['owner_domain'],'authorize_hold',[
+            'asset'=>$asset,'actor_id'=>$actor,'hold'=>$hold,
+            'phase'=>'review','review_decision'=>$decision,'review_reason'=>$reason,
+        ]);
+        if($owner['object_version']!==Utils::integer($asset['object_version']??null,'hold_asset_version_invalid',1))
+            throw new Error('domain_object_version_stale','Hold review authorization is stale.',409);
+        if(($owner['hold_allowed']??null)!==true)throw new Error('hold_denied','Owner denied hold review.',403);
+        if($hold['version_number']===PHP_INT_MAX)
+            throw new Error('hold_record_invalid','Legal-hold review counter is exhausted.',500);
+        $now=Utils::now();
+        $hold['reviewed_by']=$actor;$hold['review_reason']=$reason;$hold['reviewed_at']=$now;
+        $hold['review_object_version']=$owner['object_version'];
+        $hold['review_contract_version']=(string)($owner['contract_version']??'');
+        $hold['version_number']++;
+        if($decision==='release'){$hold['status']='released';$hold['released_at']=$now;}
+        else{
+            $hold['status']=$decision==='escalate'?'escalated':'active';
+            $next=$now+($decision==='escalate'?604800:2592000);
+            $hold['review_at']=$hold['expires_at']>0?min($next,$hold['expires_at']):$next;
+        }
+        return RecordStore::put('hold',$holdId,$hold,$hold['version']);
+    }
 }
 
 final class RetentionService {
