@@ -16,3 +16,6 @@ Canonical bounded numeric parsing, fail-closed persisted rights/size checks, typ
 
 ## Acceptance boundary
 Repository source and matching exact-head CI only. No staging, live, deployed-source, or operational evidence is claimed.
+
+## Verification-only correction
+First exact-head CI exposed a stale Round-119 text assertion for direct rights-expiry access. Updated that assertion to require the new fail-closed rights error guard. Round-146 executable regression tests malformed expiry directly. No additional runtime patch was made.
