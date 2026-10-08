@@ -10,5 +10,5 @@ LegalHoldService::assertNoHold($assetId,$holdOperation)
 PATTERN;
 r68(str_contains($s,"'expire-derivatives'=>'deletion'")&&str_contains($s,"'expire_derivatives'=>'deletion'"),'derivative expiry operations map to deletion hold scope');
 r68(str_contains($s,$expiryAuth)&&str_contains($s,$holdAssert),'derivative expiry path remains protected by the centralized hold assertion through action-time authorization');
-r68(str_contains($s,'$allowed=[\'delivery\',\'processing\',\'deletion\',\'reprocess\',\'provider_exit\',\'all\'];'),'legal-hold accepted scopes remain canonical and bounded');
+r68(str_contains($s,"private const SCOPES=['delivery','processing','deletion','reprocess','provider_exit','all'];")&&str_contains($s,'scopeList($input')&&str_contains($s,'scopeList($hold'),'legal-hold accepted scopes remain canonical and bounded');
 echo "REVIEW ROUND 68 LEGAL HOLD SCOPE: PASS\n";
