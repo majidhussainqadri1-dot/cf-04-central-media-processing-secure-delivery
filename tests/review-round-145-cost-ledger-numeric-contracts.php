@@ -18,6 +18,7 @@ foreach(['junk','10junk','1e2',' 1','-1',true,[],null,INF,NAN] as $bad){
 }
 err(fn()=>CostService::record($asset['id'],'source-private','processing',['bytes'=>1],[]),'cost_rate_missing','Round 145 missing rate');
 err(fn()=>CostService::reconcile('source-private',['total'=>0,'period'=>[]]),'invoice_invalid','Round 145 invalid period type');
+err(fn()=>CostService::reconcile('source-private',['total'=>0,'period'=>null]),'invoice_invalid','Round 145 explicit null period cannot default');
 err(fn()=>CostService::reconcile('source-private',['total'=>0,'period'=>'2026-1']),'invoice_period_invalid','Round 145 noncanonical month');
 $badDomain=RecordStore::put('asset','round145-invalid-domain',['actor_id'=>11,'status'=>'ready','owner_domain'=>'file17 ']);
 err(fn()=>CostService::record($badDomain['id'],'source-private','processing',['jobs'=>1],['jobs'=>1]),'cost_identity_invalid','Round 145 owner attribution');

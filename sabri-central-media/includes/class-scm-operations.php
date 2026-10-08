@@ -224,7 +224,7 @@ final class CostService {
     }
     public static function reconcile(string $provider,array $invoice): array {
         $provider=Utils::key($provider,64);$reported=self::amount($invoice['total']??null,'invoice_invalid');
-        $tolerance=self::amount($invoice['tolerance']??0.01,'invoice_invalid');$period=$invoice['period']??'';
+        $tolerance=self::amount(array_key_exists('tolerance',$invoice)?$invoice['tolerance']:0.01,'invoice_invalid');$period=array_key_exists('period',$invoice)?$invoice['period']:'';
         if($provider===''||!is_string($period))throw new Error('invoice_invalid','Invoice provider or period invalid.',400);
         if($period!==''){$date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));if($date===false||$date->format('Y-m')!==$period)throw new Error('invoice_period_invalid','Invoice month invalid.',400);}
         $calculated=0.0;
