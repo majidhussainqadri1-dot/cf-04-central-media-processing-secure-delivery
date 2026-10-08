@@ -147,35 +147,117 @@ final class LegalHoldService {
 }
 
 final class RetentionService {
-    public static function schedule(string $assetId): array {$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);$decision=DomainRegistry::decision($asset['owner_domain'],'retention_decision',['asset'=>$asset,'policy'=>$asset['policy']['retention']]);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Retention decision is stale.',409);$now=Utils::now();$ret=$asset['policy']['retention'];$sourceDelete=max($now+(int)$ret['source_seconds'],(int)($decision['source_retain_until']??0));$derivativeDelete=max($now+(int)$ret['derivative_seconds'],(int)($decision['derivative_retain_until']??0));$backupExpiry=max($now+(int)$ret['backup_expiry_seconds'],(int)($decision['backup_expiry_at']??0));$id=hash('sha256',$assetId.'|'.$asset['policy_hash']);$record=['actor_id'=>0,'asset_id'=>$assetId,'retention_class'=>$ret['class'],'status'=>'scheduled','source_delete_at'=>$sourceDelete,'derivative_delete_at'=>$derivativeDelete,'temporary_cleanup_at'=>$now+(int)$ret['temporary_seconds'],'backup_expiry_at'=>$backupExpiry,'decision_version'=>$decision['contract_version'],'created_at'=>$now];return RecordStore::put('retention',$id,$record,(int)(RecordStore::get('retention',$id)['version']??0));}
-    public static function run(int $now=0): array {
-    $now=$now?:Utils::now();$cleanup=UploadService::cleanupExpired($now);
-    $out=['temporary_cleaned'=>(int)$cleanup['parts_purged'],'uploads_expired'=>(int)$cleanup['expired'],'cleanup_failed'=>(int)$cleanup['failed'],'derivatives_expired'=>0,'deletion_requested'=>0,'holds_skipped'=>0,'records_failed'=>0];
-    foreach(RecordStore::all('retention',0,null,100000) as $retention){
-        if(!in_array(($retention['status']??''),['scheduled','pending','derivatives_expired'],true))continue;
-        $assetId=(string)($retention['asset_id']??'');
-        try{
-            if($assetId==='')throw new Error('retention_asset_missing','Retention record has no asset identity.',500);
-            $deletionHeld=LegalHoldService::active($assetId,'deletion')!==[];
-            if((int)$retention['derivative_delete_at']<=$now&&!Utils::bool($retention['derivatives_expired']??false)&&(int)$retention['source_delete_at']>$now){
-                if($deletionHeld){$out['holds_skipped']++;continue;}
-                DeletionService::expireDerivatives($assetId,'retention-expiry');$retention['derivatives_expired']=true;$retention['status']='derivatives_expired';$out['derivatives_expired']++;
-            }
-            if((int)$retention['source_delete_at']<=$now&&!isset($retention['deletion_id'])){
-                if($deletionHeld){$out['holds_skipped']++;continue;}
-                $request=DeletionService::request($assetId,0,'retention-expiry',['backup_expiry_at'=>$retention['backup_expiry_at']]);$retention['status']='deletion_requested';$retention['deletion_id']=$request['id'];$out['deletion_requested']++;
-            }
-            $retention['temporary_cleaned']=true;
-            RecordStore::put('retention',(string)$retention['id'],$retention,(int)$retention['version']);
-        }catch(\Throwable $failure){
-            $out['records_failed']++;$code=$failure instanceof Error?$failure->errorCode:'unexpected';
-            try{DegradedStateService::record('retention-run',$code,['asset_ref'=>$assetId===''?'':Utils::hashReference($assetId),'retention_ref'=>Utils::hashReference((string)($retention['id']??''))]);}catch(\Throwable){}
-            continue;
-        }
+    private const STATES=['scheduled','pending','derivatives_expired','deletion_requested'];
+    private static function timestamp(int $now,mixed $seconds): int {
+        $duration=Utils::integer($seconds,'retention_schedule_invalid',0);
+        if($duration>PHP_INT_MAX-$now)throw new Error('retention_schedule_invalid','Retention schedule overflows supported time.',400);
+        return $now+$duration;
     }
-    return $out;
-}
-
+    private static function stored(array $row): array {
+        if(($row['record_type']??null)!=='retention'||!is_string($row['id']??null)||$row['id']===''
+            ||!is_string($row['asset_id']??null)||$row['asset_id']===''
+            ||!in_array($row['status']??null,self::STATES,true)
+            ||!is_string($row['retention_class']??null)||$row['retention_class']==='')
+            throw new Error('retention_record_invalid','Persisted retention identity or state is invalid.',500);
+        try{
+            $row['version']=Utils::integer($row['version']??null,'retention_record_invalid',1);
+            foreach(['source_delete_at','derivative_delete_at','temporary_cleanup_at','backup_expiry_at'] as $field)
+                $row[$field]=Utils::integer($row[$field]??null,'retention_record_invalid',1);
+        }catch(Error $e){throw new Error('retention_record_invalid','Persisted retention schedule is invalid.',500);}
+        if(array_key_exists('derivatives_expired',$row)&&!is_bool($row['derivatives_expired']))
+            throw new Error('retention_record_invalid','Persisted derivative-expiry state is invalid.',500);
+        if(array_key_exists('deletion_id',$row)&&(!is_string($row['deletion_id'])||$row['deletion_id']===''))
+            throw new Error('retention_record_invalid','Persisted deletion reference is invalid.',500);
+        return $row;
+    }
+    public static function schedule(string $assetId): array {
+        $asset=RecordStore::get('asset',$assetId);
+        if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+        $ret=$asset['policy']['retention']??null;
+        $hash=$asset['policy_hash']??null;
+        if(!is_array($ret)||!is_string($hash)||!preg_match('/^[a-f0-9]{64}$/D',$hash)
+            ||!is_string($ret['class']??null)||$ret['class']==='')
+            throw new Error('retention_policy_invalid','Asset retention policy identity is invalid.',500);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'retention_decision',[
+            'asset'=>$asset,'policy'=>$ret,
+        ]);
+        if($decision['object_version']!==Utils::integer($asset['object_version']??null,'retention_policy_invalid',1))
+            throw new Error('domain_object_version_stale','Retention decision is stale.',409);
+        $now=Utils::now();
+        $sourceDelete=max(self::timestamp($now,$ret['source_seconds']??null),
+            Utils::integer($decision['source_retain_until']??null,'retention_schedule_invalid',0));
+        $derivativeDelete=max(self::timestamp($now,$ret['derivative_seconds']??null),
+            Utils::integer($decision['derivative_retain_until']??null,'retention_schedule_invalid',0));
+        $backupExpiry=max(self::timestamp($now,$ret['backup_expiry_seconds']??null),
+            Utils::integer($decision['backup_expiry_at']??null,'retention_schedule_invalid',0));
+        $temporaryCleanup=self::timestamp($now,$ret['temporary_seconds']??null);
+        $id=hash('sha256',$assetId.'|'.$hash);
+        $existing=RecordStore::get('retention',$id);
+        if($existing!==null){
+            $old=self::stored($existing);
+            if($old['asset_id']!==$assetId||$old['retention_class']!==$ret['class'])
+                throw new Error('retention_record_invalid','Prior retention schedule identity is invalid.',500);
+        }
+        $record=[
+            'actor_id'=>0,'asset_id'=>$assetId,'retention_class'=>$ret['class'],'status'=>'scheduled',
+            'source_delete_at'=>$sourceDelete,'derivative_delete_at'=>$derivativeDelete,
+            'temporary_cleanup_at'=>$temporaryCleanup,'backup_expiry_at'=>$backupExpiry,
+            'decision_version'=>$decision['contract_version'],'created_at'=>$now,
+        ];
+        return RecordStore::put('retention',$id,$record,$existing?$old['version']:0);
+    }
+    public static function run(int $now=0): array {
+        $now=$now>0?$now:Utils::now();$cleanup=UploadService::cleanupExpired($now);
+        $out=['temporary_cleaned'=>(int)$cleanup['parts_purged'],'uploads_expired'=>(int)$cleanup['expired'],
+            'cleanup_failed'=>(int)$cleanup['failed'],'derivatives_expired'=>0,'deletion_requested'=>0,
+            'holds_skipped'=>0,'records_failed'=>0];
+        foreach(RecordStore::all('retention',0,null,100000) as $snapshot){
+            $assetId=is_string($snapshot['asset_id']??null)?$snapshot['asset_id']:'';
+            try{
+                $retention=self::stored($snapshot);
+                if($retention['status']==='deletion_requested')continue;
+                $assetId=$retention['asset_id'];
+                $asset=RecordStore::get('asset',$assetId);
+                if(!$asset)throw new Error('retention_asset_missing','Retention asset is unavailable.',500);
+                $hash=$asset['policy_hash']??null;
+                $class=$asset['policy']['retention']['class']??null;
+                if(!is_string($hash)||!preg_match('/^[a-f0-9]{64}$/D',$hash)
+                    ||!is_string($class)||$class!==$retention['retention_class']
+                    ||!hash_equals($retention['id'],hash('sha256',$assetId.'|'.$hash)))
+                    throw new Error('retention_policy_stale','Retention schedule is no longer bound to current asset policy.',409);
+                $deletionHeld=LegalHoldService::active($assetId,'deletion')!==[];
+                $expiredDerivatives=false;$requestedDeletion=false;
+                if($retention['derivative_delete_at']<=$now
+                    &&!($retention['derivatives_expired']??false)
+                    &&$retention['source_delete_at']>$now){
+                    if($deletionHeld){$out['holds_skipped']++;continue;}
+                    DeletionService::expireDerivatives($assetId,'retention-expiry');
+                    $retention['derivatives_expired']=true;$retention['status']='derivatives_expired';
+                    $expiredDerivatives=true;
+                }
+                if($retention['source_delete_at']<=$now&&!isset($retention['deletion_id'])){
+                    if($deletionHeld){$out['holds_skipped']++;continue;}
+                    $request=DeletionService::request($assetId,0,'retention-expiry',[
+                        'backup_expiry_at'=>$retention['backup_expiry_at'],
+                    ]);
+                    $retention['status']='deletion_requested';$retention['deletion_id']=$request['id'];
+                    $requestedDeletion=true;
+                }
+                $retention['temporary_cleaned']=true;
+                RecordStore::put('retention',$retention['id'],$retention,$retention['version']);
+                if($expiredDerivatives)$out['derivatives_expired']++;
+                if($requestedDeletion)$out['deletion_requested']++;
+            }catch(\Throwable $failure){
+                $out['records_failed']++;$code=$failure instanceof Error?$failure->errorCode:'unexpected';
+                try{DegradedStateService::record('retention-run',$code,[
+                    'asset_ref'=>$assetId===''?'':Utils::hashReference($assetId),
+                    'retention_ref'=>Utils::hashReference((string)($snapshot['id']??'')),
+                ]);}catch(\Throwable){}
+                continue;
+            }
+        }
+        return $out;
+    }
 }
 
 final class DeletionService {
