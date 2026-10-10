@@ -47,7 +47,11 @@ $asset=RecordStore::get('asset',$asset['id']);
 $asset['status']='deleted';$asset['deletion_id']=$deletion['id'];
 RecordStore::put('asset',$asset['id'],$asset,(int)$asset['version']);
 RecordStore::put('tombstone',$asset['id'],[
-    'actor_id'=>11,'asset_id'=>$asset['id'],'status'=>'deleted','reason'=>'user-request',
+    'actor_id'=>11,'asset_id'=>$asset['id'],'deletion_id'=>$deletion['id'],
+    'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],
+    'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+    'rights_hash'=>$asset['rights']['policy_hash'],
+    'status'=>'deleted','reason'=>'user-request','deleted_at'=>time(),
     'backup_expiry_at'=>$completed['backup_expiry_at'],
 ]);
 RecordStore::put('backup_expiry',hash('sha256',$deletion['id'].'|backup-expiry'),[

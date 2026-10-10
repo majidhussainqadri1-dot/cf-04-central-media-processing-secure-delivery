@@ -304,7 +304,7 @@ final class DeletionService {
     private static function auditCompleted(array $d): void {
         Audit::recordOnce('deletion_completed',[
             'deletion_id'=>$d['id'],'asset_id'=>$d['asset_id'],
-            'attempts'=>$d['attempts'],
+            'actor_id'=>$d['actor_id'],'attempts'=>$d['attempts'],
         ],$d['id']);
     }
     private static function recoverDeletedAsset(array $d,array $asset): array {
@@ -327,7 +327,7 @@ final class DeletionService {
             if(!is_array($asset['rights']??null)||!is_string($asset['rights']['policy_hash']??null))
                 throw new Error('deletion_evidence_invalid','Legacy tombstone recovery lacks rights identity.',500);
             $tomb=RecordStore::put('tombstone',$d['asset_id'],[
-                'actor_id'=>$d['actor_id'],'asset_id'=>$d['asset_id'],
+                'actor_id'=>$d['actor_id'],'asset_id'=>$d['asset_id'],'deletion_id'=>$d['id'],
                 'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],
                 'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
                 'rights_hash'=>$asset['rights']['policy_hash'],'reason'=>$d['reason'],
@@ -335,13 +335,24 @@ final class DeletionService {
                 'backup_expiry_at'=>$d['backup_expiry_at'],
             ],0);
         }
-        if(($tomb['asset_id']??null)!==$d['asset_id']
-            ||($tomb['status']??null)!=='deleted'||($tomb['reason']??null)!==$d['reason']
-            ||($tomb['backup_expiry_at']??null)!==$d['backup_expiry_at'])
-            throw new Error('deletion_evidence_invalid','Terminal recovery tombstone conflicts with deletion.',500);
+        if(!self::tombstoneMatches($tomb,$asset,$d))
+            throw new Error('deletion_evidence_invalid','Terminal recovery tombstone conflicts with asset identity.',500);
         $d['steps']['tombstone']='complete';$d['status']='completed';$d['completed_at']=$deletedAt;
         $d=self::save($d);self::completedEvidence($d);self::auditCompleted($d);
         return $d;
+    }
+    private static function tombstoneMatches(array $tomb,array $asset,array $d): bool {
+        $rights=$asset['rights']['policy_hash']??null;
+        if(!is_string($rights)||$rights==='')return false;
+        foreach(['owner_domain','owner_object','object_version','policy_hash'] as $field)
+            if(!array_key_exists($field,$asset)||!array_key_exists($field,$tomb)
+                ||$tomb[$field]!==$asset[$field])return false;
+        return ($tomb['asset_id']??null)===$d['asset_id']
+            &&($tomb['status']??null)==='deleted'
+            &&($tomb['reason']??null)===$d['reason']
+            &&($tomb['backup_expiry_at']??null)===$d['backup_expiry_at']
+            &&($tomb['rights_hash']??null)===$rights
+            &&(!array_key_exists('deletion_id',$tomb)||$tomb['deletion_id']===$d['id']);
     }
     private static function completedEvidence(array $d): void {
         $asset=RecordStore::get('asset',$d['asset_id']);
@@ -349,10 +360,7 @@ final class DeletionService {
         $ledger=RecordStore::get('backup_expiry',hash('sha256',$d['id'].'|backup-expiry'));
         if(!is_array($asset)||($asset['status']??null)!=='deleted'
             ||($asset['deletion_id']??null)!==$d['id']
-            ||!is_array($tomb)||($tomb['asset_id']??null)!==$d['asset_id']
-            ||($tomb['status']??null)!=='deleted'
-            ||($tomb['reason']??null)!==$d['reason']
-            ||($tomb['backup_expiry_at']??null)!==$d['backup_expiry_at']
+            ||!is_array($tomb)||!self::tombstoneMatches($tomb,$asset,$d)
             ||!is_array($ledger)||($ledger['asset_id']??null)!==$d['asset_id']
             ||($ledger['deletion_id']??null)!==$d['id']
             ||($ledger['status']??null)!=='awaiting_backup_expiry'
@@ -445,14 +453,13 @@ final class DeletionService {
                 $asset=self::authorizeCurrent($d['asset_id'],$d['actor_id'],$d['reason'],['deletion_id'=>$deletionId,'phase'=>'tombstone'],'delete');
                 $existingTombstone=RecordStore::get('tombstone',$asset['asset_id']);
                 if($existingTombstone!==null&&(
-                    ($existingTombstone['asset_id']??null)!==$d['asset_id']
-                    ||($existingTombstone['status']??null)!=='deleted'
-                    ||($existingTombstone['reason']??null)!==$d['reason']
-                    ||($existingTombstone['backup_expiry_at']??null)!==$d['backup_expiry_at']))
+                    !self::tombstoneMatches($existingTombstone,$asset,$d)
+                    ||($existingTombstone['deletion_id']??null)!==$d['id']))
                     throw new Error('deletion_evidence_invalid','Existing tombstone conflicts with deletion.',500);
                 $deletedAt=Utils::now();
                 RecordStore::put('tombstone',$asset['asset_id'],[
-                    'actor_id'=>$d['actor_id'],'asset_id'=>$asset['asset_id'],'owner_domain'=>$asset['owner_domain'],
+                    'actor_id'=>$d['actor_id'],'asset_id'=>$asset['asset_id'],'deletion_id'=>$d['id'],
+                    'owner_domain'=>$asset['owner_domain'],
                     'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],
                     'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
                     'reason'=>$d['reason'],'status'=>'deleted','deleted_at'=>$deletedAt,
