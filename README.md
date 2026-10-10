@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–157 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–158 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
@@ -55,3 +55,7 @@ Stored revocation notices must bind `actor_id` to the deletion actor, have valid
 ## Round 157 — Durable nonterminal revocation dispatch
 
 Nonterminal derivative expiry and rights invalidation now share a single logical owner-revocation event per asset, reason, owner version and rights fingerprint. A stable projection identity, idempotent audit record, persisted pending/dispatched outbox, and cron reconciliation support at-least-once **local** WordPress hook dispatch. A failed hook remains pending and is retried; local dispatch never implies external acknowledgement. Expiry-triggered rights reconciliation is marked complete only after successful dispatch. A repeat with unchanged rights does not emit a second distinct event; a genuinely changed rights fingerprint produces a new event identity. Existing historical time-keyed projections cannot be assumed to carry an external receipt.
+
+## Round 158 — Projection evidence fail-closed replay
+
+Persisted rights-revocation projections are validated for canonical identity, owner/rights hashes, status, actor, timestamps, and propagation evidence **before** repeat derivative expiry. Pending outbox reconciliation independently verifies that the projection matches the notice and its stable event identity; corrupt evidence is rejected without a hook dispatch. Owner identity changes without an authoritative object-version increment remain fail-closed, rather than silently treating a conflicting projection as a new owner event. These checks prove local source behavior only, not external delivery or deployed state.

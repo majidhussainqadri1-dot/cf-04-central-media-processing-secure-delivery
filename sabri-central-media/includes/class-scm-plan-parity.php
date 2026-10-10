@@ -196,10 +196,32 @@ final class RevocationDispatchService {
             throw new Error('revocation_dispatch_stale','Revocation owner identity has changed.',409);
         if($row['projection_revocation_id']!==''){
             $projection=RecordStore::get('projection_revocation',$row['projection_revocation_id']);
-            if(!$projection||($projection['asset_id']??null)!==$row['asset_id']
+            $expectedProjectionId=hash('sha256',Utils::canonicalJson([
+                'asset_id'=>$row['asset_id'],'reason'=>$row['reason'],
+                'rights_fingerprint'=>$row['rights_fingerprint'],
+                'object_version'=>$row['object_version'],
+            ]));
+            if($row['projection_revocation_id']!==$expectedProjectionId
+                ||!is_array($projection)
+                ||($projection['record_type']??null)!=='projection_revocation'
+                ||($projection['id']??null)!==$expectedProjectionId
+                ||($projection['actor_id']??null)!==0
+                ||!is_int($projection['version']??null)||$projection['version']<1
+                ||!is_int($projection['created_at']??null)||$projection['created_at']<1
+                ||!is_int($projection['effective_at']??null)||$projection['effective_at']<1
+                ||($projection['status']??null)!=='propagation_pending_consumers'
+                ||($projection['asset_id']??null)!==$row['asset_id']
+                ||($projection['asset_ref_hash']??null)!==Utils::hashReference($row['asset_id'])
                 ||($projection['reason']??null)!==$row['reason']
-                ||($projection['object_version']??null)!==$row['object_version'])
-                throw new Error('revocation_projection_invalid','Revocation projection identity is invalid.',500);
+                ||($projection['object_version']??null)!==$row['object_version']
+                ||($projection['owner_domain']??null)!==$row['owner_domain']
+                ||($projection['owner_object_hash']??null)!==$row['owner_object_hash']
+                ||($projection['rights_fingerprint']??null)!==$row['rights_fingerprint']
+                ||($projection['cdn_status']??null)!=='purged_or_not_published'
+                ||($projection['derivative_status']??null)!=='revoked'
+                ||($projection['index_status']??null)!=='pending_owner_consumer'
+                ||($projection['backup_status']??null)!=='retention_policy_applies')
+                throw new Error('revocation_projection_invalid','Revocation projection evidence is invalid.',500);
         }
         if($row['status']==='dispatched')return $row;
         if(!function_exists('do_action'))
@@ -307,15 +329,29 @@ final class RightsRevocationService {
             'asset_id'=>$assetId,'reason'=>$reason,'rights_fingerprint'=>$fingerprint,
             'object_version'=>$asset['object_version']??null,
         ]));
-        $propagation=DeletionService::expireDerivatives($assetId,$reason,false);
         $existing=RecordStore::get('projection_revocation',$id);
         if($existing!==null){
-            if(($existing['asset_id']??null)!==$assetId||($existing['reason']??null)!==$reason
+            if(($existing['record_type']??null)!=='projection_revocation'
+                ||($existing['id']??null)!==$id
+                ||($existing['actor_id']??null)!==0
+                ||!is_int($existing['version']??null)||$existing['version']<1
+                ||!is_int($existing['created_at']??null)||$existing['created_at']<1
+                ||!is_int($existing['effective_at']??null)||$existing['effective_at']<1
+                ||($existing['status']??null)!=='propagation_pending_consumers'
+                ||($existing['asset_ref_hash']??null)!==Utils::hashReference($assetId)
+                ||($existing['asset_id']??null)!==$assetId||($existing['reason']??null)!==$reason
                 ||($existing['rights_fingerprint']??null)!==$fingerprint
                 ||($existing['object_version']??null)!==($asset['object_version']??null)
                 ||($existing['owner_domain']??null)!==($asset['owner_domain']??null)
-                ||($existing['owner_object_hash']??null)!==Utils::hashReference((string)$asset['owner_object']))
-                throw new Error('revocation_projection_invalid','Stored projection conflicts with revocation identity.',500);
+                ||($existing['owner_object_hash']??null)!==Utils::hashReference((string)$asset['owner_object'])
+                ||($existing['cdn_status']??null)!=='purged_or_not_published'
+                ||($existing['derivative_status']??null)!=='revoked'
+                ||($existing['index_status']??null)!=='pending_owner_consumer'
+                ||($existing['backup_status']??null)!=='retention_policy_applies')
+                throw new Error('revocation_projection_invalid','Stored projection conflicts with revocation evidence.',500);
+        }
+        $propagation=DeletionService::expireDerivatives($assetId,$reason,false);
+        if($existing!==null){
             $row=$existing;
         }else{
             $row=RecordStore::put('projection_revocation',$id,[
