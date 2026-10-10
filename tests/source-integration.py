@@ -1,4 +1,4 @@
-import pathlib,re
+import pathlib,re,subprocess
 root=pathlib.Path(__file__).resolve().parents[1]
 plugin=(root/'sabri-central-media/sabri-central-media.php').read_text()
 includes=sorted((root/'sabri-central-media/includes').glob('*.php'))
@@ -13,4 +13,5 @@ assert 'CHAT-XFER-001' in matrix
 for n in range(1,11): assert f'CF04-CEN-{n:02d}' in matrix
 for n in range(1,7): assert f'CF04-NJ-{n:02d}' in matrix
 assert "define('SCM_RUNTIME_ENABLED',false)" in plugin
+subprocess.run(['php',str(root/'tests/review-round-151-deletion-integrity.php')],check=True)
 print('SOURCE INTEGRATION: PASS')
