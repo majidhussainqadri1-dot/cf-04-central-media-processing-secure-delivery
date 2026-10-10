@@ -11,7 +11,7 @@ $expected=<<<'PATTERN'
 'expected'=>0
 PATTERN;
 $inventory=<<<'PATTERN'
-$inventory=RecordStore::all('asset',0,null,1000000)
+RecordStore::all('asset',0,null,1000000)
 PATTERN;
 $priority=<<<'PATTERN'
 if($expires===0||($expires!==null&&$expires>$now))continue
