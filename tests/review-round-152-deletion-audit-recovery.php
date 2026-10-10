@@ -4,7 +4,7 @@ require __DIR__.'/bootstrap.php';
 use Sabri\CentralMedia\{Audit,DeletionService,RecordStore};
 function r152Asset(string $id): array {
     return RecordStore::put('asset',$id,[
-        'actor_id'=>11,'status'=>'ready','owner_domain'=>'file17','owner_object'=>'r152-object-'.$id,
+        'actor_id'=>11,'asset_id'=>$id,'status'=>'ready','owner_domain'=>'file17','owner_object'=>'r152-object-'.$id,
         'object_version'=>1,'policy_hash'=>hash('sha256','policy-'.$id),
         'rights'=>['policy_hash'=>hash('sha256','rights-'.$id)],
         'storage'=>['provider_id'=>'source-private'],'object_key'=>'missing-'.$id,
