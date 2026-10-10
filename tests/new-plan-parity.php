@@ -85,10 +85,21 @@ ok($after['active_manifest_id']===null&&$after['status']==='quarantined','CF04-C
 $projections=array_values(array_filter(RecordStore::all('projection_revocation',0,null,1000),fn($row)=>($row['asset_id']??'')===$asset['id']));
 ok($projections!==[]&&$projections[0]['index_status']==='pending_owner_consumer','CF04-CEN-08 downstream index/backup propagation evidence recorded');
 
-// Review 62 regression: the configured batch size is a processing limit, not a RecordStore scan ceiling.
+// Review 62 + 160: non-actionable entries do not consume the bounded actionable batch.
 RecordStore::resetMemory();
 for($i=0;$i<500;$i++)RecordStore::put('asset','rights-batch-'.$i,['actor_id'=>0,'status'=>'ready','rights'=>['expires_at'=>0]]);
+$tailRights=rights(['view']);$tailRights['expires_at']=Utils::now()-10;
+RecordStore::put('asset','rights-batch-expired-tail',[
+    'actor_id'=>11,'asset_id'=>'rights-batch-expired-tail','status'=>'ready',
+    'owner_domain'=>'file17','owner_object'=>'rights-batch-expired-tail-owner','object_version'=>1,
+    'policy_hash'=>hash('sha256','rights-batch-expired-tail-policy'),'rights'=>$tailRights,
+    'storage'=>['provider_id'=>'source-private'],'object_key'=>hash('sha256','rights-batch-expired-tail-absent'),
+]);
 $bounded=RightsRevocationService::reconcileExpired(Utils::now(),500);
-ok($bounded['checked']===500&&$bounded['revoked']===0&&$bounded['failed']===0,'REVIEW-62 rights reconciliation processes an exactly-full bounded batch without record_scan_limit');
+ok($bounded['checked']===1&&$bounded['revoked']===1&&$bounded['failed']===0,
+    'REVIEW-62 expired rights after 500 non-actionable assets are processed');
+$replayed=RightsRevocationService::reconcileExpired(Utils::now(),500);
+ok($replayed['checked']===0&&$replayed['revoked']===0&&$replayed['failed']===0,
+    'REVIEW-160 reconciled rights do not consume a subsequent batch');
 
 echo "CF-04 CURRENT NEW-PLAN PARITY: PASS\n";
