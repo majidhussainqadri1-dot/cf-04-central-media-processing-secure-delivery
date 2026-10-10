@@ -317,26 +317,42 @@ final class RightsRevocationService {
     }
 
     public static function reconcileExpired(int $now=0,int $limit=500): array {
-        $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['checked'=>0,'revoked'=>0,'failed'=>0];
-        $inventory=RecordStore::all('asset',0,null,1000000);
-        usort($inventory,static function(array $a,array $b)use($now): int {
-            $rank=static function(array $asset)use($now): int {
-                if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)||self::alreadyReconciled($asset))return 2;
-                $expires=self::expiry($asset);
-                return $expires===null||($expires>0&&$expires<=$now)?0:1;
-            };
-            $ar=$rank($a);$br=$rank($b);if($ar!==$br)return $ar<=>$br;
-            if($ar===0){$ae=self::expiry($a)??-1;$be=self::expiry($b)??-1;if($ae!==$be)return $ae<=>$be;}
-            return strcmp((string)($a['id']??''),(string)($b['id']??''));
-        });
-        foreach(array_slice($inventory,0,$limit) as $asset){
-            $result['checked']++;
-            if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)||self::alreadyReconciled($asset))continue;
+        $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));
+        $result=['checked'=>0,'revoked'=>0,'failed'=>0];
+        // Only actionable assets enter the bounded batch; rotate a durable key
+        // so one repeatedly failing rights record cannot starve later records.
+        $eligible=[];
+        foreach(RecordStore::all('asset',0,null,1000000) as $asset){
+            if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)
+                ||self::alreadyReconciled($asset))continue;
             $expires=self::expiry($asset);
             if($expires===0||($expires!==null&&$expires>$now))continue;
-            $reason=$expires===null?'rights_invalid':'rights_expired';
-            try{self::invalidate((string)$asset['id'],$reason,$now);$result['revoked']++;}
-            catch(\Throwable $exception){$result['failed']++;DegradedStateService::record('rights-reconciliation',$exception instanceof Error?$exception->errorCode:'unexpected',['asset_ref'=>Utils::hashReference((string)$asset['id'])]);}
+            $assetId=(string)($asset['id']??'');
+            $sortKey=sprintf('%019d',max(0,$expires??0)).':'.$assetId;
+            $eligible[]=['key'=>$sortKey,'asset'=>$asset,'reason'=>$expires===null?'rights_invalid':'rights_expired'];
+        }
+        usort($eligible,static fn(array $a,array $b): int=>strcmp($a['key'],$b['key']));
+        $cursor=RecordStore::get('cron_cursor','rights-reconciliation');
+        $after=(string)($cursor['last_key']??'');
+        $ordered=array_merge(
+            array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)>0)),
+            array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)<=0))
+        );
+        foreach(array_slice($ordered,0,$limit) as $entry){
+            $asset=$entry['asset'];$result['checked']++;$after=$entry['key'];
+            try{self::invalidate((string)$asset['id'],$entry['reason'],$now);$result['revoked']++;}
+            catch(\Throwable $exception){
+                $result['failed']++;
+                try{DegradedStateService::record('rights-reconciliation',
+                    $exception instanceof Error?$exception->errorCode:'unexpected',
+                    ['asset_ref'=>Utils::hashReference((string)($asset['id']??''))]);}
+                catch(\Throwable){}
+            }
+        }
+        if($result['checked']>0){
+            RecordStore::put('cron_cursor','rights-reconciliation',[
+                'actor_id'=>0,'status'=>'active','last_key'=>$after,'updated_at'=>Utils::now(),
+            ],$cursor?(int)$cursor['version']:0);
         }
         return $result;
     }
