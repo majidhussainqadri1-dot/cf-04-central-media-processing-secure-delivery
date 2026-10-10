@@ -295,6 +295,54 @@ final class DeletionService {
             throw new Error('deletion_record_invalid','Deletion status does not match persisted steps.',500);
         return $d;
     }
+    private static function auditRequested(array $d): void {
+        Audit::recordOnce('deletion_requested',[
+            'deletion_id'=>$d['id'],'asset_id'=>$d['asset_id'],
+            'actor_id'=>$d['actor_id'],'reason'=>$d['reason'],
+        ],$d['id']);
+    }
+    private static function auditCompleted(array $d): void {
+        Audit::recordOnce('deletion_completed',[
+            'deletion_id'=>$d['id'],'asset_id'=>$d['asset_id'],
+            'attempts'=>$d['attempts'],
+        ],$d['id']);
+    }
+    private static function recoverDeletedAsset(array $d,array $asset): array {
+        if(($asset['status']??null)!=='deleted'||($asset['deletion_id']??null)!==$d['id']
+            ||!in_array($d['status'],['pending_tombstone','pending_retry'],true)
+            ||$d['steps']['tombstone']!=='pending'
+            ||array_slice(array_values($d['steps']),0,6)!==array_fill(0,6,'complete'))
+            throw new Error('deletion_evidence_invalid','Deleted asset does not match a recoverable terminal deletion.',500);
+        $deletedAt=Utils::integer($asset['deleted_at']??null,'deletion_evidence_invalid',1);
+        $ledger=RecordStore::get('backup_expiry',hash('sha256',$d['id'].'|backup-expiry'));
+        if(!is_array($ledger)||($ledger['asset_id']??null)!==$d['asset_id']
+            ||($ledger['deletion_id']??null)!==$d['id']
+            ||($ledger['status']??null)!=='awaiting_backup_expiry'
+            ||($ledger['backup_expiry_at']??null)!==$d['backup_expiry_at'])
+            throw new Error('deletion_evidence_invalid','Terminal recovery requires matching backup evidence.',500);
+        $tomb=RecordStore::get('tombstone',$d['asset_id']);
+        if($tomb===null){
+            foreach(['owner_domain','owner_object','object_version','policy_hash'] as $field)
+                if(!isset($asset[$field]))throw new Error('deletion_evidence_invalid','Legacy tombstone recovery lacks asset identity.',500);
+            if(!is_array($asset['rights']??null)||!is_string($asset['rights']['policy_hash']??null))
+                throw new Error('deletion_evidence_invalid','Legacy tombstone recovery lacks rights identity.',500);
+            $tomb=RecordStore::put('tombstone',$d['asset_id'],[
+                'actor_id'=>$d['actor_id'],'asset_id'=>$d['asset_id'],
+                'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],
+                'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+                'rights_hash'=>$asset['rights']['policy_hash'],'reason'=>$d['reason'],
+                'status'=>'deleted','deleted_at'=>$deletedAt,
+                'backup_expiry_at'=>$d['backup_expiry_at'],
+            ],0);
+        }
+        if(($tomb['asset_id']??null)!==$d['asset_id']
+            ||($tomb['status']??null)!=='deleted'||($tomb['reason']??null)!==$d['reason']
+            ||($tomb['backup_expiry_at']??null)!==$d['backup_expiry_at'])
+            throw new Error('deletion_evidence_invalid','Terminal recovery tombstone conflicts with deletion.',500);
+        $d['steps']['tombstone']='complete';$d['status']='completed';$d['completed_at']=$deletedAt;
+        $d=self::save($d);self::completedEvidence($d);self::auditCompleted($d);
+        return $d;
+    }
     private static function completedEvidence(array $d): void {
         $asset=RecordStore::get('asset',$d['asset_id']);
         $tomb=RecordStore::get('tombstone',$d['asset_id']);
@@ -332,7 +380,7 @@ final class DeletionService {
             if($existing['asset_id']!==$assetId||$existing['actor_id']!==$actor||$existing['reason']!==$reason)
                 throw new Error('deletion_record_invalid','Existing deletion request identity conflicts.',409);
             if($existing['status']==='completed'){self::completedEvidence($existing);throw new Error('asset_deleted','Asset is already deleted.',410);}
-            if($existing['status']!=='cancelled')return $existing;
+            if($existing['status']!=='cancelled'){self::auditRequested($existing);return $existing;}
         }
         $id=Utils::id('del');$now=Utils::now();
         $requestedBackup=array_key_exists('backup_expiry_at',$context)
@@ -356,7 +404,7 @@ final class DeletionService {
             }
             throw $exception;
         }
-        Audit::record('deletion_requested',['deletion_id'=>$id,'asset_id'=>$assetId,'actor_id'=>$actor,'reason'=>$reason]);
+        self::auditRequested($record);
         return $record;
     }
     public static function expireDerivatives(string $assetId,string $reason): array {
@@ -368,7 +416,9 @@ final class DeletionService {
         $freshAsset=RecordStore::get('asset',$assetId)??$asset;$freshAsset['active_manifest_id']=null;$freshAsset['processing_status']='retained_source';$freshAsset['status']='quarantined';$freshAsset['derivatives_expired_at']=Utils::now();$freshAsset=RecordStore::put('asset',$assetId,$freshAsset,(int)$freshAsset['version']);Audit::record('derivatives_expired',['asset_id'=>$assetId,'reason'=>$reason,'count'=>count($deleted),'cdn_purged'=>(int)$cdn['purged']]);if(function_exists('do_action'))do_action('scm.media.revoked',['asset_id'=>$assetId,'owner_domain'=>$freshAsset['owner_domain'],'owner_object'=>$freshAsset['owner_object'],'object_version'=>$freshAsset['object_version'],'reason'=>$reason]);return ['asset_id'=>$assetId,'deleted_derivatives'=>$deleted,'cdn_mappings'=>(int)$cdn['purged']];
     }
     public static function process(string $deletionId): array {
-        $d=RecordStore::get('deletion',$deletionId);if(!$d)throw new Error('deletion_not_found','Deletion request not found.',404);$d=self::stored($d,$deletionId);if($d['status']==='completed'){self::completedEvidence($d);return $d;}if($d['status']==='cancelled')throw new Error('deletion_cancelled','Deletion was cancelled.',409);if($d['next_attempt_at']>Utils::now())throw new Error('deletion_retry_pending','Deletion retry is not due.',409);
+        $d=RecordStore::get('deletion',$deletionId);if(!$d)throw new Error('deletion_not_found','Deletion request not found.',404);$d=self::stored($d,$deletionId);if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);return $d;}if($d['status']==='cancelled')throw new Error('deletion_cancelled','Deletion was cancelled.',409);if($d['next_attempt_at']>Utils::now())throw new Error('deletion_retry_pending','Deletion retry is not due.',409);
+        $terminalAsset=RecordStore::get('asset',$d['asset_id']);
+        if(is_array($terminalAsset)&&($terminalAsset['status']??null)==='deleted')return self::recoverDeletedAsset($d,$terminalAsset);
         $asset=self::authorizeCurrent((string)$d['asset_id'],(int)($d['actor_id']??0),(string)($d['reason']??'deletion'),['deletion_id'=>$deletionId,'phase'=>'process-start'],'delete');if($d['attempts']===PHP_INT_MAX)throw new Error('deletion_record_invalid','Deletion attempt counter exhausted.',500);$d['attempts']++;$d=self::save($d);
         try{
             if($d['steps']['revoke_grants']!=='complete'){$asset=self::authorizeCurrent((string)$d['asset_id'],(int)($d['actor_id']??0),(string)$d['reason'],['deletion_id'=>$deletionId,'phase'=>'revoke_grants'],'delete');$d['revoked_grants']=DeliveryService::revokeForAsset((string)$asset['asset_id'],'deletion');$d['steps']['revoke_grants']='complete';$d['status']='pending_cdn';$d=self::save($d);}
@@ -400,19 +450,20 @@ final class DeletionService {
                     ||($existingTombstone['reason']??null)!==$d['reason']
                     ||($existingTombstone['backup_expiry_at']??null)!==$d['backup_expiry_at']))
                     throw new Error('deletion_evidence_invalid','Existing tombstone conflicts with deletion.',500);
-                $asset['status']='deleted';$asset['deleted_at']=Utils::now();$asset['deletion_id']=$d['id'];
-                unset($asset['object_key'],$asset['storage']);
-                $asset=RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);
+                $deletedAt=Utils::now();
                 RecordStore::put('tombstone',$asset['asset_id'],[
                     'actor_id'=>$d['actor_id'],'asset_id'=>$asset['asset_id'],'owner_domain'=>$asset['owner_domain'],
                     'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],
                     'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
-                    'reason'=>$d['reason'],'status'=>'deleted','deleted_at'=>Utils::now(),
+                    'reason'=>$d['reason'],'status'=>'deleted','deleted_at'=>$deletedAt,
                     'backup_expiry_at'=>$d['backup_expiry_at'],
                 ],$existingTombstone?(int)$existingTombstone['version']:0);
+                $asset['status']='deleted';$asset['deleted_at']=$deletedAt;$asset['deletion_id']=$d['id'];
+                unset($asset['object_key'],$asset['storage']);
+                $asset=RecordStore::put('asset',$asset['asset_id'],$asset,(int)$asset['version']);
                 $d['steps']['tombstone']='complete';$d['status']='completed';$d['completed_at']=Utils::now();$d=self::save($d);
                 self::completedEvidence($d);
-                Audit::record('deletion_completed',['deletion_id'=>$d['id'],'asset_id'=>$asset['asset_id'],'attempts'=>$d['attempts']]);
+                self::auditCompleted($d);
                 if(function_exists('do_action'))do_action('scm.media.revoked',[
                     'asset_id'=>$asset['asset_id'],'owner_domain'=>$asset['owner_domain'],
                     'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],'reason'=>'deleted']);
@@ -445,7 +496,7 @@ final class DeletionService {
         foreach(RecordStore::all('deletion',0,null,100000) as $raw){
             try{
                 $d=self::stored($raw);
-                if($d['status']==='completed'){self::completedEvidence($d);$result['completed']++;continue;}
+                if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);$result['completed']++;continue;}
                 if($d['status']==='cancelled'||$d['next_attempt_at']>Utils::now()){$result['pending']++;continue;}
                 $processed=self::process($d['id']);
                 $processed=self::stored($processed,$d['id']);

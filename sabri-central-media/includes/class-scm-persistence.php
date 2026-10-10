@@ -90,12 +90,84 @@ final class RecordStore {
 
 final class Audit {
     private static string $memoryHash='';
-    public static function resetMemory(): void {self::$memoryHash='';}
-    public static function record(string $event,array $context=[]): array {
-        $event=Utils::key($event,96);if($event==='')throw new Error('audit_event_invalid','Invalid audit event.',500);
-        $actor=(int)($context['actor_id']??(function_exists('get_current_user_id')?get_current_user_id():0));$safe=Utils::redact($context);$prev=self::lastHash();$id=Utils::id('ev');$at=Utils::now();$created=gmdate('Y-m-d H:i:s',$at);$payload=Utils::canonicalJson($safe);$hash=hash('sha256',$prev.'|'.$id.'|'.$event.'|'.$actor.'|'.$created.'|'.$payload);$row=['event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,'event_hash'=>$hash,'payload'=>$safe,'created_at'=>$at,'created_at_utc'=>$created,'status'=>'recorded'];
-        if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true){RecordStore::put('audit',$id,$row);self::$memoryHash=$hash;return $row;}
-        RecordStore::requirePersistent();global $wpdb;$lock='scm_audit_'.substr(hash('sha256',Db::table('audit')),0,54);$acquired=(int)$wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s,%d)',$lock,10));if($acquired!==1)throw new Error('audit_lock_unavailable','Audit chain lock unavailable.',503);try{$prev=self::lastHash();$hash=hash('sha256',$prev.'|'.$id.'|'.$event.'|'.$actor.'|'.$created.'|'.$payload);$row['previous_hash']=$prev;$row['event_hash']=$hash;$ok=$wpdb->insert(Db::table('audit'),['event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,'event_hash'=>$hash,'payload'=>$payload,'created_at'=>$created],['%s','%s','%d','%s','%s','%s','%s']);if($ok!==1)throw new Error('audit_write_failed','Audit evidence could not be persisted.',500);return $row;}finally{$wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)',$lock));}
+    private static array $testFailures=[];
+    public static function resetMemory(): void {self::$memoryHash='';self::$testFailures=[];}
+    public static function failNextForTest(string $event): void {
+        if(!defined('SCM_TEST_MODE')||SCM_TEST_MODE!==true)
+            throw new Error('audit_test_only','Audit fault injection is test-only.',500);
+        self::$testFailures[Utils::key($event,96)]=true;
+    }
+    public static function recordOnce(string $event,array $context,string $key): array {
+        $event=Utils::key($event,96);
+        if($event===''||$key==='')throw new Error('audit_event_invalid','Idempotent audit identity is required.',500);
+        $id='ev-'.substr(hash('sha256','cf04-audit|'.$event.'|'.$key),0,48);
+        return self::record($event,$context,$id);
+    }
+    private static function checkedDuplicate(array $row,string $id,string $event,int $actor,string $payload): array {
+        $existingPayload=$row['payload']??null;
+        if(is_array($existingPayload))$existingPayload=Utils::canonicalJson($existingPayload);
+        $created=$row['created_at_utc']??$row['created_at']??null;
+        $prev=$row['previous_hash']??null;
+        $hash=$row['event_hash']??null;
+        if(!is_string($existingPayload)||!is_string($created)||!is_string($prev)||!is_string($hash)
+            ||!preg_match('/^[a-f0-9]{64}$/D',$prev)||!preg_match('/^[a-f0-9]{64}$/D',$hash)
+            ||($row['event_id']??null)!==$id||($row['event_key']??null)!==$event
+            ||(int)($row['actor_id']??-1)!==$actor||!hash_equals($payload,$existingPayload)
+            ||!hash_equals(hash('sha256',$prev.'|'.$id.'|'.$event.'|'.$actor.'|'.$created.'|'.$existingPayload),$hash))
+            throw new Error('audit_idempotency_conflict','Existing audit evidence conflicts with the expected event.',500);
+        return ['event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,
+            'event_hash'=>$hash,'payload'=>json_decode($existingPayload,true,64,JSON_THROW_ON_ERROR),
+            'created_at_utc'=>$created,'status'=>'recorded'];
+    }
+    public static function record(string $event,array $context=[],?string $stableId=null): array {
+        $event=Utils::key($event,96);
+        if($event==='')throw new Error('audit_event_invalid','Invalid audit event.',500);
+        if($stableId!==null&&!preg_match('/^ev-[a-f0-9]{48}$/D',$stableId))
+            throw new Error('audit_event_invalid','Invalid idempotent audit identity.',500);
+        $actor=(int)($context['actor_id']??(function_exists('get_current_user_id')?get_current_user_id():0));
+        $safe=Utils::redact($context);
+        $payload=Utils::canonicalJson($safe);
+        $id=$stableId??Utils::id('ev');
+        if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true){
+            if($stableId!==null){
+                $existing=RecordStore::get('audit',$id);
+                if($existing!==null)return self::checkedDuplicate($existing,$id,$event,$actor,$payload);
+            }
+            if(!empty(self::$testFailures[$event])){
+                unset(self::$testFailures[$event]);
+                throw new Error('audit_write_failed','Injected audit persistence failure.',500);
+            }
+            $prev=self::lastHash();$at=Utils::now();$created=gmdate('Y-m-d H:i:s',$at);
+            $hash=hash('sha256',$prev.'|'.$id.'|'.$event.'|'.$actor.'|'.$created.'|'.$payload);
+            $row=['event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,
+                'event_hash'=>$hash,'payload'=>$safe,'created_at'=>$at,'created_at_utc'=>$created,'status'=>'recorded'];
+            RecordStore::put('audit',$id,$row);self::$memoryHash=$hash;
+            return $row;
+        }
+        RecordStore::requirePersistent();global $wpdb;
+        $lock='scm_audit_'.substr(hash('sha256',Db::table('audit')),0,54);
+        $acquired=(int)$wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s,%d)',$lock,10));
+        if($acquired!==1)throw new Error('audit_lock_unavailable','Audit chain lock unavailable.',503);
+        try{
+            if($stableId!==null){
+                $rows=$wpdb->get_results($wpdb->prepare(
+                    'SELECT event_id,event_key,actor_id,previous_hash,event_hash,payload,created_at FROM '.Db::table('audit').' WHERE event_id=%s LIMIT 1',$id
+                ),defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+                Db::assertRead('audit_idempotency_lookup');
+                if(!is_array($rows))throw new Error('audit_read_failed','Audit lookup unavailable.',503);
+                if($rows!==[])return self::checkedDuplicate((array)$rows[0],$id,$event,$actor,$payload);
+            }
+            $prev=self::lastHash();$at=Utils::now();$created=gmdate('Y-m-d H:i:s',$at);
+            $hash=hash('sha256',$prev.'|'.$id.'|'.$event.'|'.$actor.'|'.$created.'|'.$payload);
+            $row=['event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,
+                'event_hash'=>$hash,'payload'=>$safe,'created_at'=>$at,'created_at_utc'=>$created,'status'=>'recorded'];
+            $ok=$wpdb->insert(Db::table('audit'),[
+                'event_id'=>$id,'event_key'=>$event,'actor_id'=>$actor,'previous_hash'=>$prev,
+                'event_hash'=>$hash,'payload'=>$payload,'created_at'=>$created
+            ],['%s','%s','%d','%s','%s','%s','%s']);
+            if($ok!==1)throw new Error('audit_write_failed','Audit evidence could not be persisted.',500);
+            return $row;
+        }finally{$wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)',$lock));}
     }
     private static function lastHash(): string { if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true)return self::$memoryHash?:str_repeat('0',64);RecordStore::requirePersistent();global $wpdb;$v=$wpdb->get_var('SELECT event_hash FROM '.Db::table('audit').' ORDER BY id DESC LIMIT 1');Db::assertRead('audit_head');if($v===null)return str_repeat('0',64);if(!is_string($v)||!preg_match('/^[a-f0-9]{64}$/',$v))throw new Error('audit_chain_head_invalid','Audit chain head is malformed; append denied.',503);return $v; }
     public static function verifyChain(int $maximum=1000000): bool {
