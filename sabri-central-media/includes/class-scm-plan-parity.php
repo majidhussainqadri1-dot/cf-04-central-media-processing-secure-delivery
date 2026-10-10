@@ -224,6 +224,12 @@ final class RevocationDispatchService {
                 throw new Error('revocation_projection_invalid','Revocation projection evidence is invalid.',500);
         }
         if($row['status']==='dispatched')return $row;
+        // Pending notices must not dispatch an obsolete rights or terminal asset snapshot.
+        $currentRights=hash('sha256',Utils::canonicalJson((array)($asset['rights']??[])));
+        if(!hash_equals($row['rights_fingerprint'],$currentRights))
+            throw new Error('revocation_dispatch_stale','Pending revocation rights have changed.',409);
+        if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))
+            throw new Error('revocation_dispatch_stale','Pending revocation asset is terminal.',409);
         if(!function_exists('do_action'))
             throw new Error('revocation_dispatch_unavailable','Owner revocation hook is unavailable.',503);
         $event=['event_id'=>$row['event_id'],'asset_id'=>$row['asset_id'],
@@ -289,6 +295,22 @@ final class RightsRevocationService {
         return hash('sha256',Utils::canonicalJson((array)($asset['rights']??[])));
     }
 
+    private static function assertCurrent(string $assetId,array $snapshot,string $phase): array {
+        $current=RecordStore::get('asset',$assetId);
+        if(!is_array($current)||($current['id']??null)!==$assetId)
+            throw new Error('revocation_asset_stale','Revocation asset disappeared during reconciliation.',409,['phase'=>$phase]);
+        if(in_array(($current['status']??''),['deleted','deletion_pending','rejected'],true))
+            throw new Error('revocation_asset_terminal','Revocation asset became terminal.',409,['phase'=>$phase]);
+        foreach(['owner_domain','owner_object','object_version'] as $key)
+            if(($current[$key]??null)!==($snapshot[$key]??null))
+                throw new Error('revocation_owner_stale','Revocation owner identity changed.',409,['phase'=>$phase]);
+        if(($current['policy_hash']??null)!==($snapshot['policy_hash']??null))
+            throw new Error('revocation_policy_stale','Revocation policy changed.',409,['phase'=>$phase]);
+        if(!hash_equals(self::rightsFingerprint($snapshot),self::rightsFingerprint($current)))
+            throw new Error('revocation_rights_stale','Revocation rights changed.',409,['phase'=>$phase]);
+        return $current;
+    }
+
     private static function alreadyReconciled(array $asset): bool {
         return in_array(($asset['rights_reconciled_reason']??''),['rights_expired','rights_invalid'],true)
             &&hash_equals((string)($asset['rights_reconciled_hash']??''),self::rightsFingerprint($asset));
@@ -350,7 +372,9 @@ final class RightsRevocationService {
                 ||($existing['backup_status']??null)!=='retention_policy_applies')
                 throw new Error('revocation_projection_invalid','Stored projection conflicts with revocation evidence.',500);
         }
+        self::assertCurrent($assetId,$asset,'before_derivative_expiry');
         $propagation=DeletionService::expireDerivatives($assetId,$reason,false);
+        $current=self::assertCurrent($assetId,$asset,'after_derivative_expiry');
         if($existing!==null){
             $row=$existing;
         }else{
@@ -368,15 +392,14 @@ final class RightsRevocationService {
         Audit::recordOnce('media_rights_revocation_propagated',[
             'actor_id'=>0,'asset_id'=>$assetId,'reason'=>$reason,'projection_revocation_id'=>$row['id'],
         ],$id);
-        RevocationDispatchService::notify($asset,$reason,$id);
+        RevocationDispatchService::notify($current,$reason,$id);
+        // Synchronous hooks may mutate or delete the asset; never reconcile their new state.
+        $fresh=self::assertCurrent($assetId,$asset,'after_revocation_dispatch');
         if(in_array($reason,['rights_expired','rights_invalid'],true)){
-            $fresh=RecordStore::get('asset',$assetId);
-            if($fresh){
-                $fresh['rights_reconciled_reason']=$reason;
-                $fresh['rights_reconciled_hash']=self::rightsFingerprint($fresh);
-                $fresh['rights_reconciled_at']=$row['effective_at'];
-                RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);
-            }
+            $fresh['rights_reconciled_reason']=$reason;
+            $fresh['rights_reconciled_hash']=$fingerprint;
+            $fresh['rights_reconciled_at']=$row['effective_at'];
+            RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);
         }
         return ['propagation'=>$propagation,'projection'=>$row];
     }
