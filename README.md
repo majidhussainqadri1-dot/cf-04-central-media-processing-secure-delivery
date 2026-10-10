@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–156 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–157 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
@@ -51,3 +51,7 @@ A successful WordPress `do_action('scm.media.revoked', ...)` establishes only lo
 ## Round 156 — Revocation outbox integrity
 
 Stored revocation notices must bind `actor_id` to the deletion actor, have valid positive `version` and `created_at`, and maintain status-consistent timestamp evidence. A `pending` notice cannot carry dispatch/delivery timestamps; `dispatched` cannot claim legacy delivery; legacy `delivered` cannot carry a dispatch timestamp before conversion. Inconsistent or forged records fail closed rather than silently bypassing notification. This is source-level integrity only, not external acknowledgement.
+
+## Round 157 — Durable nonterminal revocation dispatch
+
+Nonterminal derivative expiry and rights invalidation now share a single logical owner-revocation event per asset, reason, owner version and rights fingerprint. A stable projection identity, idempotent audit record, persisted pending/dispatched outbox, and cron reconciliation support at-least-once **local** WordPress hook dispatch. A failed hook remains pending and is retried; local dispatch never implies external acknowledgement. Expiry-triggered rights reconciliation is marked complete only after successful dispatch. A repeat with unchanged rights does not emit a second distinct event; a genuinely changed rights fingerprint produces a new event identity. Existing historical time-keyed projections cannot be assumed to carry an external receipt.

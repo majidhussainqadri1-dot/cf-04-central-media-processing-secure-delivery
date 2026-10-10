@@ -144,6 +144,119 @@ final class PrivacyTelemetry {
     }
 }
 
+
+final class RevocationDispatchService {
+    private static function identity(array $asset,string $reason,?string $projectionId): array {
+        $assetId=(string)($asset['id']??'');
+        $domain=(string)($asset['owner_domain']??'');
+        $object=(string)($asset['owner_object']??'');
+        $version=$asset['object_version']??null;
+        if($assetId===''||$domain===''||$object===''||!is_int($version)||$version<1
+            ||$reason===''||($projectionId!==null&&!preg_match('/^[a-f0-9]{64}$/D',$projectionId)))
+            throw new Error('revocation_identity_invalid','Revocation dispatch identity is invalid.',500);
+        $fields=[
+            'asset_id'=>$assetId,'owner_domain'=>$domain,
+            'owner_object_hash'=>Utils::hashReference($object),'object_version'=>$version,
+            'reason'=>$reason,'rights_fingerprint'=>hash('sha256',Utils::canonicalJson((array)($asset['rights']??[]))),
+            'projection_revocation_id'=>$projectionId??'',
+        ];
+        $digest=hash('sha256',Utils::canonicalJson($fields));
+        return $fields+['id'=>hash('sha256','nonterminal-revocation|'.$digest),'event_id'=>'scm-revoked-'.substr($digest,0,48)];
+    }
+    private static function dispatch(array $row): array {
+        $id=$row['id']??null;
+        $fields=[];
+        foreach(['asset_id','owner_domain','owner_object_hash','object_version','reason','rights_fingerprint','projection_revocation_id'] as $key){
+            if(!array_key_exists($key,$row))throw new Error('revocation_dispatch_invalid','Revocation dispatch field is missing.',500);
+            $fields[$key]=$row[$key];
+        }
+        $digest=hash('sha256',Utils::canonicalJson($fields));
+        if(($row['record_type']??null)!=='revocation_dispatch'
+            ||!is_string($id)||$id!==hash('sha256','nonterminal-revocation|'.$digest)
+            ||($row['event_id']??null)!=='scm-revoked-'.substr($digest,0,48)
+            ||($row['actor_id']??null)!==0
+            ||!is_int($row['version']??null)||$row['version']<1
+            ||!is_int($row['created_at']??null)||$row['created_at']<1
+            ||!is_int($row['object_version'])||$row['object_version']<1
+            ||!is_string($row['reason'])||$row['reason']===''||Utils::key($row['reason'],64)!==$row['reason']
+            ||!is_string($row['owner_domain'])||$row['owner_domain']===''
+            ||!is_string($row['asset_id'])||$row['asset_id']===''
+            ||!is_string($row['owner_object_hash'])||!preg_match('/^[a-f0-9]{64}$/D',$row['owner_object_hash'])
+            ||!is_string($row['rights_fingerprint'])||!preg_match('/^[a-f0-9]{64}$/D',$row['rights_fingerprint'])
+            ||!is_string($row['projection_revocation_id'])
+            ||($row['projection_revocation_id']!==''&&!preg_match('/^[a-f0-9]{64}$/D',$row['projection_revocation_id']))
+            ||!in_array($row['status']??null,['pending','dispatched'],true)
+            ||($row['status']==='pending'&&array_key_exists('dispatched_at',$row))
+            ||($row['status']==='dispatched'&&(!is_int($row['dispatched_at']??null)||$row['dispatched_at']<1)))
+            throw new Error('revocation_dispatch_invalid','Stored revocation dispatch evidence is invalid.',500);
+        $asset=RecordStore::get('asset',$row['asset_id']);
+        if(!$asset||($asset['owner_domain']??null)!==$row['owner_domain']
+            ||($asset['object_version']??null)!==$row['object_version']
+            ||!hash_equals($row['owner_object_hash'],Utils::hashReference((string)($asset['owner_object']??''))))
+            throw new Error('revocation_dispatch_stale','Revocation owner identity has changed.',409);
+        if($row['projection_revocation_id']!==''){
+            $projection=RecordStore::get('projection_revocation',$row['projection_revocation_id']);
+            if(!$projection||($projection['asset_id']??null)!==$row['asset_id']
+                ||($projection['reason']??null)!==$row['reason']
+                ||($projection['object_version']??null)!==$row['object_version'])
+                throw new Error('revocation_projection_invalid','Revocation projection identity is invalid.',500);
+        }
+        if($row['status']==='dispatched')return $row;
+        if(!function_exists('do_action'))
+            throw new Error('revocation_dispatch_unavailable','Owner revocation hook is unavailable.',503);
+        $event=['event_id'=>$row['event_id'],'asset_id'=>$row['asset_id'],
+            'owner_domain'=>$row['owner_domain'],'owner_object'=>$asset['owner_object'],
+            'object_version'=>$row['object_version'],'reason'=>$row['reason']];
+        if($row['projection_revocation_id']!=='')$event['projection_revocation_id']=$row['projection_revocation_id'];
+        do_action('scm.media.revoked',$event);
+        $row['status']='dispatched';$row['dispatched_at']=Utils::now();
+        return RecordStore::put('revocation_dispatch',$id,$row,(int)$row['version']);
+    }
+    public static function notify(array $asset,string $reason,?string $projectionId=null): array {
+        $reason=Utils::key($reason,64);
+        $fields=self::identity($asset,$reason,$projectionId);
+        $id=$fields['id'];$row=RecordStore::get('revocation_dispatch',$id);
+        if($row===null){
+            try{$row=RecordStore::put('revocation_dispatch',$id,$fields+[
+                'actor_id'=>0,'status'=>'pending','created_at'=>Utils::now(),
+            ],0);}
+            catch(Error $e){
+                if($e->errorCode!=='record_version_conflict')throw $e;
+                $row=RecordStore::get('revocation_dispatch',$id);
+                if($row===null)throw $e;
+            }
+        }
+        return self::dispatch($row);
+    }
+    public static function reconcile(int $limit=500): array {
+        $limit=max(1,min(2000,$limit));
+        $rows=RecordStore::all('revocation_dispatch',0,'pending',100000);
+        usort($rows,static fn(array $a,array $b): int=>strcmp((string)$a['id'],(string)$b['id']));
+        $cursor=RecordStore::get('cron_cursor','revocation-dispatch');
+        $after=(string)($cursor['last_id']??'');
+        $ordered=array_merge(
+            array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)>0)),
+            array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)<=0))
+        );
+        $result=['checked'=>0,'dispatched'=>0,'failed'=>0];
+        foreach(array_slice($ordered,0,$limit) as $row){
+            $result['checked']++;$after=(string)$row['id'];
+            try{self::dispatch($row);$result['dispatched']++;}
+            catch(\Throwable $e){
+                $result['failed']++;
+                try{DegradedStateService::record('revocation-dispatch',$e instanceof Error?$e->errorCode:'unexpected',
+                    ['event_ref'=>Utils::hashReference((string)($row['event_id']??''))]);}catch(\Throwable){}
+            }
+        }
+        if($result['checked']>0){
+            RecordStore::put('cron_cursor','revocation-dispatch',[
+                'actor_id'=>0,'status'=>'active','last_id'=>$after,'updated_at'=>Utils::now(),
+            ],$cursor?(int)$cursor['version']:0);
+        }
+        return $result;
+    }
+}
+
 final class RightsRevocationService {
     private static function expiry(array $asset): ?int {
         try{return Utils::integer($asset['rights']['expires_at']??null,'rights_integer_invalid',0);}
@@ -185,24 +298,47 @@ final class RightsRevocationService {
     }
 
     public static function invalidate(string $assetId,string $reason,int $effectiveAt=0): array {
-        $asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
-        $reason=Utils::key($reason,64);if($reason==='')throw new Error('revocation_reason_required','Revocation reason is required.',400);
-        $propagation=DeletionService::expireDerivatives($assetId,$reason);
-        $id=hash('sha256',$assetId.'|'.$reason.'|'.($effectiveAt?:Utils::now()));
-        $row=RecordStore::put('projection_revocation',$id,[
-            'actor_id'=>0,'asset_id'=>$assetId,'asset_ref_hash'=>Utils::hashReference($assetId),'owner_domain'=>$asset['owner_domain'],
-            'owner_object_hash'=>Utils::hashReference((string)$asset['owner_object']),'object_version'=>$asset['object_version'],
-            'reason'=>$reason,'status'=>'propagation_pending_consumers','cdn_status'=>'purged_or_not_published','derivative_status'=>'revoked',
-            'index_status'=>'pending_owner_consumer','backup_status'=>'retention_policy_applies','effective_at'=>$effectiveAt?:Utils::now(),'created_at'=>Utils::now(),
-        ]);
-        Audit::record('media_rights_revocation_propagated',['asset_id'=>$assetId,'reason'=>$reason,'projection_revocation_id'=>$row['id']]);
-        if(function_exists('do_action'))do_action('scm.media.revoked',['asset_id'=>$assetId,'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],'reason'=>$reason,'projection_revocation_id'=>$row['id']]);
+        $asset=RecordStore::get('asset',$assetId);
+        if(!$asset)throw new Error('asset_not_found','Asset not found.',404);
+        $reason=Utils::key($reason,64);
+        if($reason==='')throw new Error('revocation_reason_required','Revocation reason is required.',400);
+        $fingerprint=self::rightsFingerprint($asset);
+        $id=hash('sha256',Utils::canonicalJson([
+            'asset_id'=>$assetId,'reason'=>$reason,'rights_fingerprint'=>$fingerprint,
+            'object_version'=>$asset['object_version']??null,
+        ]));
+        $propagation=DeletionService::expireDerivatives($assetId,$reason,false);
+        $existing=RecordStore::get('projection_revocation',$id);
+        if($existing!==null){
+            if(($existing['asset_id']??null)!==$assetId||($existing['reason']??null)!==$reason
+                ||($existing['rights_fingerprint']??null)!==$fingerprint
+                ||($existing['object_version']??null)!==($asset['object_version']??null)
+                ||($existing['owner_domain']??null)!==($asset['owner_domain']??null)
+                ||($existing['owner_object_hash']??null)!==Utils::hashReference((string)$asset['owner_object']))
+                throw new Error('revocation_projection_invalid','Stored projection conflicts with revocation identity.',500);
+            $row=$existing;
+        }else{
+            $row=RecordStore::put('projection_revocation',$id,[
+                'actor_id'=>0,'asset_id'=>$assetId,'asset_ref_hash'=>Utils::hashReference($assetId),
+                'owner_domain'=>$asset['owner_domain'],
+                'owner_object_hash'=>Utils::hashReference((string)$asset['owner_object']),
+                'object_version'=>$asset['object_version'],'rights_fingerprint'=>$fingerprint,
+                'reason'=>$reason,'status'=>'propagation_pending_consumers',
+                'cdn_status'=>'purged_or_not_published','derivative_status'=>'revoked',
+                'index_status'=>'pending_owner_consumer','backup_status'=>'retention_policy_applies',
+                'effective_at'=>$effectiveAt>0?$effectiveAt:Utils::now(),'created_at'=>Utils::now(),
+            ],0);
+        }
+        Audit::recordOnce('media_rights_revocation_propagated',[
+            'actor_id'=>0,'asset_id'=>$assetId,'reason'=>$reason,'projection_revocation_id'=>$row['id'],
+        ],$id);
+        RevocationDispatchService::notify($asset,$reason,$id);
         if(in_array($reason,['rights_expired','rights_invalid'],true)){
             $fresh=RecordStore::get('asset',$assetId);
             if($fresh){
                 $fresh['rights_reconciled_reason']=$reason;
                 $fresh['rights_reconciled_hash']=self::rightsFingerprint($fresh);
-                $fresh['rights_reconciled_at']=$effectiveAt?:Utils::now();
+                $fresh['rights_reconciled_at']=$row['effective_at'];
                 RecordStore::put('asset',$assetId,$fresh,(int)$fresh['version']);
             }
         }
