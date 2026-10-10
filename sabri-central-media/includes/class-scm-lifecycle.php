@@ -351,7 +351,15 @@ final class DeletionService {
                 ||($notice['deletion_id']??null)!==$d['id']
                 ||($notice['asset_id']??null)!==$d['asset_id']
                 ||($notice['event_id']??null)!==$eventId
-                ||!in_array($notice['status']??null,['pending','dispatched','delivered'],true))
+                ||!is_int($notice['actor_id']??null)
+                ||$notice['actor_id']!==$d['actor_id']
+                ||!is_int($notice['version']??null)||$notice['version']<1
+                ||!is_int($notice['created_at']??null)||$notice['created_at']<=0
+                ||!in_array($notice['status']??null,['pending','dispatched','delivered'],true)
+                ||($notice['status']==='pending'
+                    &&(array_key_exists('dispatched_at',$notice)||array_key_exists('delivered_at',$notice)))
+                ||($notice['status']==='dispatched'&&array_key_exists('delivered_at',$notice))
+                ||($notice['status']==='delivered'&&array_key_exists('dispatched_at',$notice)))
                 throw new Error('revocation_notice_invalid','Completion notification identity is invalid.',500);
             // Legacy round-154 'delivered' only meant local WordPress hook dispatch.
             // Migrate without replaying a potentially already-dispatched event.

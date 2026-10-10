@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–155 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–156 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
@@ -47,3 +47,7 @@ Provider-specific engines remain adapter-gated and the runtime remains fail clos
 ## Round 155 — Revocation dispatch evidence boundary
 
 A successful WordPress `do_action('scm.media.revoked', ...)` establishes only local hook dispatch, not receipt, acknowledgement, or durable processing by an external owner. Terminal `revocation_notice` records therefore transition from `pending` to `dispatched` with `dispatched_at`; they do not claim `delivered`. Existing round-154 `delivered` records are normalized to `dispatched` without re-emitting the event, preserving the prior timestamp. Callback failures leave the outbox `pending` for retry. Delivery acknowledgement is outside this source contract and requires separate evidence. The stable `event_id` supports at-least-once consumer deduplication.
+
+## Round 156 — Revocation outbox integrity
+
+Stored revocation notices must bind `actor_id` to the deletion actor, have valid positive `version` and `created_at`, and maintain status-consistent timestamp evidence. A `pending` notice cannot carry dispatch/delivery timestamps; `dispatched` cannot claim legacy delivery; legacy `delivered` cannot carry a dispatch timestamp before conversion. Inconsistent or forged records fail closed rather than silently bypassing notification. This is source-level integrity only, not external acknowledgement.
