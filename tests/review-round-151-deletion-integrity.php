@@ -29,7 +29,7 @@ foreach([
 ] as $i=>$changes){
     $current=RecordStore::get('deletion',$deletion['id']);
     $invalid=RecordStore::put('deletion',$deletion['id'],array_replace($current,$changes),(int)$current['version']);
-    err(fn()=>DeletionService::process($deletion['id']),'deletion_record_invalid',
+    err(fn()=>DeletionService::process($deletion['id']),$i===1?'asset_not_found':'deletion_record_invalid',
         'Round 151 corrupt persisted deletion '.$i.' rejected before action');
     RecordStore::put('deletion',$deletion['id'],array_replace($base,['version'=>$invalid['version']]),(int)$invalid['version']);
 }
