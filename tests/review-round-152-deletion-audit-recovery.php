@@ -7,7 +7,7 @@ function r152Asset(string $id): array {
         'actor_id'=>11,'asset_id'=>$id,'status'=>'ready','owner_domain'=>'file17','owner_object'=>'r152-object-'.$id,
         'object_version'=>1,'policy_hash'=>hash('sha256','policy-'.$id),
         'rights'=>['policy_hash'=>hash('sha256','rights-'.$id)],
-        'storage'=>['provider_id'=>'source-private'],'object_key'=>'missing-'.$id,
+        'storage'=>['provider_id'=>'source-private'],'object_key'=>hash('sha256','missing-'.$id),
     ]);
 }
 function r152AuditCount(string $event,string $deletionId): int {
