@@ -12,5 +12,7 @@ PATTERN;
 gate(str_contains($process,'Auth::assertActor($actor)')&&str_contains($process,$actorClaim)&&str_contains($process,"'authorize_processing'"),'REST processing revalidates authenticated actor with canonical owner');
 gate(str_contains($source,'Durable persistence/schema unavailable')&&str_contains($source,'Audit evidence could not be persisted'),'persistence and audit fail closed');
 gate(str_contains($source,'network_isolated')&&str_contains($source,'non_root')&&str_contains($source,'ephemeral'),'sandbox attestation enforced');
-gate(str_contains($source,"'revoke_grants'=>'pending','purge_cdn'=>'pending','delete_derivatives'=>'pending','delete_source'=>'pending'"),'ordered deletion encoded');
+$legacySteps="'revoke_grants'=>'pending','purge_cdn'=>'pending','delete_derivatives'=>'pending','delete_source'=>'pending'";
+$canonicalSteps="private const DELETION_STEPS=['revoke_grants','purge_cdn','delete_derivatives','delete_source','delete_mappings','backup_ledger','tombstone'];";
+gate(str_contains($source,$legacySteps)||(str_contains($source,$canonicalSteps)&&str_contains($source,"array_fill_keys(self::DELETION_STEPS,'pending')")),'ordered deletion encoded');
 echo "REVIEW ROUND 12 SECURITY: PASS\n";
