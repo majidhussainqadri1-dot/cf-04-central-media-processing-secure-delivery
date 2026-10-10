@@ -36,16 +36,16 @@ $notice=RecordStore::get('revocation_notice',$noticeId);
 $events=array_values(array_filter($GLOBALS['scm_actions'],
     static fn(array $a): bool => $a['tag']==='scm.media.revoked'
         &&($a['args'][0]['event_id']??null)==='scm-revoked-'.$d['id']));
-ok($completed['status']==='completed'&&$notice['status']==='delivered'
+ok($completed['status']==='completed'&&$notice['status']==='dispatched'
     &&count($events)===1,
-    'Round 154 completed retry delivers pending owner notification');
+    'Round 154 completed retry dispatches pending owner hook');
 DeletionService::process($d['id']);
 $out=DeletionService::reconcile();
 $events=array_values(array_filter($GLOBALS['scm_actions'],
     static fn(array $a): bool => $a['tag']==='scm.media.revoked'
         &&($a['args'][0]['event_id']??null)==='scm-revoked-'.$d['id']));
 ok(count($events)===1&&$out['completed']===1&&$out['failed']===0&&Audit::verifyChain(),
-    'Round 154 delivered notice is not resent on ordinary replay');
+    'Round 154 dispatched notice is not resent on ordinary replay');
 $corrupt=RecordStore::put('revocation_notice',$noticeId,array_replace($notice,['event_id'=>'wrong']),(int)$notice['version']);
 err(fn()=>DeletionService::process($d['id']),'revocation_notice_invalid',
     'Round 154 corrupted completion outbox fails closed');

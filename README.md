@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–154 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–155 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
@@ -43,3 +43,7 @@ Candidate `1.3.0-rc.1` reconciles source code with the current rewritten Central
 The approved CF-04 Future-40 extension adds source-level contracts and fail-closed orchestration for content credentials/provenance, synthetic-media declaration, perceptual fingerprints and privacy-safe dedupe, CDR/re-scan/kill-switch controls, content-aware encoding and objective quality gates, HDR/audio QC, smart previews/chapters/accessibility tracks/OCR maps, sensitive-data detection and governed redaction, multi-CDN/origin-shield/edge authorization/network-adaptive transfer/offline packages, regional residency/object lock/per-asset key envelopes/crypto agility, multi-region DR/storage-tier/cost/provider routing, privacy-minimal QoE, staging-only chaos exercises, signed migration bundles and a versioned SDK contract.
 
 Provider-specific engines remain adapter-gated and the runtime remains fail closed until the existing staging/provider/migration/restore/rollback activation evidence is approved.
+
+## Round 155 — Revocation dispatch evidence boundary
+
+A successful WordPress `do_action('scm.media.revoked', ...)` establishes only local hook dispatch, not receipt, acknowledgement, or durable processing by an external owner. Terminal `revocation_notice` records therefore transition from `pending` to `dispatched` with `dispatched_at`; they do not claim `delivered`. Existing round-154 `delivered` records are normalized to `dispatched` without re-emitting the event, preserving the prior timestamp. Callback failures leave the outbox `pending` for retry. Delivery acknowledgement is outside this source contract and requires separate evidence. The stable `event_id` supports at-least-once consumer deduplication.

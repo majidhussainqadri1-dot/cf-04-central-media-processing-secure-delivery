@@ -351,9 +351,24 @@ final class DeletionService {
                 ||($notice['deletion_id']??null)!==$d['id']
                 ||($notice['asset_id']??null)!==$d['asset_id']
                 ||($notice['event_id']??null)!==$eventId
-                ||!in_array($notice['status']??null,['pending','delivered'],true))
+                ||!in_array($notice['status']??null,['pending','dispatched','delivered'],true))
                 throw new Error('revocation_notice_invalid','Completion notification identity is invalid.',500);
-            if($notice['status']==='delivered')return;
+            // Legacy round-154 'delivered' only meant local WordPress hook dispatch.
+            // Migrate without replaying a potentially already-dispatched event.
+            if($notice['status']==='delivered'){
+                $legacyAt=$notice['delivered_at']??null;
+                if(!is_int($legacyAt)||$legacyAt<=0)
+                    throw new Error('revocation_notice_invalid','Legacy dispatch timestamp is invalid.',500);
+                $notice['status']='dispatched';$notice['dispatched_at']=$legacyAt;
+                unset($notice['delivered_at']);
+                RecordStore::put('revocation_notice',$noticeId,$notice,(int)$notice['version']);
+                return;
+            }
+            if($notice['status']==='dispatched'){
+                if(!is_int($notice['dispatched_at']??null)||$notice['dispatched_at']<=0)
+                    throw new Error('revocation_notice_invalid','Dispatch timestamp is invalid.',500);
+                return;
+            }
         }else{
             $notice=RecordStore::put('revocation_notice',$noticeId,[
                 'actor_id'=>$d['actor_id'],'asset_id'=>$d['asset_id'],
@@ -368,7 +383,7 @@ final class DeletionService {
             'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],
             'object_version'=>$asset['object_version'],'reason'=>'deleted',
         ]);
-        $notice['status']='delivered';$notice['delivered_at']=Utils::now();
+        $notice['status']='dispatched';$notice['dispatched_at']=Utils::now();
         RecordStore::put('revocation_notice',$noticeId,$notice,(int)$notice['version']);
     }
     private static function tombstoneMatches(array $tomb,array $asset,array $d): bool {
