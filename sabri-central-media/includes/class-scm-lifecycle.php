@@ -338,8 +338,38 @@ final class DeletionService {
         if(!self::tombstoneMatches($tomb,$asset,$d))
             throw new Error('deletion_evidence_invalid','Terminal recovery tombstone conflicts with asset identity.',500);
         $d['steps']['tombstone']='complete';$d['status']='completed';$d['completed_at']=$deletedAt;
-        $d=self::save($d);self::completedEvidence($d);self::auditCompleted($d);
+        $d=self::save($d);self::completedEvidence($d);self::auditCompleted($d);self::notifyCompleted($d,$asset);
         return $d;
+    }
+    private static function notifyCompleted(array $d,array $asset): void {
+        $noticeId=hash('sha256',$d['id'].'|completion-revocation');
+        $eventId='scm-revoked-'.$d['id'];
+        $notice=RecordStore::get('revocation_notice',$noticeId);
+        if($notice!==null){
+            if(($notice['record_type']??null)!=='revocation_notice'
+                ||($notice['id']??null)!==$noticeId
+                ||($notice['deletion_id']??null)!==$d['id']
+                ||($notice['asset_id']??null)!==$d['asset_id']
+                ||($notice['event_id']??null)!==$eventId
+                ||!in_array($notice['status']??null,['pending','delivered'],true))
+                throw new Error('revocation_notice_invalid','Completion notification identity is invalid.',500);
+            if($notice['status']==='delivered')return;
+        }else{
+            $notice=RecordStore::put('revocation_notice',$noticeId,[
+                'actor_id'=>$d['actor_id'],'asset_id'=>$d['asset_id'],
+                'deletion_id'=>$d['id'],'event_id'=>$eventId,
+                'status'=>'pending','created_at'=>Utils::now(),
+            ],0);
+        }
+        if(!function_exists('do_action'))
+            throw new Error('revocation_dispatch_unavailable','Owner revocation hook is unavailable.',503);
+        do_action('scm.media.revoked',[
+            'event_id'=>$eventId,'asset_id'=>$d['asset_id'],
+            'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],
+            'object_version'=>$asset['object_version'],'reason'=>'deleted',
+        ]);
+        $notice['status']='delivered';$notice['delivered_at']=Utils::now();
+        RecordStore::put('revocation_notice',$noticeId,$notice,(int)$notice['version']);
     }
     private static function tombstoneMatches(array $tomb,array $asset,array $d): bool {
         $rights=$asset['rights']['policy_hash']??null;
@@ -424,7 +454,7 @@ final class DeletionService {
         $freshAsset=RecordStore::get('asset',$assetId)??$asset;$freshAsset['active_manifest_id']=null;$freshAsset['processing_status']='retained_source';$freshAsset['status']='quarantined';$freshAsset['derivatives_expired_at']=Utils::now();$freshAsset=RecordStore::put('asset',$assetId,$freshAsset,(int)$freshAsset['version']);Audit::record('derivatives_expired',['asset_id'=>$assetId,'reason'=>$reason,'count'=>count($deleted),'cdn_purged'=>(int)$cdn['purged']]);if(function_exists('do_action'))do_action('scm.media.revoked',['asset_id'=>$assetId,'owner_domain'=>$freshAsset['owner_domain'],'owner_object'=>$freshAsset['owner_object'],'object_version'=>$freshAsset['object_version'],'reason'=>$reason]);return ['asset_id'=>$assetId,'deleted_derivatives'=>$deleted,'cdn_mappings'=>(int)$cdn['purged']];
     }
     public static function process(string $deletionId): array {
-        $d=RecordStore::get('deletion',$deletionId);if(!$d)throw new Error('deletion_not_found','Deletion request not found.',404);$d=self::stored($d,$deletionId);if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);return $d;}if($d['status']==='cancelled')throw new Error('deletion_cancelled','Deletion was cancelled.',409);if($d['next_attempt_at']>Utils::now())throw new Error('deletion_retry_pending','Deletion retry is not due.',409);
+        $d=RecordStore::get('deletion',$deletionId);if(!$d)throw new Error('deletion_not_found','Deletion request not found.',404);$d=self::stored($d,$deletionId);if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);self::notifyCompleted($d,RecordStore::get('asset',$d['asset_id']));return $d;}if($d['status']==='cancelled')throw new Error('deletion_cancelled','Deletion was cancelled.',409);if($d['next_attempt_at']>Utils::now())throw new Error('deletion_retry_pending','Deletion retry is not due.',409);
         $terminalAsset=RecordStore::get('asset',$d['asset_id']);
         if(is_array($terminalAsset)&&($terminalAsset['status']??null)==='deleted')return self::recoverDeletedAsset($d,$terminalAsset);
         $asset=self::authorizeCurrent((string)$d['asset_id'],(int)($d['actor_id']??0),(string)($d['reason']??'deletion'),['deletion_id'=>$deletionId,'phase'=>'process-start'],'delete');if($d['attempts']===PHP_INT_MAX)throw new Error('deletion_record_invalid','Deletion attempt counter exhausted.',500);$d['attempts']++;$d=self::save($d);
@@ -471,9 +501,7 @@ final class DeletionService {
                 $d['steps']['tombstone']='complete';$d['status']='completed';$d['completed_at']=Utils::now();$d=self::save($d);
                 self::completedEvidence($d);
                 self::auditCompleted($d);
-                if(function_exists('do_action'))do_action('scm.media.revoked',[
-                    'asset_id'=>$asset['asset_id'],'owner_domain'=>$asset['owner_domain'],
-                    'owner_object'=>$asset['owner_object'],'object_version'=>$asset['object_version'],'reason'=>'deleted']);
+                self::notifyCompleted($d,$asset);
             }
             return $d;
         }catch(\Throwable $e){
@@ -503,7 +531,7 @@ final class DeletionService {
         foreach(RecordStore::all('deletion',0,null,100000) as $raw){
             try{
                 $d=self::stored($raw);
-                if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);$result['completed']++;continue;}
+                if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);self::notifyCompleted($d,RecordStore::get('asset',$d['asset_id']));$result['completed']++;continue;}
                 if($d['status']==='cancelled'||$d['next_attempt_at']>Utils::now()){$result['pending']++;continue;}
                 $processed=self::process($d['id']);
                 $processed=self::stored($processed,$d['id']);
