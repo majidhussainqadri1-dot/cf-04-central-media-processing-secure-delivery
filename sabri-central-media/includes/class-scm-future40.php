@@ -345,15 +345,33 @@ final class ContentSafetyUpgradeService {
 }
 
 final class MediaOptimizationService {
-    private static function finiteNumericMap(array $values,string $errorCode,string $label): array {
+    private static function audioNumericMap(mixed $values,array $bounds,string $code): array {
+        if(!is_array($values)||!$values||count($values)>count($bounds))
+            throw new Error($code,'Audio QC numeric evidence must be a nonempty bounded map.',400);
         $safe=[];
         foreach($values as $name=>$value){
-            $key=Utils::key((string)$name,64);
-            if($key===''||isset($safe[$key])||!(is_int($value)||is_float($value)||(is_string($value)&&is_numeric($value))))throw new Error($errorCode,$label.' must contain uniquely named numeric values.',503,['metric'=>$key]);
-            $number=(float)$value;if(!is_finite($number))throw new Error($errorCode,$label.' must contain finite numeric values.',503,['metric'=>$key]);
-            $safe[$key]=$number;
+            if(!is_string($name)||!array_key_exists($name,$bounds)
+                ||!(is_int($value)||is_float($value))||!is_finite((float)$value)
+                ||$value<$bounds[$name][0]||$value>$bounds[$name][1])
+                throw new Error($code,'Audio QC numeric evidence contains invalid metric or range.',400);
+            $safe[$name]=(float)$value;
         }
         return $safe;
+    }
+    private static function audioIdentity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null
+        ];
+    }
+    private static function authorizeAudio(array $asset,int $actor): void {
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'audio_qc']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Audio QC authorization is stale.',409);
     }
     public static function encodingPlan(string $assetId,int $actor,array $constraints=[]): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
@@ -560,8 +578,64 @@ final class MediaOptimizationService {
             'icc_hash'=>$icc,'tone_map'=>$tone,'created_at'=>Utils::now()]);
     }
     public static function audioQc(string $assetId,int $actor,array $thresholds=[]): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);if(!in_array($asset['media_class'],['audio','video'],true))throw new Error('audio_qc_not_applicable','Audio QC is only applicable to audio/video assets.',400);
-        $safeThresholds=self::finiteNumericMap($thresholds,'audio_qc_threshold_invalid','Audio QC thresholds');$result=FutureAdapterRegistry::call('future_013',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'thresholds'=>$safeThresholds]);$metrics=self::finiteNumericMap((array)($result['metrics']??[]),'audio_qc_metric_invalid','Audio QC metrics');if($metrics===[])throw new Error('audio_qc_metric_invalid','Audio QC adapter returned no technical metrics.',503);$passed=($result['passed']??false)===true;$row=RecordStore::put('audio_qc',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'metrics'=>$metrics,'issues'=>(array)($result['issues']??[]),'created_at'=>Utils::now()]);if(!$passed)throw new Error('audio_qc_failed','Audio technical quality policy failed.',409);return $row;
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        if(!in_array($asset['media_class'],['audio','video'],true))
+            throw new Error('audio_qc_not_applicable','Audio QC is only applicable to audio/video assets.',400);
+        self::authorizeAudio($asset,$actor);
+        $thresholdBounds=[
+            'lufs_target'=>[-70,0],'lufs_min'=>[-70,0],'lufs_max'=>[-70,0],
+            'peak_db_max'=>[-100,20],'true_peak_db_max'=>[-100,20],
+            'clipping_ratio_max'=>[0,1],'silence_ratio_max'=>[0,1]
+        ];
+        $safeThresholds=self::audioNumericMap($thresholds,$thresholdBounds,'audio_qc_threshold_invalid');
+        if(isset($safeThresholds['lufs_min'],$safeThresholds['lufs_max'])
+            &&$safeThresholds['lufs_min']>$safeThresholds['lufs_max'])
+            throw new Error('audio_qc_threshold_invalid','Audio loudness bounds conflict.',400);
+        $result=FutureAdapterRegistry::call('future_013',[
+            'asset_id'=>$assetId,'sha256'=>$asset['sha256'],'thresholds'=>$safeThresholds]);
+        $metricBounds=['lufs'=>[-70,0],'peak_db'=>[-100,20],
+            'true_peak_db'=>[-100,20],'clipping_ratio'=>[0,1],'silence_ratio'=>[0,1],
+            'sample_rate_hz'=>[8000,384000]];
+        $metrics=self::audioNumericMap($result['metrics']??null,$metricBounds,'audio_qc_metric_invalid');
+        if(!is_bool($result['passed']??null))
+            throw new Error('audio_qc_metric_invalid','Audio QC pass evidence must be boolean.',503);
+        $issues=$result['issues']??[];
+        if(!is_array($issues)||!array_is_list($issues)||count($issues)>64)
+            throw new Error('audio_qc_issue_invalid','Audio QC issues must be a bounded list.',503);
+        $safeIssues=[];
+        foreach($issues as $issue){
+            if(!is_string($issue)||!preg_match('/^[a-z][a-z0-9_-]{0,63}$/D',$issue)
+                ||in_array($issue,$safeIssues,true))
+                throw new Error('audio_qc_issue_invalid','Audio QC issue identifier is invalid.',503);
+            $safeIssues[]=$issue;
+        }
+        $passed=$result['passed']===true&&$safeIssues===[];
+        foreach($safeThresholds as $name=>$limit){
+            $metric=str_ends_with($name,'_max')?substr($name,0,-4):
+                (str_ends_with($name,'_min')?substr($name,0,-4):
+                (str_ends_with($name,'_target')?substr($name,0,-7):$name));
+            if(!array_key_exists($metric,$metrics))
+                throw new Error('audio_qc_metric_invalid','Audio QC threshold metric missing.',503);
+            if(str_ends_with($name,'_max')&&$metrics[$metric]>$limit)$passed=false;
+            if(str_ends_with($name,'_min')&&$metrics[$metric]<$limit)$passed=false;
+            if(str_ends_with($name,'_target')&&abs($metrics[$metric]-$limit)>2.0)$passed=false;
+        }
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::audioIdentity($latest)!==self::audioIdentity($asset))
+            throw new Error('asset_state_changed','Asset changed during audio quality evaluation.',409);
+        self::authorizeAudio($latest,$actor);
+        $id=hash('sha256',$assetId.'|'.Utils::canonicalJson(self::audioIdentity($asset))
+            .'|'.Utils::canonicalJson($safeThresholds));
+        $row=RecordStore::put('audio_qc',$id,[
+            'actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_domain'=>$asset['owner_domain'],
+            'owner_object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],
+            'thresholds'=>$safeThresholds,'metrics'=>$metrics,'issues'=>$safeIssues,
+            'created_at'=>Utils::now()]);
+        if(!$passed)throw new Error('audio_qc_failed','Audio technical quality policy failed.',409);
+        return $row;
     }
 }
 
