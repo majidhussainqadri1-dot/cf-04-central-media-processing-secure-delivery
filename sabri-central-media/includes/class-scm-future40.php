@@ -356,6 +356,83 @@ final class MediaOptimizationService {
         return $safe;
     }
     public static function encodingPlan(string $assetId,int $actor,array $constraints=[]): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'encoding_plan']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Encoding authorization is stale.',409);
+        ContentSafetyUpgradeService::assertAllowed((string)$asset['mime']);
+        $bounds=['max_bitrate'=>100000000,'min_bitrate'=>100000000,
+            'max_width'=>16384,'max_height'=>16384,'max_renditions'=>32];
+        $safeConstraints=[];
+        foreach($constraints as $key=>$value){
+            if(!is_string($key)||!isset($bounds[$key]))
+                throw new Error('encoding_constraints_invalid','Unsupported encoding constraint.',400);
+            $safeConstraints[$key]=Utils::integer($value,'encoding_constraints_invalid',1,$bounds[$key]);
+        }
+        if(isset($safeConstraints['min_bitrate'],$safeConstraints['max_bitrate'])
+            &&$safeConstraints['min_bitrate']>$safeConstraints['max_bitrate'])
+            throw new Error('encoding_constraints_invalid','Encoding bitrate bounds conflict.',400);
+        $result=FutureAdapterRegistry::call('future_009',[
+            'asset_id'=>$assetId,'sha256'=>$asset['sha256'],
+            'media_class'=>$asset['media_class'],'size'=>$asset['size'],
+            'constraints'=>$safeConstraints]);
+        $raw=$result['renditions']??null;
+        if(!is_array($raw)||!array_is_list($raw)||$raw===[]||count($raw)>32
+            ||(isset($safeConstraints['max_renditions'])&&count($raw)>$safeConstraints['max_renditions']))
+            throw new Error('encoding_plan_invalid','Encoding ladder shape/count is invalid.',503);
+        $ladder=[];$seen=[];
+        foreach($raw as $item){
+            if(!is_array($item)||!is_string($item['kind']??null)
+                ||array_diff(array_keys($item),['kind','bitrate','width','height','codec'])!==[])
+                throw new Error('encoding_plan_invalid','Encoding rendition shape is invalid.',503);
+            $kind=Utils::key($item['kind'],64);
+            if($kind===''||isset($seen[$kind]))
+                throw new Error('encoding_plan_invalid','Encoding rendition identity is invalid.',503);
+            $bitrate=Utils::integer($item['bitrate']??null,'encoding_plan_invalid',1,100000000);
+            if((isset($safeConstraints['max_bitrate'])&&$bitrate>$safeConstraints['max_bitrate'])
+                ||(isset($safeConstraints['min_bitrate'])&&$bitrate<$safeConstraints['min_bitrate']))
+                throw new Error('encoding_plan_invalid','Encoding bitrate violates constraints.',503);
+            $entry=['kind'=>$kind,'bitrate'=>$bitrate];
+            foreach(['width','height'] as $dimension){
+                if(array_key_exists($dimension,$item)){
+                    $entry[$dimension]=Utils::integer($item[$dimension],'encoding_plan_invalid',1,16384);
+                    if(isset($safeConstraints['max_'.$dimension])
+                        &&$entry[$dimension]>$safeConstraints['max_'.$dimension])
+                        throw new Error('encoding_plan_invalid','Encoding dimension violates constraints.',503);
+                }
+            }
+            if(array_key_exists('codec',$item)){
+                if(!is_string($item['codec'])||Utils::key($item['codec'],32)==='')
+                    throw new Error('encoding_plan_invalid','Encoding codec is invalid.',503);
+                $entry['codec']=Utils::key($item['codec'],32);
+            }
+            $ladder[]=$entry;$seen[$kind]=true;
+        }
+        $complexity=$result['complexity']??null;
+        if(!(is_int($complexity)||is_float($complexity))
+            ||!is_finite((float)$complexity)||$complexity<0.0||$complexity>1.0)
+            throw new Error('encoding_complexity_invalid','Encoding complexity must be normalized.',503);
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','privacy_class','policy_hash'] as $field)
+            if(($latest[$field]??null)!==($asset[$field]??null))
+                throw new Error('asset_state_changed','Asset changed during encoding planning.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Asset rights changed during encoding planning.',409);
+        $decision=DomainRegistry::decision((string)$latest['owner_domain'],'authorize_reprocess',
+            ['asset'=>$latest,'actor_id'=>$actor,'transform'=>'encoding_plan']);
+        if((int)$decision['object_version']!==(int)$latest['object_version'])
+            throw new Error('domain_object_version_stale','Encoding authorization changed.',409);
+        $id=hash('sha256',$assetId.'|'.$asset['sha256'].'|'.$asset['object_version'].'|'
+            .$asset['policy_hash'].'|'.$asset['rights']['policy_hash'].'|'.Utils::canonicalJson($safeConstraints));
+        return RecordStore::put('encoding_plan',$id,[
+            'actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'renditions'=>$ladder,'complexity'=>(float)$complexity,
+            'constraints'=>$safeConstraints,'created_at'=>Utils::now()]);
+    }
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);ContentSafetyUpgradeService::assertAllowed((string)$asset['mime']);
         $result=FutureAdapterRegistry::call('future_009',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'media_class'=>$asset['media_class'],'size'=>$asset['size'],'constraints'=>$constraints]);
         $ladder=(array)($result['renditions']??[]);if($ladder===[])throw new Error('encoding_plan_invalid','Encoding adapter returned no renditions.',503);$complexity=(float)($result['complexity']??0.0);if(!is_finite($complexity)||$complexity<0.0)throw new Error('encoding_complexity_invalid','Encoding complexity must be finite and non-negative.',503);
