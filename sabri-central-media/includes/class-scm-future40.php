@@ -123,32 +123,118 @@ final class ProvenanceCredentialService {
 }
 
 final class PerceptualMediaService {
+    private static function identity(array $asset): array {
+        return [
+            $asset['id']??null,$asset['status']??null,$asset['sha256']??null,
+            $asset['owner_domain']??null,$asset['owner_object']??null,
+            $asset['object_version']??null,$asset['privacy_class']??null,
+            $asset['policy_hash']??null,$asset['rights']['policy_hash']??null
+        ];
+    }
+    private static function authorize(array $asset,int $actor): void {
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'perceptual_fingerprint']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Perceptual authorization is stale.',409);
+    }
+    private static function current(array $record,array $asset): bool {
+        return ($record['status']??null)==='active'
+            &&($record['asset_id']??null)===($asset['id']??null)
+            &&($record['source_sha256']??null)===($asset['sha256']??null)
+            &&is_int($record['owner_object_version']??null)
+            &&$record['owner_object_version']===$asset['object_version']
+            &&($record['owner_domain']??null)===($asset['owner_domain']??null)
+            &&($record['privacy_class']??null)===($asset['privacy_class']??null)
+            &&($record['policy_hash']??null)===($asset['policy_hash']??null)
+            &&($record['rights_hash']??null)===($asset['rights']['policy_hash']??null);
+    }
     public static function fingerprint(string $assetId,int $actor,string $algorithm,string $version): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);
-        $algorithm=Utils::key($algorithm,48);$version=Utils::text($version,32);if($algorithm===''||$version==='')throw new Error('perceptual_profile_invalid','Perceptual fingerprint profile is required.',400);
-        $result=FutureAdapterRegistry::call('future_003',['asset'=>['id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'media_class'=>$asset['media_class']],'algorithm'=>$algorithm,'version'=>$version]);
-        $value=Utils::text((string)($result['fingerprint']??''),512);if($value==='')throw new Error('perceptual_fingerprint_invalid','Adapter omitted perceptual fingerprint.',503);
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);self::authorize($asset,$actor);
+        $algorithm=Utils::key($algorithm,48);$version=Utils::text($version,32);
+        if($algorithm===''||$version==='')throw new Error('perceptual_profile_invalid','Perceptual fingerprint profile is required.',400);
+        $result=FutureAdapterRegistry::call('future_003',[
+            'asset'=>['id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'media_class'=>$asset['media_class']],
+            'algorithm'=>$algorithm,'version'=>$version
+        ]);
+        $raw=$result['fingerprint']??null;
+        if(!is_string($raw)||trim($raw)===''||strlen($raw)>512)
+            throw new Error('perceptual_fingerprint_invalid','Adapter fingerprint must be bounded text.',503);
+        $value=Utils::text($raw,512);
+        if($value==='')throw new Error('perceptual_fingerprint_invalid','Adapter fingerprint is empty.',503);
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during perceptual generation.',409);
+        self::authorize($latest,$actor);
         $id=hash('sha256',$assetId.'|'.$algorithm.'|'.$version);
-        return RecordStore::put('perceptual_fingerprint',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'algorithm'=>$algorithm,'algorithm_version'=>$version,'fingerprint'=>$value,'privacy_class'=>$asset['privacy_class'],'owner_domain'=>$asset['owner_domain'],'policy_hash'=>$asset['policy_hash'],'created_at'=>Utils::now()]);
+        return RecordStore::put('perceptual_fingerprint',$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_object_version'=>$asset['object_version'],
+            'algorithm'=>$algorithm,'algorithm_version'=>$version,'fingerprint'=>$value,
+            'privacy_class'=>$asset['privacy_class'],'owner_domain'=>$asset['owner_domain'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'created_at'=>Utils::now()
+        ]);
     }
     public static function nearDuplicates(string $assetId,int $actor,float $threshold=0.9): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'audit_sabri_media');$asset=Future40Registry::asset($assetId,true);if(!is_finite($threshold)||$threshold<0.5||$threshold>1.0)throw new Error('perceptual_threshold_invalid','Near-duplicate threshold must be finite and within 0.5..1.0.',400);
-        $source=array_values(array_filter(RecordStore::all('perceptual_fingerprint',0,'active',100000),fn($r)=>($r['asset_id']??'')===$assetId));
-        if($source===[])throw new Error('perceptual_fingerprint_missing','Perceptual fingerprint is required first.',409);
-        $matches=[];
-        foreach(RecordStore::all('perceptual_fingerprint',0,'active',100000) as $row){
-            if(($row['asset_id']??'')===$assetId||($row['algorithm']??'')!==$source[0]['algorithm']||($row['algorithm_version']??'')!==$source[0]['algorithm_version'])continue;
-            $other=RecordStore::get('asset',(string)$row['asset_id']);if(!$other||!Future40Registry::sameEnvelope($asset,$other))continue;
-            $score=FutureAdapterRegistry::call('future_004',['left'=>$source[0]['fingerprint'],'right'=>$row['fingerprint'],'threshold'=>$threshold]);
-            $similarity=(float)($score['similarity']??NAN);if(!is_finite($similarity)||$similarity<0.0||$similarity>1.0)throw new Error('perceptual_similarity_invalid','Near-duplicate adapter returned invalid similarity.',503);if($similarity>=$threshold)$matches[]=['asset_id'=>$other['id'],'similarity'=>$similarity];
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'audit_sabri_media');
+        $asset=Future40Registry::asset($assetId,true);self::authorize($asset,$actor);
+        if(!is_finite($threshold)||$threshold<0.5||$threshold>1.0)
+            throw new Error('perceptual_threshold_invalid','Near-duplicate threshold must be within 0.5..1.0.',400);
+        $all=RecordStore::all('perceptual_fingerprint',0,'active',100000);
+        $source=array_values(array_filter($all,fn($r)=>self::current($r,$asset)));
+        if($source===[])throw new Error('perceptual_fingerprint_missing','Current fingerprint is required first.',409);
+        usort($source,fn($a,$b)=>(($b['updated_at']??0)<=>($a['updated_at']??0))?:strcmp((string)$a['id'],(string)$b['id']));
+        $selected=$source[0];$matches=[];
+        foreach($all as $row){
+            if(($row['asset_id']??null)===$assetId
+                ||($row['algorithm']??null)!==$selected['algorithm']
+                ||($row['algorithm_version']??null)!==$selected['algorithm_version'])continue;
+            $other=RecordStore::get('asset',(string)($row['asset_id']??''));
+            if(!$other||($other['status']??null)!=='ready'
+                ||!Future40Registry::sameEnvelope($asset,$other)||!self::current($row,$other))continue;
+            try{self::authorize($other,$actor);}
+            catch(Error $e){if($e->errorCode==='domain_authorization_denied')continue;throw $e;}
+            $score=FutureAdapterRegistry::call('future_004',[
+                'left'=>$selected['fingerprint'],'right'=>$row['fingerprint'],'threshold'=>$threshold]);
+            $raw=$score['similarity']??null;
+            if(!(is_int($raw)||is_float($raw)))
+                throw new Error('perceptual_similarity_invalid','Similarity must be numeric.',503);
+            $similarity=(float)$raw;
+            if(!is_finite($similarity)||$similarity<0.0||$similarity>1.0)
+                throw new Error('perceptual_similarity_invalid','Similarity must be finite and normalized.',503);
+            $freshSource=Future40Registry::asset($assetId,true);
+            $freshOther=RecordStore::get('asset',(string)$other['id']);
+            if(self::identity($freshSource)!==self::identity($asset)
+                ||!is_array($freshOther)||self::identity($freshOther)!==self::identity($other))
+                throw new Error('asset_state_changed','Asset changed during perceptual comparison.',409);
+            if($similarity>=$threshold)$matches[]=['asset_id'=>$other['id'],'similarity'=>$similarity];
         }
         usort($matches,fn($a,$b)=>$b['similarity']<=>$a['similarity']);return $matches;
     }
     public static function dedupeDecision(string $assetId,string $candidateId,int $actor): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId,true);$candidate=Future40Registry::asset($candidateId,true);
-        $assetRetention=(string)($asset['policy']['retention']['class']??'');$candidateRetention=(string)($candidate['policy']['retention']['class']??'');$allowed=$asset['sha256']===$candidate['sha256']&&Future40Registry::sameEnvelope($asset,$candidate)&&$assetRetention!==''&&hash_equals($assetRetention,$candidateRetention);
-        $row=['actor_id'=>$actor,'status'=>$allowed?'eligible':'denied','asset_id'=>$assetId,'candidate_asset_id'=>$candidateId,'reason'=>$allowed?'same_binary_same_policy_envelope':'boundary_or_binary_mismatch','created_at'=>Utils::now()];
-        RecordStore::put('dedupe_decision',hash('sha256',$assetId.'|'.$candidateId),$row);return $row;
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');
+        $asset=Future40Registry::asset($assetId,true);
+        $candidate=Future40Registry::asset($candidateId,true);
+        self::authorize($asset,$actor);self::authorize($candidate,$actor);
+        $assetRetention=(string)($asset['policy']['retention']['class']??'');
+        $candidateRetention=(string)($candidate['policy']['retention']['class']??'');
+        $allowed=$asset['sha256']===$candidate['sha256']
+            &&Future40Registry::sameEnvelope($asset,$candidate)
+            &&$assetRetention!==''&&hash_equals($assetRetention,$candidateRetention);
+        $freshAsset=Future40Registry::asset($assetId,true);
+        $freshCandidate=Future40Registry::asset($candidateId,true);
+        if(self::identity($freshAsset)!==self::identity($asset)
+            ||self::identity($freshCandidate)!==self::identity($candidate))
+            throw new Error('asset_state_changed','Asset changed before dedupe decision.',409);
+        $row=['actor_id'=>$actor,'status'=>$allowed?'eligible':'denied',
+            'asset_id'=>$assetId,'candidate_asset_id'=>$candidateId,
+            'source_sha256'=>$asset['sha256'],'candidate_sha256'=>$candidate['sha256'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'reason'=>$allowed?'same_binary_same_policy_envelope':'boundary_or_binary_mismatch',
+            'created_at'=>Utils::now()];
+        RecordStore::put('dedupe_decision',hash('sha256',$assetId.'|'.$candidateId),$row);
+        return $row;
     }
 }
 

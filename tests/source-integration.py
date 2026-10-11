@@ -16,4 +16,5 @@ assert "define('SCM_RUNTIME_ENABLED',false)" in plugin
 subprocess.run(['php',str(root/'tests/review-round-151-deletion-integrity.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-166-ocr-chapter-contracts.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-167-track-metadata-contracts.php')],check=True)
+subprocess.run(['php',str(root/'tests/review-round-168-perceptual-lineage.php')],check=True)
 print('SOURCE INTEGRATION: PASS')
