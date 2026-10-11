@@ -107,17 +107,101 @@ final class FutureAdapterRegistry {
 
 final class ProvenanceCredentialService {
     private const SYNTHETIC=['original','ai_generated','ai_edited','composited','unknown'];
+    private static function identity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null
+        ];
+    }
+    private static function authorize(array $asset,int $actor): void {
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'provenance_credential']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Provenance authorization is stale.',409);
+    }
+    private static function field(mixed $value,int $max,string $code): string {
+        if(!is_string($value)||strlen($value)>$max
+            ||!preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/D',$value))
+            throw new Error($code,'Provenance field must be bounded canonical text.',400);
+        return $value;
+    }
     public static function record(string $assetId,int $actor,array $input): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        self::authorize($asset,$actor);
         Utils::requireFields($input,['origin','synthetic_state','tool','tool_version'],'provenance_incomplete');
-        $synthetic=Utils::key((string)$input['synthetic_state'],32);if(!in_array($synthetic,self::SYNTHETIC,true))throw new Error('synthetic_state_invalid','Synthetic-media state is invalid.',400);
-        $parents=array_values(array_unique(array_map(fn($v)=>Utils::text((string)$v,96),(array)($input['parent_asset_ids']??[]))));
-        foreach($parents as $parentId){$parent=Future40Registry::asset($parentId);if(!Future40Registry::sameEnvelope($asset,$parent))throw new Error('provenance_boundary_denied','Cross-policy provenance parent requires owning-domain migration.',403);}
-        $payload=['asset_id'=>$assetId,'asset_sha256'=>$asset['sha256'],'owner_domain'=>$asset['owner_domain'],'owner_object_hash'=>Utils::hashReference((string)$asset['owner_object']),'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'origin'=>Utils::key((string)$input['origin'],48),'synthetic_state'=>$synthetic,'tool'=>Utils::text((string)$input['tool'],96),'tool_version'=>Utils::text((string)$input['tool_version'],64),'parent_asset_ids'=>$parents,'transformations'=>array_values(array_map(fn($v)=>Utils::key((string)$v,64),(array)($input['transformations']??[]))),'created_at'=>Utils::now()];
-        $credential=FutureAdapterRegistry::call('future_001',['operation'=>'content_credentials','payload'=>$payload]);
+        if(array_diff(array_keys($input),[
+            'origin','synthetic_state','tool','tool_version','parent_asset_ids','transformations'])!==[])
+            throw new Error('provenance_input_invalid','Provenance contains unapproved fields.',400);
+        $synthetic=$input['synthetic_state'];
+        if(!is_string($synthetic)||!in_array($synthetic,self::SYNTHETIC,true))
+            throw new Error('synthetic_state_invalid','Synthetic-media state is invalid.',400);
+        $origin=self::field($input['origin'],48,'provenance_input_invalid');
+        $tool=self::field($input['tool'],96,'provenance_input_invalid');
+        $toolVersion=self::field($input['tool_version'],64,'provenance_input_invalid');
+        $rawParents=$input['parent_asset_ids']??[];
+        $rawTransforms=$input['transformations']??[];
+        if(!is_array($rawParents)||!array_is_list($rawParents)||count($rawParents)>32
+            ||!is_array($rawTransforms)||!array_is_list($rawTransforms)||count($rawTransforms)>64)
+            throw new Error('provenance_input_invalid','Provenance lineage list is malformed or unbounded.',400);
+        $parents=[];$parentSnapshots=[];
+        foreach($rawParents as $parent){
+            $parentId=self::field($parent,96,'provenance_input_invalid');
+            if($parentId===$assetId||in_array($parentId,$parents,true))
+                throw new Error('provenance_input_invalid','Provenance parent identity is duplicated or cyclic.',400);
+            $parentAsset=Future40Registry::asset($parentId,true);
+            if(!Future40Registry::sameEnvelope($asset,$parentAsset))
+                throw new Error('provenance_boundary_denied','Cross-policy provenance parent requires owning-domain migration.',403);
+            self::authorize($parentAsset,$actor);
+            $parents[]=$parentId;$parentSnapshots[$parentId]=self::identity($parentAsset);
+        }
+        $transforms=[];
+        foreach($rawTransforms as $transform){
+            $name=self::field($transform,64,'provenance_input_invalid');
+            if(in_array($name,$transforms,true))
+                throw new Error('provenance_input_invalid','Duplicate provenance transform.',400);
+            $transforms[]=$name;
+        }
+        $payload=[
+            'asset_id'=>$assetId,'asset_sha256'=>$asset['sha256'],
+            'owner_domain'=>$asset['owner_domain'],
+            'owner_object_hash'=>Utils::hashReference((string)$asset['owner_object']),
+            'owner_object_version'=>$asset['object_version'],
+            'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],
+            'origin'=>$origin,'synthetic_state'=>$synthetic,'tool'=>$tool,
+            'tool_version'=>$toolVersion,'parent_asset_ids'=>$parents,
+            'transformations'=>$transforms,'created_at'=>Utils::now()];
+        $credential=FutureAdapterRegistry::call('future_001',[
+            'operation'=>'content_credentials','payload'=>$payload]);
+        $format=$credential['format']??null;
+        if(!is_string($format)||strlen($format)>64
+            ||!preg_match('/^[a-z][a-z0-9_.:-]*$/D',$format)
+            ||strlen(Utils::canonicalJson($credential))>4096)
+            throw new Error('provenance_credential_invalid','Provider credential evidence is invalid.',503);
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during provenance generation.',409);
+        self::authorize($latest,$actor);
+        foreach($parentSnapshots as $parentId=>$snapshot){
+            $current=Future40Registry::asset($parentId,true);
+            if(self::identity($current)!==$snapshot)
+                throw new Error('asset_state_changed','Provenance parent changed during generation.',409);
+            self::authorize($current,$actor);
+        }
         $id=hash('sha256',$assetId.'|'.Utils::canonicalJson($payload));
-        $row=RecordStore::put('provenance_credential',$id,['actor_id'=>$actor,'status'=>'active','payload'=>$payload,'credential'=>$credential,'credential_hash'=>hash('sha256',Utils::canonicalJson($credential))]);
-        Audit::record('future40_provenance_recorded',['asset_id'=>$assetId,'synthetic_state'=>$synthetic,'credential_id'=>$id]);
+        $row=RecordStore::put('provenance_credential',$id,[
+            'actor_id'=>$actor,'status'=>'pending_external_verification',
+            'source_sha256'=>$asset['sha256'],'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'payload'=>$payload,'credential'=>$credential,
+            'credential_hash'=>hash('sha256',Utils::canonicalJson($credential)),
+            'verification_state'=>'external_pending']);
+        Audit::record('future40_provenance_recorded',[
+            'asset_id'=>$assetId,'synthetic_state'=>$synthetic,'credential_id'=>$id]);
         return $row;
     }
 }
