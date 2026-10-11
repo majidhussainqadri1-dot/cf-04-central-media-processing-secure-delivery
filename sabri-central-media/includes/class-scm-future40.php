@@ -434,9 +434,66 @@ final class MediaOptimizationService {
             'constraints'=>$safeConstraints,'created_at'=>Utils::now()]);
     }
     public static function qualityScore(string $assetId,string $derivativeId,int $actor,array $thresholds): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);$derivative=RecordStore::get('derivative',$derivativeId);if(!$derivative||($derivative['asset_id']??'')!==$assetId)throw new Error('derivative_not_found','Derivative not found.',404);
-        $safeThresholds=self::finiteNumericMap($thresholds,'quality_threshold_invalid','Quality thresholds');$result=FutureAdapterRegistry::call('future_010',['asset_sha256'=>$asset['sha256'],'derivative_sha256'=>$derivative['sha256'],'kind'=>$derivative['kind'],'thresholds'=>$safeThresholds]);
-        $metrics=self::finiteNumericMap((array)($result['metrics']??[]),'quality_metric_invalid','Quality metrics');if($metrics===[])throw new Error('quality_metric_invalid','Quality adapter returned no objective metrics.',503);$passed=($result['passed']??false)===true;$row=RecordStore::put('quality_score',hash('sha256',$assetId.'|'.$derivativeId),['actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,'derivative_id'=>$derivativeId,'metrics'=>$metrics,'thresholds'=>$safeThresholds,'created_at'=>Utils::now()]);if(!$passed)throw new Error('derivative_quality_failed','Derivative failed objective quality policy.',409,['derivative_id'=>$derivativeId]);return $row;
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'quality_score']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Quality authorization is stale.',409);
+        $derivative=RecordStore::get('derivative',$derivativeId);
+        if(!$derivative||($derivative['asset_id']??null)!==$assetId
+            ||($derivative['status']??null)!=='validated'||!empty($derivative['superseded_by'])
+            ||($derivative['lineage']['source_sha256']??null)!==$asset['sha256']
+            ||(int)($derivative['lineage']['processing_generation']??0)!==(int)($asset['processing_generation']??1))
+            throw new Error('derivative_not_validated','Current validated derivative is required.',409);
+        $limits=['vmaf_min'=>100.0,'ssim_min'=>1.0,'psnr_min'=>100.0];
+        if($thresholds===[])throw new Error('quality_threshold_invalid','Quality thresholds required.',400);
+        $safeThresholds=[];
+        foreach($thresholds as $name=>$value){
+            if(!is_string($name)||!isset($limits[$name])||!(is_int($value)||is_float($value))
+                ||!is_finite((float)$value)||$value<0||$value>$limits[$name])
+                throw new Error('quality_threshold_invalid','Quality threshold invalid.',400);
+            $safeThresholds[$name]=(float)$value;
+        }
+        $result=FutureAdapterRegistry::call('future_010',[
+            'asset_sha256'=>$asset['sha256'],'derivative_sha256'=>$derivative['sha256'],
+            'kind'=>$derivative['kind'],'thresholds'=>$safeThresholds]);
+        $raw=$result['metrics']??null;
+        if(!is_array($raw)||$raw===[])throw new Error('quality_metric_invalid','Quality metrics missing.',503);
+        $metricLimits=['vmaf'=>100.0,'ssim'=>1.0,'psnr'=>100.0];$metrics=[];
+        foreach($raw as $name=>$value){
+            if(!is_string($name)||!isset($metricLimits[$name])
+                ||!(is_int($value)||is_float($value))||!is_finite((float)$value)
+                ||$value<0||$value>$metricLimits[$name])
+                throw new Error('quality_metric_invalid','Quality metric invalid.',503);
+            $metrics[$name]=(float)$value;
+        }
+        $passed=($result['passed']??false)===true;
+        foreach($safeThresholds as $name=>$minimum){
+            $metric=substr($name,0,-4);
+            if(!isset($metrics[$metric])||$metrics[$metric]<$minimum)$passed=false;
+        }
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','policy_hash','privacy_class'] as $field)
+            if(($latest[$field]??null)!==($asset[$field]??null))
+                throw new Error('asset_state_changed','Asset changed during quality scoring.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Asset rights changed during quality scoring.',409);
+        $fresh=RecordStore::get('derivative',$derivativeId);
+        if(!$fresh||($fresh['version']??null)!==($derivative['version']??null)
+            ||($fresh['sha256']??null)!==($derivative['sha256']??null)
+            ||($fresh['status']??null)!=='validated'||!empty($fresh['superseded_by']))
+            throw new Error('derivative_state_changed','Derivative changed during quality scoring.',409);
+        $id=hash('sha256',$assetId.'|'.$derivativeId.'|'.$asset['sha256'].'|'
+            .$asset['object_version'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash']);
+        $row=RecordStore::put('quality_score',$id,[
+            'actor_id'=>$actor,'status'=>$passed?'passed':'failed','asset_id'=>$assetId,
+            'derivative_id'=>$derivativeId,'source_sha256'=>$asset['sha256'],
+            'derivative_sha256'=>$derivative['sha256'],'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'metrics'=>$metrics,'thresholds'=>$safeThresholds,'created_at'=>Utils::now()]);
+        if(!$passed)throw new Error('derivative_quality_failed','Derivative failed objective quality policy.',409,['derivative_id'=>$derivativeId]);
+        return $row;
     }
     public static function negotiateCodec(array $client,array $approved): string {
         $client=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$client));$approved=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$approved));foreach($approved as $codec)if(in_array($codec,$client,true))return $codec;throw new Error('codec_unavailable','No approved compatible codec is available.',406);

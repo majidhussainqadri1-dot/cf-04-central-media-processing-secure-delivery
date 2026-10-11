@@ -19,4 +19,5 @@ subprocess.run(['php',str(root/'tests/review-round-167-track-metadata-contracts.
 subprocess.run(['php',str(root/'tests/review-round-168-perceptual-lineage.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-169-content-safety-evidence.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-170-encoding-plan-contracts.php')],check=True)
+subprocess.run(['php',str(root/'tests/review-round-171-quality-score-evidence.php')],check=True)
 print('SOURCE INTEGRATION: PASS')
