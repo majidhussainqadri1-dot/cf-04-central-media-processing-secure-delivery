@@ -4,7 +4,8 @@ $root=dirname(__DIR__);
 $s=file_get_contents($root.'/sabri-central-media/includes/class-scm-future40.php');
 function r119($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 119 FAIL: $m\n");exit(1);}echo "ROUND 119 PASS: $m\n";}
 $rescanStart=strpos($s,'public static function scheduleRescan');
-$rescan=substr($s,$rescanStart,2200);
+$rescanEnd=strpos($s,'public static function killSwitch',$rescanStart);
+$rescan=substr($s,$rescanStart,$rescanEnd-$rescanStart);
 r119(str_contains($rescan,'RuntimeGuard::requireReady()')&&str_contains($rescan,"Auth::assertActor(\$actor,'media_reprocess')"),'system-wide threat re-scan queueing is runtime-gated and capability-authorized');
 r119(str_contains($rescan,"'actor_id'=>\$actor")&&str_contains($rescan,"'future40_rescan_scheduled'"),'re-scan scheduling persists actor provenance and audit evidence');
 $tierStart=strpos($s,'public static function optimizeTier');
