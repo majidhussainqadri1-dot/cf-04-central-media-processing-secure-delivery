@@ -1338,27 +1338,118 @@ final class DeliveryResilienceService {
 }
 
 final class ResidencyCryptoService {
-    private static function policy(string $assetId): ?array {return RecordStore::get('residency_policy',hash('sha256',$assetId));}
-    public static function hasPolicy(string $assetId): bool {return self::policy($assetId)!==null;}
+    private static function policy(string $assetId): ?array {
+        return RecordStore::get('residency_policy',hash('sha256',$assetId));
+    }
+    public static function hasPolicy(string $assetId): bool {
+        return self::policy($assetId)!==null;
+    }
+    private static function regionName(mixed $value): string {
+        if(!is_string($value)||strlen($value)>16
+            ||!preg_match('/^[A-Z0-9-]{2,16}$/D',$value))
+            throw new Error('residency_regions_invalid','Residency region must be canonical bounded text.',400);
+        return $value;
+    }
+    private static function identity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null
+        ];
+    }
     public static function residency(string $assetId,int $actor,array $regions): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');$asset=Future40Registry::asset($assetId);
-        $regions=array_values(array_unique(array_filter(array_map(fn($v)=>strtoupper(Utils::text((string)$v,16)),$regions))));
-        if($regions===[])throw new Error('residency_regions_required','At least one approved residency region is required.',400);
-        $providerIds=[];$sourceProvider=Utils::key((string)($asset['storage']['provider_id']??''),64);if($sourceProvider!=='')$providerIds[$sourceProvider]=true;
-        foreach(DerivativeService::forAsset($assetId) as $derivative){if(($derivative['status']??'')==='deleted')continue;$pid=Utils::key((string)($derivative['storage']['provider_id']??''),64);if($pid!=='')$providerIds[$pid]=true;}
-        foreach(array_keys($providerIds) as $providerId){$region=strtoupper(Utils::text((string)(ProviderRegistry::metadata($providerId)['region']??''),16));if($region===''||!in_array($region,$regions,true))throw new Error('residency_current_placement_denied','Existing asset placement is outside the requested residency policy.',409,['provider'=>$providerId,'region'=>$region]);}
-        $id=hash('sha256',$assetId);$existing=RecordStore::get('residency_policy',$id);
-        $row=RecordStore::put('residency_policy',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'privacy_class'=>$asset['privacy_class'],'allowed_regions'=>$regions,'enforcement'=>'fail_closed','created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
-        Audit::record('future40_residency_policy_set',['asset_id'=>$assetId,'regions'=>$regions,'actor_id'=>$actor]);return $row;
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');
+        $asset=Future40Registry::asset($assetId);
+        if(!array_is_list($regions)||$regions===[]||count($regions)>32)
+            throw new Error('residency_regions_invalid','Residency regions must be a nonempty bounded list.',400);
+        $safe=[];
+        foreach($regions as $region){
+            $name=self::regionName($region);
+            if(in_array($name,$safe,true))
+                throw new Error('residency_regions_invalid','Duplicate residency region.',400);
+            $safe[]=$name;
+        }
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',[
+            'asset'=>$asset,'actor_id'=>$actor,'transform'=>'residency_policy']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Residency authorization is stale.',409);
+        $providerIds=[];
+        $sourceProvider=$asset['storage']['provider_id']??'';
+        if($sourceProvider!==''){
+            if(!is_string($sourceProvider))throw new Error('residency_provider_unknown','Source provider identity invalid.',503);
+            $providerIds[$sourceProvider]=true;
+        }
+        foreach(DerivativeService::forAsset($assetId) as $derivative){
+            if(($derivative['status']??'')==='deleted')continue;
+            $pid=$derivative['storage']['provider_id']??'';
+            if($pid!==''){
+                if(!is_string($pid))throw new Error('residency_provider_unknown','Derivative provider identity invalid.',503);
+                $providerIds[$pid]=true;
+            }
+        }
+        foreach(array_keys($providerIds) as $providerId){
+            $metadata=ProviderRegistry::metadata($providerId);
+            $region=strtoupper((string)($metadata['region']??''));
+            if($region===''||!in_array($region,$safe,true))
+                throw new Error('residency_current_placement_denied',
+                    'Existing asset placement is outside requested residency policy.',409,
+                    ['provider'=>$providerId,'region'=>$region]);
+        }
+        $latest=Future40Registry::asset($assetId);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during residency planning.',409);
+        $id=hash('sha256',$assetId);$existing=self::policy($assetId);
+        $row=RecordStore::put('residency_policy',$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'asset_sha256'=>$asset['sha256'],'owner_domain'=>$asset['owner_domain'],
+            'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'privacy_class'=>$asset['privacy_class'],'allowed_regions'=>$safe,
+            'enforcement'=>'fail_closed','created_at'=>$existing['created_at']??Utils::now(),
+            'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+        Audit::record('future40_residency_policy_set',[
+            'asset_id'=>$assetId,'regions'=>$safe,'actor_id'=>$actor]);
+        return $row;
     }
     public static function assertRegion(string $assetId,string $region): void {
-        $policy=self::policy($assetId);if(!$policy)return;$region=strtoupper(Utils::text($region,16));
-        if($region===''||!in_array($region,(array)$policy['allowed_regions'],true))throw new Error('residency_region_denied','Storage/delivery region violates residency policy.',403,['region'=>$region]);
+        $policy=self::policy($assetId);
+        if(!$policy)return;
+        if(($policy['asset_id']??null)!==$assetId||($policy['status']??null)!=='active'
+            ||($policy['enforcement']??null)!=='fail_closed')
+            throw new Error('residency_policy_invalid','Residency policy identity or state invalid.',409);
+        $allowed=$policy['allowed_regions']??null;
+        if(!is_array($allowed)||!array_is_list($allowed)||$allowed===[]
+            ||count($allowed)>32)
+            throw new Error('residency_policy_invalid','Residency policy region list invalid.',409);
+        foreach($allowed as $item){
+            try{self::regionName($item);}catch(Error){
+                throw new Error('residency_policy_invalid','Persisted residency region invalid.',409);
+            }
+        }
+        if(count(array_unique($allowed))!==count($allowed))
+            throw new Error('residency_policy_invalid','Duplicate persisted residency region.',409);
+        $asset=Future40Registry::asset($assetId);
+        foreach(['asset_sha256'=>'sha256','owner_domain'=>'owner_domain',
+            'owner_object_version'=>'object_version','policy_hash'=>'policy_hash',
+            'privacy_class'=>'privacy_class'] as $stored=>$current)
+            if(($policy[$stored]??null)!==($asset[$current]??null))
+                throw new Error('residency_policy_stale','Residency policy source changed.',409);
+        if(($policy['rights_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('residency_policy_stale','Residency policy rights changed.',409);
+        $region=self::regionName($region);
+        if(!in_array($region,$allowed,true))
+            throw new Error('residency_region_denied','Storage/delivery region violates residency policy.',403,
+                ['region'=>$region]);
     }
     public static function assertProviderRegion(string $assetId,string $providerId): void {
-        $policy=self::policy($assetId);if(!$policy)return;$providerId=Utils::key($providerId,64);
-        if($providerId==='')throw new Error('residency_provider_unknown','Residency-controlled operation has no provider identity.',503);
-        $region=(string)(ProviderRegistry::metadata($providerId)['region']??'');self::assertRegion($assetId,$region);
+        if(!self::hasPolicy($assetId))return;
+        if($providerId===''||strlen($providerId)>64
+            ||!preg_match('/^[a-z0-9][a-z0-9._:-]{0,63}$/D',$providerId))
+            throw new Error('residency_provider_unknown','Residency provider identity invalid.',503);
+        $region=strtoupper((string)(ProviderRegistry::metadata($providerId)['region']??''));
+        self::assertRegion($assetId,$region);
     }
     public static function assertPublicCdnAllowed(string $assetId): void {
         if(self::hasPolicy($assetId))throw new Error('residency_cdn_region_unverified','Public CDN publication is denied while CDN residency is not provider-attested.',503);
