@@ -5,6 +5,8 @@ use Sabri\CentralMedia\{DeliveryResilienceService,DomainRegistry,RecordStore};
 $p=policy('document','C3',['view','download']);
 $a=['actor_id'=>11,'status'=>'ready','id'=>'r180','asset_id'=>'r180',
 'owner_domain'=>'file17','owner_object'=>'message:r180','object_version'=>1,
+'scan_status'=>'passed','processing_status'=>'completed',
+'object_key'=>'r180-source','storage'=>['provider_id'=>'source-private'],
 'sha256'=>hash('sha256','r180'),'size'=>1024,'media_class'=>'document',
 'mime'=>'application/pdf','privacy_class'=>'C3',
 'policy'=>$p,'policy_hash'=>$p['policy_hash'],'rights'=>$p['rights']];
