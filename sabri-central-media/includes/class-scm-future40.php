@@ -1043,35 +1043,86 @@ final class SensitiveDataProtectionService {
 }
 
 final class DeliveryResilienceService {
-    public static function routeCdn(string $assetId,array $candidates): array {
+    private static function controlAsset(string $assetId,bool $public,string $purpose): array {
+        RuntimeGuard::requireReady();$actor=Auth::capability('media_manage_providers');
         $asset=Future40Registry::asset($assetId,true);
-        if($asset['privacy_class']!=='C0')throw new Error('multi_cdn_public_only','Multi-CDN public routing is limited to C0 assets.',403);
-        $approved=[];
+        if($public){
+            if($asset['privacy_class']!=='C0')
+                throw new Error($purpose==='route_cdn'?'multi_cdn_public_only':'origin_shield_public_only',
+                    'Public delivery optimization is restricted to C0 assets.',403);
+            if(($asset['policy']['delivery']['public_cdn']??false)!==true)
+                throw new Error('public_cdn_policy_denied','Public CDN is not allowed by asset policy.',403);
+            RightsPolicy::assert($asset['rights'],'view',['territory'=>'GLOBAL','audience_type'=>'public']);
+        }else{
+            if($asset['privacy_class']==='C0')
+                throw new Error('edge_auth_not_required','Public C0 assets do not require restricted edge authorization.',400);
+            RightsPolicy::assert($asset['rights'],'view',['territory'=>'GLOBAL','audience_type'=>'user']);
+        }
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_delivery',[
+            'asset'=>$asset,'actor_id'=>$actor,'purpose'=>$purpose]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Delivery control authorization is stale.',409);
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','policy_hash','privacy_class'] as $key)
+            if(($latest[$key]??null)!==($asset[$key]??null))
+                throw new Error('asset_state_changed','Delivery control asset state changed.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Delivery control rights changed.',409);
+        return $asset;
+    }
+    public static function routeCdn(string $assetId,array $candidates): array {
+        $asset=self::controlAsset($assetId,true,'route_cdn');
+        if(!array_is_list($candidates)||$candidates===[]||count($candidates)>32)
+            throw new Error('cdn_candidates_invalid','CDN candidates must be a nonempty bounded list.',400);
+        $approved=[];$seen=[];
         foreach($candidates as $c){
-            $id=Utils::key((string)($c['id']??''),64);
-            if($id===''||($c['approved']??false)!==true)continue;
-            $region=strtoupper(Utils::text((string)($c['region']??''),16));
+            if(!is_array($c)||array_diff(array_keys($c),['id','approved','healthy','priority','region'])!==[]
+                ||!is_string($c['id']??null)||!preg_match('/^[a-z0-9][a-z0-9._:-]{0,63}$/D',$c['id'])
+                ||!is_bool($c['approved']??null)||!is_bool($c['healthy']??null)
+                ||!is_int($c['priority']??null)||$c['priority']<0||$c['priority']>1000
+                ||!is_string($c['region']??null)||!preg_match('/^[A-Z]{2,16}$/D',$c['region']))
+                throw new Error('cdn_candidates_invalid','CDN candidate contract is invalid.',400);
+            $id=$c['id'];
+            if(isset($seen[$id]))throw new Error('cdn_candidates_invalid','Duplicate CDN candidate.',400);
+            $seen[$id]=true;
+            if(!$c['approved'])continue;
+            $region=$c['region'];
             if(ResidencyCryptoService::hasPolicy($assetId)){
                 try{ResidencyCryptoService::assertRegion($assetId,$region);}
                 catch(Error){continue;}
             }
-            $approved[]=['id'=>$id,'healthy'=>($c['healthy']??false)===true,'priority'=>(int)($c['priority']??100),'region'=>$region];
+            $approved[]=['id'=>$id,'healthy'=>$c['healthy'],'priority'=>$c['priority'],'region'=>$region];
         }
-        usort($approved,fn($a,$b)=>$a['priority']<=>$b['priority']);
-        foreach($approved as $c)if($c['healthy'])return ['status'=>'routed','provider'=>$c['id'],'region'=>$c['region'],'failover_candidates'=>count($approved)-1];
+        usort($approved,static fn($a,$b)=>($a['priority']<=>$b['priority'])?:strcmp($a['id'],$b['id']));
+        foreach($approved as $c)if($c['healthy'])
+            return ['status'=>'routed','provider'=>$c['id'],'region'=>$c['region'],
+                'failover_candidates'=>count($approved)-1];
         throw new Error('cdn_unavailable','No healthy approved CDN is available.',503);
     }
     public static function originShield(string $assetId,array $input): array {
-        $asset=Future40Registry::asset($assetId,true);
-        if($asset['privacy_class']!=='C0')throw new Error('origin_shield_public_only','Shared origin shield is restricted to C0 assets.',403);
-        $ttl=max(0,min(86400,(int)($input['ttl_seconds']??0)));
-        return ['asset_id'=>$assetId,'enabled'=>$ttl>0,'ttl_seconds'=>$ttl,'request_collapsing'=>Utils::bool($input['request_collapsing']??true),'prewarm'=>Utils::bool($input['prewarm']??false),'cache_key_hash'=>hash('sha256',$asset['sha256'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash'])];
+        $asset=self::controlAsset($assetId,true,'origin_shield');
+        if(array_diff(array_keys($input),['ttl_seconds','request_collapsing','prewarm'])!==[])
+            throw new Error('origin_shield_invalid','Origin-shield policy has unsupported fields.',400);
+        $ttl=$input['ttl_seconds']??0;
+        $collapsing=$input['request_collapsing']??true;
+        $prewarm=$input['prewarm']??false;
+        if(!is_int($ttl)||$ttl<0||$ttl>86400||!is_bool($collapsing)||!is_bool($prewarm))
+            throw new Error('origin_shield_invalid','Origin-shield values are invalid.',400);
+        return ['asset_id'=>$assetId,'enabled'=>$ttl>0,'ttl_seconds'=>$ttl,
+            'request_collapsing'=>$collapsing,'prewarm'=>$prewarm,
+            'cache_key_hash'=>hash('sha256',$asset['sha256'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash'])];
     }
     public static function edgeAuthorization(string $assetId,array $input): array {
-        $asset=Future40Registry::asset($assetId,true);
-        if($asset['privacy_class']==='C0')throw new Error('edge_auth_not_required','Public C0 assets do not require restricted edge authorization.',400);
-        $ttl=max(1,min(900,(int)($input['ttl_seconds']??120)));
-        return ['asset_id'=>$assetId,'mode'=>'edge_verify_origin_authoritative','ttl_seconds'=>$ttl,'claims'=>['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];
+        $asset=self::controlAsset($assetId,false,'edge_authorization');
+        if(array_diff(array_keys($input),['ttl_seconds'])!==[])
+            throw new Error('edge_auth_profile_invalid','Edge authorization has unsupported fields.',400);
+        $ttl=$input['ttl_seconds']??120;
+        if(!is_int($ttl)||$ttl<1||$ttl>900)
+            throw new Error('edge_auth_profile_invalid','Edge authorization TTL is invalid.',400);
+        return ['asset_id'=>$assetId,'mode'=>'edge_verify_origin_authoritative',
+            'ttl_seconds'=>$ttl,
+            'claims'=>['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],
+            'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];
     }
     public static function adaptiveUpload(array $network,array $bounds): array {
         $rtt=max(0,(int)($network['rtt_ms']??0));$down=(float)($network['mbps']??0);if(!is_finite($down)||$down<0.0)throw new Error('network_profile_invalid','Network throughput must be finite and non-negative.',400);$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));
