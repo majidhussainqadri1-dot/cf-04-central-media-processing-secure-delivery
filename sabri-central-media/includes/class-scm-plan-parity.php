@@ -145,6 +145,28 @@ final class PrivacyTelemetry {
 }
 
 
+final class CronCursorEvidence {
+    public static function last(?array $cursor,string $id,string $field): string {
+        if($cursor===null)return '';
+        $value=$cursor[$field]??null;
+        $validKey=is_string($value)&&(
+            ($field==='last_id'&&preg_match('/^[a-f0-9]{64}$/D',$value)===1)
+            ||($field==='last_key'&&preg_match('/^[0-9]{19}:.{1,96}$/sD',$value)===1)
+        );
+        if(($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!==$id
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||!is_int($cursor['updated_at']??null)||$cursor['updated_at']<1
+            ||$cursor['updated_at']>Utils::now()+300
+            ||!$validKey)
+            throw new Error($id==='revocation-dispatch'?'revocation_cursor_invalid':'rights_cursor_invalid',
+                'Stored reconciliation cursor evidence is invalid.',500);
+        return $value;
+    }
+}
+
 final class RevocationDispatchService {
     private static function identity(array $asset,string $reason,?string $projectionId): array {
         $assetId=(string)($asset['id']??'');
@@ -180,7 +202,7 @@ final class RevocationDispatchService {
                 ||!array_key_exists('at',$entry)||!array_key_exists('reason',$entry)
                 ||!array_key_exists('prior_version',$entry)
                 ||!is_int($entry['at'])||$entry['at']<($row['created_at']??1)
-                ||$entry['at']<$previousAt
+                ||$entry['at']>Utils::now()+300||$entry['at']<$previousAt
                 ||!in_array($entry['reason'],$reasons,true)
                 ||!is_int($entry['prior_version'])||$entry['prior_version']<1
                 ||$entry['prior_version']<=$previousVersion
@@ -208,7 +230,7 @@ final class RevocationDispatchService {
             ||($row['event_id']??null)!=='scm-revoked-'.substr($digest,0,48)
             ||($row['actor_id']??null)!==0
             ||!is_int($row['version']??null)||$row['version']<1
-            ||!is_int($row['created_at']??null)||$row['created_at']<1
+            ||!is_int($row['created_at']??null)||$row['created_at']<1||$row['created_at']>Utils::now()+300
             ||!is_int($row['object_version'])||$row['object_version']<1
             ||!is_string($row['reason'])||$row['reason']===''||Utils::key($row['reason'],64)!==$row['reason']
             ||!is_string($row['owner_domain'])||$row['owner_domain']===''
@@ -223,7 +245,8 @@ final class RevocationDispatchService {
             ||($row['status']==='pending'&&(array_key_exists('dispatched_at',$row)
                 ||array_key_exists('superseded_at',$row)||array_key_exists('superseded_reason',$row)))
             ||($row['status']==='dispatched'&&(!is_int($row['dispatched_at']??null)
-                ||$row['dispatched_at']<1||array_key_exists('superseded_at',$row)
+                ||$row['dispatched_at']<$row['created_at']||$row['dispatched_at']>Utils::now()+300
+                ||array_key_exists('superseded_at',$row)
                 ||array_key_exists('superseded_reason',$row)))
             ||($row['status']==='superseded'&&(array_key_exists('dispatched_at',$row)
                 ||!is_int($row['superseded_at']??null)||$row['superseded_at']<1
@@ -343,7 +366,7 @@ final class RevocationDispatchService {
         $rows=RecordStore::all('revocation_dispatch',0,'pending',100000);
         usort($rows,static fn(array $a,array $b): int=>strcmp((string)$a['id'],(string)$b['id']));
         $cursor=RecordStore::get('cron_cursor','revocation-dispatch');
-        $after=(string)($cursor['last_id']??'');
+        $after=CronCursorEvidence::last($cursor,'revocation-dispatch','last_id');
         $ordered=array_merge(
             array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)>0)),
             array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)<=0))
@@ -420,7 +443,7 @@ final class RightsRevocationService {
         }
         usort($eligible,static fn(array $a,array $b): int=>strcmp($a['key'],$b['key']));
         $cursor=RecordStore::get('cron_cursor','rights-reconciliation');
-        $after=(string)($cursor['last_key']??'');
+        $after=CronCursorEvidence::last($cursor,'rights-reconciliation','last_key');
         $ordered=array_merge(
             array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)>0)),
             array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)<=0))
