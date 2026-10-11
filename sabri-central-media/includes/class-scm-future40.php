@@ -517,8 +517,47 @@ final class MediaOptimizationService {
         throw new Error('codec_unavailable','No approved compatible codec is available.',406);
     }
     public static function colorPolicy(string $assetId,int $actor,array $input): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');Future40Registry::asset($assetId,true);Utils::requireFields($input,['source_space','target_space','hdr_mode','icc_hash'],'color_policy_incomplete');$icc=Utils::text((string)$input['icc_hash'],64);if($icc!==''&&!preg_match('/^[a-f0-9]{64}$/',$icc))throw new Error('icc_hash_invalid','ICC hash is invalid.',400);
-        return RecordStore::put('color_policy',hash('sha256',$assetId),['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'source_space'=>Utils::key((string)$input['source_space'],32),'target_space'=>Utils::key((string)$input['target_space'],32),'hdr_mode'=>Utils::key((string)$input['hdr_mode'],32),'icc_hash'=>$icc,'tone_map'=>Utils::key((string)($input['tone_map']??'none'),32),'created_at'=>Utils::now()]);
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'color_policy']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Color policy authorization is stale.',409);
+        Utils::requireFields($input,['source_space','target_space','hdr_mode','icc_hash'],'color_policy_incomplete');
+        $spaces=['srgb','bt709','bt2020','display-p3','rec709','rec2020'];
+        $modes=['sdr','hdr10','hlg','tone_map','passthrough'];
+        $toneMaps=['none','approved-v1','hable','reinhard'];
+        foreach(['source_space','target_space','hdr_mode'] as $field)
+            if(!is_string($input[$field]))throw new Error('color_policy_invalid','Color fields must be text.',400);
+        $source=Utils::key($input['source_space'],32);
+        $target=Utils::key($input['target_space'],32);
+        $mode=Utils::key($input['hdr_mode'],32);
+        if(!in_array($source,$spaces,true)||!in_array($target,$spaces,true)
+            ||!in_array($mode,$modes,true))
+            throw new Error('color_policy_invalid','Color space/HDR mode is not approved.',400);
+        $tone=$input['tone_map']??'none';
+        if(!is_string($tone))throw new Error('color_policy_invalid','Tone-map profile must be text.',400);
+        $tone=Utils::key($tone,32);
+        if(!in_array($tone,$toneMaps,true)||($mode==='tone_map'&&$tone==='none'))
+            throw new Error('color_policy_invalid','Tone-map profile is invalid.',400);
+        $icc=$input['icc_hash'];
+        if(!is_string($icc)||($icc!==''&&!preg_match('/^[a-fA-F0-9]{64}$/D',$icc)))
+            throw new Error('icc_hash_invalid','ICC hash must be exact SHA-256 or empty.',400);
+        $icc=strtolower($icc);
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','policy_hash','privacy_class'] as $field)
+            if(($latest[$field]??null)!==($asset[$field]??null))
+                throw new Error('asset_state_changed','Asset changed during color policy.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Asset rights changed during color policy.',409);
+        $id=hash('sha256',$assetId.'|'.$asset['sha256'].'|'.$asset['object_version'].'|'
+            .$asset['policy_hash'].'|'.$asset['rights']['policy_hash']);
+        return RecordStore::put('color_policy',$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'source_space'=>$source,'target_space'=>$target,'hdr_mode'=>$mode,
+            'icc_hash'=>$icc,'tone_map'=>$tone,'created_at'=>Utils::now()]);
     }
     public static function audioQc(string $assetId,int $actor,array $thresholds=[]): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);if(!in_array($asset['media_class'],['audio','video'],true))throw new Error('audio_qc_not_applicable','Audio QC is only applicable to audio/video assets.',400);

@@ -21,4 +21,5 @@ subprocess.run(['php',str(root/'tests/review-round-169-content-safety-evidence.p
 subprocess.run(['php',str(root/'tests/review-round-170-encoding-plan-contracts.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-171-quality-score-evidence.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-172-codec-negotiation.php')],check=True)
+subprocess.run(['php',str(root/'tests/review-round-173-color-policy-evidence.php')],check=True)
 print('SOURCE INTEGRATION: PASS')
