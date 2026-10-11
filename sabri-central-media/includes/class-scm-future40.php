@@ -496,7 +496,25 @@ final class MediaOptimizationService {
         return $row;
     }
     public static function negotiateCodec(array $client,array $approved): string {
-        $client=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$client));$approved=array_values(array_map(fn($v)=>Utils::key((string)$v,32),$approved));foreach($approved as $codec)if(in_array($codec,$client,true))return $codec;throw new Error('codec_unavailable','No approved compatible codec is available.',406);
+        $normalize=static function(array $values): array {
+            if(!array_is_list($values)||count($values)>64)
+                throw new Error('codec_profile_invalid','Codec list shape/count invalid.',400);
+            $out=[];
+            foreach($values as $value){
+                if(!is_string($value)||strlen($value)<1||strlen($value)>32
+                    ||!preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D',$value))
+                    throw new Error('codec_profile_invalid','Codec identifier must be canonical text.',400);
+                $codec=strtolower($value);
+                if(in_array($codec,$out,true))
+                    throw new Error('codec_profile_invalid','Duplicate codec identifier.',400);
+                $out[]=$codec;
+            }
+            return $out;
+        };
+        $client=$normalize($client);$approved=$normalize($approved);
+        if($approved===[])throw new Error('codec_profile_invalid','Approved codec list required.',400);
+        foreach($approved as $codec)if(in_array($codec,$client,true))return $codec;
+        throw new Error('codec_unavailable','No approved compatible codec is available.',406);
     }
     public static function colorPolicy(string $assetId,int $actor,array $input): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');Future40Registry::asset($assetId,true);Utils::requireFields($input,['source_space','target_space','hdr_mode','icc_hash'],'color_policy_incomplete');$icc=Utils::text((string)$input['icc_hash'],64);if($icc!==''&&!preg_match('/^[a-f0-9]{64}$/',$icc))throw new Error('icc_hash_invalid','ICC hash is invalid.',400);
