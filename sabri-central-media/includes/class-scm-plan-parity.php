@@ -133,17 +133,46 @@ final class DegradedStateService {
 }
 
 final class PrivacyTelemetry {
-    private const ALLOWED_LABELS=['domain','media_class','privacy_class','provider','status','reason','operation','queue','result'];
-    private const FORBIDDEN=['user_id','actor_id','asset_id','owner_object','filename','email','phone','ip','query','message','clinical','content'];
-    public static function metric(string $name,float $value,array $labels=[]): array {
-        foreach($labels as $key=>$unused){
-            $key=Utils::key((string)$key,48);
-            if($key===''||in_array($key,self::FORBIDDEN,true)||!in_array($key,self::ALLOWED_LABELS,true))throw new Error('privacy_metric_label_denied','Media telemetry label is not privacy-minimal.',400,['label'=>$key]);
+    private const METRICS=[
+        'media_processing_completed','media_processing_failed','media_processing_duration_ms',
+        'media_delivery_completed','media_delivery_failed','media_delivery_latency_ms',
+        'media_upload_duration_ms','media_playback_startup_ms','media_playback_rebuffer_count',
+        'media_playback_error_count','media_transcode_duration_ms',
+    ];
+    private const LABEL_VALUES=[
+        'domain'=>['file00','file10','file11','file12','file17','file21','file22','cf01','cf04'],
+        'media_class'=>['image','audio','video','document'],
+        'privacy_class'=>['C0','C1','C2','C3','C4','C5'],
+        'provider'=>['primary','secondary','fallback','unknown'],
+        'status'=>['queued','processing','pending','ready','completed','failed','degraded','cancelled'],
+        'reason'=>['none','timeout','provider_unavailable','rights_expired','policy_denied','invalid_media','cancelled','unknown'],
+        'operation'=>['upload','scan','process','deliver','download','delete','reconcile','playback','transcode'],
+        'queue'=>['upload','processing','delivery','deletion','revocation'],
+        'result'=>['success','failure','retry','denied','degraded'],
+    ];
+    public static function validate(string $name,float $value,array $labels): array {
+        if(!in_array($name,self::METRICS,true))
+            throw new Error('privacy_metric_name_denied','Unapproved media telemetry metric.',400);
+        if(!is_finite($value)||$value<0||$value>1000000000)
+            throw new Error('privacy_metric_value_invalid','Media telemetry value is outside supported bounds.',400);
+        if((str_ends_with($name,'_count')||str_ends_with($name,'_completed')||str_ends_with($name,'_failed'))&&floor($value)!==$value)
+            throw new Error('privacy_metric_value_invalid','Count metrics require whole numbers.',400);
+        if(count($labels)>count(self::LABEL_VALUES))
+            throw new Error('privacy_metric_label_denied','Too many media telemetry labels.',400);
+        $safe=[];
+        foreach($labels as $key=>$labelValue){
+            if(!is_string($key)||!array_key_exists($key,self::LABEL_VALUES))
+                throw new Error('privacy_metric_label_denied','Media telemetry label is not approved.',400);
+            if(!is_string($labelValue)||!in_array($labelValue,self::LABEL_VALUES[$key],true))
+                throw new Error('privacy_metric_label_value_denied','Media telemetry label value is not an approved privacy-safe bucket.',400);
+            $safe[$key]=$labelValue;
         }
+        return [$name,$value,$safe];
+    }
+    public static function metric(string $name,float $value,array $labels=[]): array {
         return Observability::metric($name,$value,$labels);
     }
 }
-
 
 final class CronCursorEvidence {
     public static function last(?array $cursor,string $id,string $field): string {

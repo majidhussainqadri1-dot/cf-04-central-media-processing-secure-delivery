@@ -404,10 +404,12 @@ final class RestoreService {
 
 final class Observability {
     public static function metric(string $name,float $value,array $labels=[]): array {
-    $name=Utils::key($name,96);if($name===''||!is_finite($value))throw new Error('metric_invalid','Metric name and finite value are required.',400);
-    $safe=[];foreach($labels as $key=>$value){$key=Utils::key((string)$key,48);if($key===''||isset($safe[$key]))throw new Error('metric_label_invalid','Metric labels must be uniquely named.',400);$safe[$key]=Utils::text((string)$value,96);}
-    return RecordStore::put('metric',Utils::id('met'),['actor_id'=>0,'metric'=>$name,'value'=>$value,'labels'=>$safe,'status'=>'recorded','created_at'=>Utils::now()]);
-}
+        [$name,$value,$safe]=PrivacyTelemetry::validate($name,$value,$labels);
+        return RecordStore::put('metric',Utils::id('met'),[
+            'actor_id'=>0,'metric'=>$name,'value'=>$value,'labels'=>$safe,
+            'status'=>'recorded','created_at'=>Utils::now()
+        ]);
+    }
     public static function trace(string $operation,string $traceId,string $spanId,array $context=[]): array {
     $operation=Utils::key($operation,96);$traceId=Utils::text($traceId,96);$spanId=Utils::text($spanId,96);
     if($operation===''||$traceId===''||$spanId===''||!preg_match('/^[A-Za-z0-9._:-]{8,96}$/',$traceId)||!preg_match('/^[A-Za-z0-9._:-]{4,96}$/',$spanId))throw new Error('trace_identity_invalid','Trace operation and bounded trace/span identifiers are required.',400);
