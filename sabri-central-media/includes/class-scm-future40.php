@@ -1185,27 +1185,84 @@ final class DeliveryResilienceService {
         if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Offline grant authorization is stale.',409);
         return $claims;
     }
+    private static function resumeId(string $assetId,int $actor,string $deviceHash): string {
+        return hash('sha256',$actor.'|'.$assetId.'|'.$deviceHash);
+    }
+    private static function resumeDevice(mixed $value): string {
+        if(!is_string($value)||trim($value)===''||strlen($value)>191)
+            throw new Error('download_resume_device_required','A bounded device reference is required.',400);
+        $device=Utils::text($value,191);
+        if($device==='')throw new Error('download_resume_device_required','Device reference is empty.',400);
+        return Utils::hashReference($device);
+    }
     public static function resumeDownload(string $assetId,int $actor,array $state): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);$offset=max(0,(int)($state['offset']??0));
-        if($offset>(int)$asset['size'])throw new Error('download_offset_invalid','Download resume offset exceeds asset size.',416);
-        $device=Utils::text((string)($state['device_id']??''),191);
-        if($device==='')throw new Error('download_resume_device_required','A device reference is required for resumable download.',400);
-        $id=hash('sha256',$actor.'|'.$assetId);$existing=RecordStore::get('download_resume',$id);
-        return RecordStore::put('download_resume',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'offset'=>$offset,'device_hash'=>Utils::hashReference($device),'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'reauthorize'=>true,'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+        RuntimeGuard::requireReady();Auth::assertActor($actor);
+        if(array_diff(array_keys($state),['offset','device_id'])!==[])
+            throw new Error('download_resume_state_invalid','Download checkpoint contains unsupported fields.',400);
+        $asset=Future40Registry::asset($assetId,true);
+        $offset=Utils::integer($state['offset']??null,'download_offset_invalid',0,(int)$asset['size']);
+        $deviceHash=self::resumeDevice($state['device_id']??null);
+        RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_download',[
+            'asset'=>$asset,'actor_id'=>$actor,'mode'=>'resume_checkpoint',
+            'offset'=>$offset,'device_hash'=>$deviceHash]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Download checkpoint authorization is stale.',409);
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','policy_hash','privacy_class'] as $field)
+            if(($latest[$field]??null)!==($asset[$field]??null))
+                throw new Error('asset_state_changed','Asset changed before download checkpoint.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Rights changed before download checkpoint.',409);
+        $id=self::resumeId($assetId,$actor,$deviceHash);
+        $existing=RecordStore::get('download_resume',$id);
+        return RecordStore::put('download_resume',$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'offset'=>$offset,'device_hash'=>$deviceHash,
+            'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],'reauthorize'=>true,
+            'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
     }
     public static function resumeGrant(string $assetId,int $actor,string $sessionId,string $deviceId,array $context=[]): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor);$sessionId=Utils::text($sessionId,128);$deviceId=Utils::text($deviceId,191);
-        if($sessionId===''||$deviceId==='')throw new Error('download_resume_context_required','Session and device identity are required.',400);
-        $state=RecordStore::get('download_resume',hash('sha256',$actor.'|'.$assetId));
-        if(!$state||($state['status']??'')!=='active'||(int)$state['actor_id']!==$actor||!hash_equals((string)$state['device_hash'],Utils::hashReference($deviceId)))throw new Error('download_resume_state_invalid','Resumable download state is unavailable for this device.',403);
+        RuntimeGuard::requireReady();Auth::assertActor($actor);
+        if(trim($sessionId)===''||strlen($sessionId)>128)
+            throw new Error('download_resume_context_required','Session identity is invalid.',400);
+        $deviceHash=self::resumeDevice($deviceId);
+        $sessionId=Utils::text($sessionId,128);
+        if($sessionId==='')throw new Error('download_resume_context_required','Session identity is empty.',400);
+        $state=RecordStore::get('download_resume',self::resumeId($assetId,$actor,$deviceHash));
+        if(!$state||($state['status']??'')!=='active'
+            ||($state['actor_id']??null)!==$actor
+            ||($state['asset_id']??null)!==$assetId
+            ||!is_string($state['device_hash']??null)
+            ||!hash_equals($state['device_hash'],$deviceHash))
+            throw new Error('download_resume_state_invalid','Download state is unavailable for this device.',403);
         $asset=Future40Registry::asset($assetId,true);
-        if((int)($state['object_version']??0)!==(int)$asset['object_version']||!hash_equals((string)($state['policy_hash']??''),(string)$asset['policy_hash'])||!hash_equals((string)($state['rights_hash']??''),(string)$asset['rights']['policy_hash']))throw new Error('download_resume_state_stale','Resumable download state is stale.',409);
-        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'resume','offset'=>(int)$state['offset'],'device_hash'=>$state['device_hash'],'session_id'=>$sessionId,'context'=>Utils::redact($context)]);
-        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Resume authorization is stale.',409);
-        $audience=['type'=>'user','user_id'=>$actor];$deliveryContext=array_replace($context,['audience_type'=>'user','territory'=>$context['territory']??'GLOBAL']);
-        $token=DeliveryService::issue($assetId,null,$actor,'future40-resume',$audience,$deliveryContext,'download',['allow_ranges'=>true,'max_range_bytes'=>(int)$asset['policy']['delivery']['max_range_bytes']],$sessionId,300,20);
-        return ['asset_id'=>$assetId,'offset'=>(int)$state['offset'],'token'=>$token,'session_id'=>$sessionId,'device_hash'=>$state['device_hash'],'reauthorized'=>true];
+        if((int)($state['object_version']??0)!==(int)$asset['object_version']
+            ||!hash_equals((string)($state['policy_hash']??''),(string)$asset['policy_hash'])
+            ||!hash_equals((string)($state['rights_hash']??''),(string)$asset['rights']['policy_hash']))
+            throw new Error('download_resume_state_stale','Resumable download state is stale.',409);
+        $offset=$state['offset']??null;
+        if(!is_int($offset)||$offset<0||$offset>(int)$asset['size'])
+            throw new Error('download_offset_invalid','Stored download offset is invalid.',416);
+        RightsPolicy::assert($asset['rights'],'download',[
+            'territory'=>$context['territory']??'GLOBAL','audience_type'=>'user']);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',[
+            'asset'=>$asset,'actor_id'=>$actor,'mode'=>'resume','offset'=>$offset,
+            'device_hash'=>$deviceHash,'session_id'=>$sessionId,'context'=>Utils::redact($context)]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Resume authorization is stale.',409);
+        $audience=['type'=>'user','user_id'=>$actor];
+        $deliveryContext=array_replace($context,[
+            'audience_type'=>'user','territory'=>$context['territory']??'GLOBAL']);
+        $token=DeliveryService::issue($assetId,null,$actor,'future40-resume',$audience,
+            $deliveryContext,'download',
+            ['allow_ranges'=>true,'max_range_bytes'=>(int)$asset['policy']['delivery']['max_range_bytes']],
+            $sessionId,300,20);
+        return ['asset_id'=>$assetId,'offset'=>$offset,'token'=>$token,
+            'session_id'=>$sessionId,'device_hash'=>$deviceHash,'reauthorized'=>true];
     }
+
 }
 
 final class ResidencyCryptoService {
