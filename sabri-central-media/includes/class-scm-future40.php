@@ -1501,6 +1501,28 @@ final class ResidencyCryptoService {
             throw new Error($code,'Current storage encryption algorithm must remain approved.',400);
         return $alg;
     }
+    private static function cryptoPolicyAuditContext(array $row): array {
+        return [
+            'actor_id'=>$row['actor_id'],'policy_version'=>$row['version'],
+            'approved_algorithms'=>$row['approved_algorithms'],
+            'minimum_key_bits'=>$row['minimum_key_bits'],
+            'migration_window_seconds'=>$row['migration_window_seconds']
+        ];
+    }
+    private static function cryptoPolicyAuditKey(array $row): string {
+        return hash('sha256',Utils::canonicalJson([
+            'context'=>self::cryptoPolicyAuditContext($row),
+            'created_at'=>$row['created_at']
+        ]));
+    }
+    private static function reconcileCryptoPolicyAudit(array $row): void {
+        if(!array_key_exists('audit_key',$row))return; // Pre-round-184 legacy record.
+        if(!is_string($row['audit_key'])||!preg_match('/^[a-f0-9]{64}$/D',$row['audit_key'])
+            ||!hash_equals(self::cryptoPolicyAuditKey($row),$row['audit_key']))
+            throw new Error('crypto_policy_record_invalid','Stored crypto audit binding is invalid.',409);
+        Audit::recordOnce('future40_crypto_agility_policy_set',
+            self::cryptoPolicyAuditContext($row),'crypto-agility|'.$row['audit_key']);
+    }
     public static function cryptoAgility(int $actor,array $policy): array {
         RuntimeGuard::requireReady();
         Auth::assertActor($actor,'media_manage_providers');
@@ -1527,18 +1549,29 @@ final class ResidencyCryptoService {
                 throw new Error('crypto_policy_record_invalid','Stored crypto policy evidence is invalid.',409);
             }
         }
-        $row=RecordStore::put('crypto_agility',$id,[
+        if($existing!==null){
+            self::reconcileCryptoPolicyAudit($existing);
+            if($existing['approved_algorithms']===$alg
+                &&$existing['minimum_key_bits']===$bits
+                &&$existing['migration_window_seconds']===$window)
+                return $existing;
+        }
+        $row=[
             'actor_id'=>$actor,'status'=>'active','approved_algorithms'=>$alg,
             'minimum_key_bits'=>$bits,'migration_window_seconds'=>$window,
             'required_test_vector'=>true,
-            'created_at'=>$existing['created_at']??Utils::now()
-        ],$existing?(int)$existing['version']:0);
-        Audit::record('future40_crypto_agility_policy_set',[
-            'actor_id'=>$actor,'policy_version'=>$row['version'],
-            'approved_algorithms'=>$alg,'minimum_key_bits'=>$bits,
-            'migration_window_seconds'=>$window
-        ]);
-        return $row;
+            'created_at'=>$existing['created_at']??Utils::now(),
+            'version'=>$existing?(int)$existing['version']+1:1
+        ];
+        $row['audit_key']=self::cryptoPolicyAuditKey($row);
+        $auditContext=self::cryptoPolicyAuditContext($row);
+        $auditId='crypto-agility|'.$row['audit_key'];
+        // Durable intent is recorded before any security-policy mutation.
+        Audit::recordOnce('future40_crypto_agility_policy_intent',$auditContext,$auditId);
+        $saved=RecordStore::put('crypto_agility',$id,$row,$existing?(int)$existing['version']:0);
+        // A failed applied-event write is repaired on the next authorized call.
+        self::reconcileCryptoPolicyAudit($saved);
+        return $saved;
     }
 }
 
