@@ -1486,10 +1486,59 @@ final class ResidencyCryptoService {
         $id=hash('sha256',$assetId);$existing=RecordStore::get('asset_key_envelope',$id);
         return RecordStore::put('asset_key_envelope',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'key_id'=>$keyId,'algorithm'=>$algorithm,'asset_sha256'=>$asset['sha256'],'rotatable'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
     }
+    private static function cryptoAlgorithms(mixed $values,string $code): array {
+        if(!is_array($values)||!array_is_list($values)||$values===[]||count($values)>16)
+            throw new Error($code,'Crypto algorithms must be a bounded canonical list.',400);
+        $alg=[];
+        foreach($values as $value){
+            if(!is_string($value)||strlen($value)>32
+                ||!preg_match('/^[a-z][a-z0-9-]{0,31}$/D',$value)
+                ||in_array($value,$alg,true))
+                throw new Error($code,'Crypto algorithm identity is invalid or duplicated.',400);
+            $alg[]=$value;
+        }
+        if(!in_array('aes-256-gcm',$alg,true))
+            throw new Error($code,'Current storage encryption algorithm must remain approved.',400);
+        return $alg;
+    }
     public static function cryptoAgility(int $actor,array $policy): array {
-        Auth::assertActor($actor,'media_manage_providers');Utils::requireFields($policy,['approved_algorithms','minimum_key_bits','migration_window_seconds'],'crypto_policy_incomplete');$alg=array_values(array_unique(array_map(fn($v)=>Utils::key((string)$v,32),(array)$policy['approved_algorithms'])));
-        if($alg===[]||(int)$policy['minimum_key_bits']<128||(int)$policy['migration_window_seconds']<3600)throw new Error('crypto_policy_invalid','Crypto-agility policy is invalid.',400);
-        $id='global';$existing=RecordStore::get('crypto_agility',$id);return RecordStore::put('crypto_agility',$id,['actor_id'=>$actor,'status'=>'active','approved_algorithms'=>$alg,'minimum_key_bits'=>(int)$policy['minimum_key_bits'],'migration_window_seconds'=>(int)$policy['migration_window_seconds'],'required_test_vector'=>true,'created_at'=>$existing?($existing['created_at']??Utils::now()):Utils::now()],$existing?(int)$existing['version']:0);
+        RuntimeGuard::requireReady();
+        Auth::assertActor($actor,'media_manage_providers');
+        Utils::requireFields($policy,['approved_algorithms','minimum_key_bits','migration_window_seconds'],'crypto_policy_incomplete');
+        if(array_diff(array_keys($policy),['approved_algorithms','minimum_key_bits','migration_window_seconds'])!==[])
+            throw new Error('crypto_policy_invalid','Crypto policy contains unapproved fields.',400);
+        $alg=self::cryptoAlgorithms($policy['approved_algorithms'],'crypto_policy_invalid');
+        $bits=Utils::integer($policy['minimum_key_bits'],'crypto_policy_invalid',256,8192);
+        $window=Utils::integer($policy['migration_window_seconds'],'crypto_policy_invalid',3600,31536000);
+        $id='global';$existing=RecordStore::get('crypto_agility',$id);
+        if($existing!==null){
+            if(($existing['status']??null)!=='active'
+                ||($existing['required_test_vector']??null)!==true
+                ||!is_int($existing['actor_id']??null)||$existing['actor_id']<1)
+                throw new Error('crypto_policy_record_invalid','Stored crypto policy evidence is invalid.',409);
+            try {
+                self::cryptoAlgorithms($existing['approved_algorithms']??null,'crypto_policy_record_invalid');
+                Utils::integer($existing['minimum_key_bits']??null,'crypto_policy_record_invalid',128,8192);
+                Utils::integer($existing['migration_window_seconds']??null,'crypto_policy_record_invalid',3600,31536000);
+                $created=Utils::integer($existing['created_at']??null,'crypto_policy_record_invalid',1,PHP_INT_MAX);
+                if($created>Utils::now()+300)
+                    throw new Error('crypto_policy_record_invalid','Stored crypto policy timestamp is invalid.',409);
+            }catch(Error $e){
+                throw new Error('crypto_policy_record_invalid','Stored crypto policy evidence is invalid.',409);
+            }
+        }
+        $row=RecordStore::put('crypto_agility',$id,[
+            'actor_id'=>$actor,'status'=>'active','approved_algorithms'=>$alg,
+            'minimum_key_bits'=>$bits,'migration_window_seconds'=>$window,
+            'required_test_vector'=>true,
+            'created_at'=>$existing['created_at']??Utils::now()
+        ],$existing?(int)$existing['version']:0);
+        Audit::record('future40_crypto_agility_policy_set',[
+            'actor_id'=>$actor,'policy_version'=>$row['version'],
+            'approved_algorithms'=>$alg,'minimum_key_bits'=>$bits,
+            'migration_window_seconds'=>$window
+        ]);
+        return $row;
     }
 }
 
