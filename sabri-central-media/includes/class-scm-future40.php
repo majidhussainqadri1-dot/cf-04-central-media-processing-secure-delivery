@@ -753,8 +753,135 @@ final class RichMediaMetadataService {
 }
 
 final class SensitiveDataProtectionService {
-    public static function detect(string $assetId,int $actor,array $classes=[]): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_review_safety_signals');$asset=Future40Registry::asset($assetId,true);$result=FutureAdapterRegistry::call('future_021',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'classes'=>$classes]);$signals=(array)($result['signals']??[]);return RecordStore::put('sensitive_signal',hash('sha256',$assetId.'|'.Utils::canonicalJson($classes)),['actor_id'=>$actor,'status'=>$signals===[]?'clear':'review_required','asset_id'=>$assetId,'signals'=>Utils::redact($signals),'created_at'=>Utils::now()]);}
-    public static function redact(string $assetId,int $actor,array $regions,string $reason): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_review_safety_signals');$asset=Future40Registry::asset($assetId,true);if($regions===[]||Utils::text($reason,255)==='')throw new Error('redaction_request_invalid','Redaction regions and reason are required.',400);$decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',['asset'=>$asset,'actor_id'=>$actor,'transform'=>'redaction','reason'=>$reason,'regions'=>$regions]);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Redaction authorization is stale.',409);$result=FutureAdapterRegistry::call('future_022',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'regions'=>$regions,'reason'=>$reason]);$sha=Utils::text((string)($result['redacted_sha256']??''),64);if(!preg_match('/^[a-f0-9]{64}$/',$sha))throw new Error('redaction_output_invalid','Redaction derivative hash is invalid.',503);$row=RecordStore::put('redaction_derivative',Utils::id('redaction'),['actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,'source_sha256'=>$asset['sha256'],'redacted_sha256'=>$sha,'regions'=>Utils::redact($regions),'reason'=>Utils::text($reason,255),'object_version'=>$asset['object_version'],'created_at'=>Utils::now()]);Audit::record('future40_redaction_created',['asset_id'=>$assetId,'redaction_id'=>$row['id']]);return $row;}
+    private static function identity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null
+        ];
+    }
+    private static function authorize(array $asset,int $actor,string $operation): void {
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>$operation]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Sensitive-data authorization is stale.',409);
+    }
+    private static function kind(mixed $value,string $code): string {
+        if(!is_string($value)||!preg_match('/^[a-z][a-z0-9_]{0,31}$/D',$value))
+            throw new Error($code,'Sensitive-data category must be a canonical bounded identifier.',400);
+        return $value;
+    }
+    private static function region(mixed $value,string $code): array {
+        if(!is_array($value)||!array_is_list($value)||count($value)!==4)
+            throw new Error($code,'Region must be a four-element coordinate list.',400);
+        $box=[];
+        foreach($value as $coordinate){
+            if(!(is_int($coordinate)||is_float($coordinate))||!is_finite((float)$coordinate)
+                ||$coordinate<0||$coordinate>10000000)
+                throw new Error($code,'Region coordinates must be finite bounded numbers.',400);
+            $box[]=(float)$coordinate;
+        }
+        if($box[2]<=0||$box[3]<=0)
+            throw new Error($code,'Region dimensions must be positive.',400);
+        return $box;
+    }
+    private static function classes(array $classes): array {
+        if(!array_is_list($classes)||count($classes)>32)
+            throw new Error('sensitive_classes_invalid','Detection classes must be a bounded list.',400);
+        $safe=[];
+        foreach($classes as $class){
+            $kind=self::kind($class,'sensitive_classes_invalid');
+            if(in_array($kind,$safe,true))
+                throw new Error('sensitive_classes_invalid','Duplicate detection class.',400);
+            $safe[]=$kind;
+        }
+        return $safe;
+    }
+    private static function signals(mixed $signals): array {
+        if(!is_array($signals)||!array_is_list($signals)||count($signals)>256)
+            throw new Error('sensitive_signal_invalid','Detection signals must be a bounded list.',503);
+        $safe=[];
+        foreach($signals as $signal){
+            if(!is_array($signal)||array_diff(array_keys($signal),['type','confidence','region'])!==[])
+                throw new Error('sensitive_signal_invalid','Detection signal contains unapproved fields.',503);
+            $kind=self::kind($signal['type']??null,'sensitive_signal_invalid');
+            $confidence=$signal['confidence']??null;
+            if(!(is_int($confidence)||is_float($confidence))||!is_finite((float)$confidence)
+                ||$confidence<0||$confidence>1)
+                throw new Error('sensitive_signal_invalid','Detection confidence is invalid.',503);
+            $item=['type'=>$kind,'confidence'=>(float)$confidence];
+            if(array_key_exists('region',$signal))
+                $item['region']=self::region($signal['region'],'sensitive_signal_invalid');
+            $safe[]=$item;
+        }
+        return $safe;
+    }
+    private static function regions(array $regions): array {
+        if($regions===[]||!array_is_list($regions)||count($regions)>256)
+            throw new Error('redaction_request_invalid','Redaction regions must be a nonempty bounded list.',400);
+        $safe=[];
+        foreach($regions as $region){
+            if(!is_array($region)||array_diff(array_keys($region),['type','box','page'])!==[])
+                throw new Error('redaction_request_invalid','Redaction region contains unapproved fields.',400);
+            $item=['type'=>self::kind($region['type']??null,'redaction_request_invalid'),
+                'box'=>self::region($region['box']??null,'redaction_request_invalid')];
+            if(array_key_exists('page',$region))
+                $item['page']=Utils::integer($region['page'],'redaction_request_invalid',1,10000);
+            $safe[]=$item;
+        }
+        return $safe;
+    }
+    public static function detect(string $assetId,int $actor,array $classes=[]): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_review_safety_signals');
+        $asset=Future40Registry::asset($assetId,true);
+        self::authorize($asset,$actor,'sensitive_detection');
+        $safeClasses=self::classes($classes);
+        $result=FutureAdapterRegistry::call('future_021',[
+            'asset_id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'classes'=>$safeClasses]);
+        $signals=self::signals($result['signals']??null);
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during sensitive-data detection.',409);
+        self::authorize($latest,$actor,'sensitive_detection');
+        $id=hash('sha256',$assetId.'|'.Utils::canonicalJson(self::identity($asset)).'|'.Utils::canonicalJson($safeClasses));
+        return RecordStore::put('sensitive_signal',$id,[
+            'actor_id'=>$actor,'status'=>$signals===[]?'clear':'review_required','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_domain'=>$asset['owner_domain'],
+            'owner_object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],'classes'=>$safeClasses,
+            'signals'=>$signals,'created_at'=>Utils::now()]);
+    }
+    public static function redact(string $assetId,int $actor,array $regions,string $reason): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_review_safety_signals');
+        $asset=Future40Registry::asset($assetId,true);
+        $safeRegions=self::regions($regions);
+        if(trim($reason)===''||strlen($reason)>255)
+            throw new Error('redaction_request_invalid','Redaction reason must be nonempty bounded text.',400);
+        $safeReason=Utils::text($reason,255);
+        if($safeReason==='')throw new Error('redaction_request_invalid','Redaction reason is empty.',400);
+        self::authorize($asset,$actor,'redaction');
+        $result=FutureAdapterRegistry::call('future_022',[
+            'asset_id'=>$assetId,'sha256'=>$asset['sha256'],
+            'regions'=>$safeRegions,'reason'=>$safeReason]);
+        $raw=$result['redacted_sha256']??null;
+        if(!is_string($raw)||!preg_match('/^[a-fA-F0-9]{64}$/D',$raw))
+            throw new Error('redaction_output_invalid','Redaction derivative hash must be exactly SHA-256.',503);
+        $sha=strtolower($raw);
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during redaction.',409);
+        self::authorize($latest,$actor,'redaction');
+        $row=RecordStore::put('redaction_derivative',Utils::id('redaction'),[
+            'actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'redacted_sha256'=>$sha,
+            'regions'=>$safeRegions,'reason'=>$safeReason,'object_version'=>$asset['object_version'],
+            'owner_domain'=>$asset['owner_domain'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],'created_at'=>Utils::now()]);
+        Audit::record('future40_redaction_created',['asset_id'=>$assetId,'redaction_id'=>$row['id']]);
+        return $row;
+    }
 }
 
 final class DeliveryResilienceService {
