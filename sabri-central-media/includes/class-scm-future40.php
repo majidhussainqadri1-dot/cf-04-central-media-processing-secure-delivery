@@ -1146,43 +1146,115 @@ final class DeliveryResilienceService {
         return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,
             'retry'=>'exponential-jitter','checkpoint_each_part'=>true];
     }
+    private static function offlineIdentity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null
+        ];
+    }
     public static function offlineGrant(string $assetId,int $actor,int $ttlSeconds): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);
-        if($asset['privacy_class']==='C0')throw new Error('offline_package_unnecessary','Use normal public delivery for C0 assets.',400);
+        RuntimeGuard::requireReady();Auth::assertActor($actor);
+        if($ttlSeconds<60||$ttlSeconds>86400)
+            throw new Error('offline_grant_ttl_invalid','Offline grant TTL is outside approved bounds.',400);
+        $asset=Future40Registry::asset($assetId,true);
+        if($asset['privacy_class']==='C0')
+            throw new Error('offline_package_unnecessary','Use normal public delivery for C0 assets.',400);
         RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);
-        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package','context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
-        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Offline-package authorization is stale.',409);
-        $ttl=max(60,min(86400,$ttlSeconds));$id=Utils::id('offline');$kid=Keyring::activeId();
-        $claims=['type'=>'offline_package','grant_id'=>$id,'asset_id'=>$assetId,'actor_id'=>$actor,'purpose'=>$asset['policy']['purpose'],'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'object_version'=>$asset['object_version']];
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',[
+            'asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package',
+            'context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Offline-package authorization is stale.',409);
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::offlineIdentity($latest)!==self::offlineIdentity($asset))
+            throw new Error('asset_state_changed','Asset changed before offline grant issuance.',409);
+        $id=Utils::id('offline');$kid=Keyring::activeId();
+        $claims=['type'=>'offline_package','grant_id'=>$id,'asset_id'=>$assetId,
+            'actor_id'=>$actor,'purpose'=>$asset['policy']['purpose'],
+            'privacy_class'=>$asset['privacy_class'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],
+            'object_version'=>$asset['object_version']];
         $aad='offline-package|'.$id.'|'.$actor;
         $envelope=Crypto::encryptChunk(Utils::canonicalJson($claims),$aad,$kid);
-        $token=Crypto::sign(['type'=>'offline_package_envelope','grant_id'=>$id,'encryption_kid'=>$kid,'envelope'=>$envelope],$ttl);
-        $expires=Utils::now()+$ttl;
-        RecordStore::put('offline_package_grant',$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'object_version'=>$asset['object_version'],'token_hash'=>hash('sha256',$token),'encryption_kid'=>$kid,'expires_at'=>$expires,'created_at'=>Utils::now()],0);
+        $token=Crypto::sign([
+            'type'=>'offline_package_envelope','grant_id'=>$id,
+            'encryption_kid'=>$kid,'envelope'=>$envelope],$ttlSeconds);
+        $expires=Utils::now()+$ttlSeconds;
+        RecordStore::put('offline_package_grant',$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'purpose'=>$asset['policy']['purpose'],'privacy_class'=>$asset['privacy_class'],
+            'token_hash'=>hash('sha256',$token),'encryption_kid'=>$kid,
+            'expires_at'=>$expires,'created_at'=>Utils::now()],0);
         return ['grant_id'=>$id,'token'=>$token,'expires_at'=>$expires,'encrypted'=>true];
     }
     public static function verifyOfflineGrant(string $token,int $actor): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor);$outer=Crypto::verify($token);
+        RuntimeGuard::requireReady();Auth::assertActor($actor);
+        $outer=Crypto::verify($token);
         Utils::requireFields($outer,['type','grant_id','encryption_kid','envelope'],'offline_grant_invalid');
-        if($outer['type']!=='offline_package_envelope')throw new Error('offline_grant_invalid','Offline grant type is invalid.',403);
-        $id=Utils::text((string)$outer['grant_id'],96);$record=RecordStore::get('offline_package_grant',$id);
-        if(!$record||($record['status']??'')!=='active'||(int)($record['expires_at']??0)<=Utils::now())throw new Error('offline_grant_unavailable','Offline grant is unavailable or expired.',403);
-        if((int)$record['actor_id']!==$actor||!hash_equals((string)$record['token_hash'],hash('sha256',$token)))throw new Error('offline_grant_binding_mismatch','Offline grant binding mismatch.',403);
-        $kid=Utils::key((string)$outer['encryption_kid'],64);
-        if($kid===''||!hash_equals((string)$record['encryption_kid'],$kid))throw new Error('offline_grant_binding_mismatch','Offline grant key binding mismatch.',403);
+        if($outer['type']!=='offline_package_envelope'
+            ||!is_string($outer['grant_id'])||!is_string($outer['encryption_kid'])
+            ||!is_array($outer['envelope']))
+            throw new Error('offline_grant_invalid','Offline grant envelope contract is invalid.',403);
+        $id=Utils::text($outer['grant_id'],96);
+        if($id===''||$id!==$outer['grant_id'])
+            throw new Error('offline_grant_invalid','Offline grant identity is invalid.',403);
+        $record=RecordStore::get('offline_package_grant',$id);
+        if(!$record||($record['status']??'')!=='active'
+            ||(int)($record['expires_at']??0)<=Utils::now())
+            throw new Error('offline_grant_unavailable','Offline grant is unavailable or expired.',403);
+        if(($record['actor_id']??null)!==$actor
+            ||!is_string($record['token_hash']??null)
+            ||!hash_equals($record['token_hash'],hash('sha256',$token)))
+            throw new Error('offline_grant_binding_mismatch','Offline grant binding mismatch.',403);
+        $kid=Utils::key($outer['encryption_kid'],64);
+        if($kid===''||$kid!==$outer['encryption_kid']
+            ||!hash_equals((string)$record['encryption_kid'],$kid))
+            throw new Error('offline_grant_binding_mismatch','Offline grant key binding mismatch.',403);
         try{
-            $plain=Crypto::decryptChunk((array)$outer['envelope'],'offline-package|'.$id.'|'.$actor,$kid);
+            $plain=Crypto::decryptChunk($outer['envelope'],'offline-package|'.$id.'|'.$actor,$kid);
             $claims=json_decode($plain,true,32,JSON_THROW_ON_ERROR);
-        }catch(Error $e){throw $e;}catch(\Throwable){throw new Error('offline_grant_invalid','Offline grant envelope is invalid.',403);}
-        if(!is_array($claims))throw new Error('offline_grant_invalid','Offline grant claims are invalid.',403);
-        Utils::requireFields($claims,['asset_id','actor_id','purpose','privacy_class','policy_hash','rights_hash','object_version'],'offline_grant_invalid');
-        if((int)$claims['actor_id']!==$actor)throw new Error('offline_grant_binding_mismatch','Offline grant actor mismatch.',403);
-        $asset=Future40Registry::asset((string)$claims['asset_id'],true);
-        if(!hash_equals((string)$claims['purpose'],(string)$asset['policy']['purpose'])||!hash_equals((string)$claims['privacy_class'],(string)$asset['privacy_class'])||!hash_equals((string)$claims['policy_hash'],(string)$asset['policy_hash']))throw new Error('offline_grant_state_changed','Offline grant asset state changed.',403);
-        if((int)$claims['object_version']!==(int)$asset['object_version']||!hash_equals((string)$claims['rights_hash'],(string)$asset['rights']['policy_hash'])||(int)$record['object_version']!==(int)$asset['object_version'])throw new Error('offline_grant_state_changed','Offline grant owner/rights version changed.',403);
+        }catch(Error $e){throw $e;}catch(\Throwable){
+            throw new Error('offline_grant_invalid','Offline grant envelope is invalid.',403);
+        }
+        if(!is_array($claims))
+            throw new Error('offline_grant_invalid','Offline grant claims are invalid.',403);
+        Utils::requireFields($claims,[
+            'type','grant_id','asset_id','actor_id','purpose','privacy_class',
+            'policy_hash','rights_hash','object_version'],'offline_grant_invalid');
+        if(($claims['type']??null)!=='offline_package'
+            ||($claims['grant_id']??null)!==$id
+            ||($claims['actor_id']??null)!==$actor
+            ||!is_string($claims['asset_id']??null)
+            ||($record['asset_id']??null)!==$claims['asset_id'])
+            throw new Error('offline_grant_binding_mismatch','Offline grant claims do not match the record.',403);
+        $asset=Future40Registry::asset($claims['asset_id'],true);
+        foreach(['purpose','privacy_class','policy_hash','rights_hash'] as $field){
+            $expected=$field==='purpose'?$asset['policy']['purpose']:
+                ($field==='rights_hash'?$asset['rights']['policy_hash']:$asset[$field]);
+            if(!is_string($claims[$field]??null)
+                ||!is_string($record[$field]??null)
+                ||!hash_equals((string)$expected,$claims[$field])
+                ||!hash_equals((string)$expected,$record[$field]))
+                throw new Error('offline_grant_state_changed','Offline grant state has changed.',403);
+        }
+        if(($claims['object_version']??null)!==$asset['object_version']
+            ||($record['object_version']??null)!==$asset['object_version']
+            ||($record['source_sha256']??null)!==$asset['sha256'])
+            throw new Error('offline_grant_state_changed','Offline grant source version changed.',403);
         RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audience_type'=>'user']);
-        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package_consume','context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
-        if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Offline grant authorization is stale.',409);
+        $decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',[
+            'asset'=>$asset,'actor_id'=>$actor,'mode'=>'offline_package_consume',
+            'context'=>['audience_type'=>'user','territory'=>'GLOBAL']]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Offline grant authorization is stale.',409);
+        $latest=Future40Registry::asset($claims['asset_id'],true);
+        if(self::offlineIdentity($latest)!==self::offlineIdentity($asset))
+            throw new Error('offline_grant_state_changed','Offline grant changed during consume authorization.',403);
         return $claims;
     }
     private static function resumeId(string $assetId,int $actor,string $deviceHash): string {
