@@ -163,6 +163,38 @@ final class RevocationDispatchService {
         $digest=hash('sha256',Utils::canonicalJson($fields));
         return $fields+['id'=>hash('sha256','nonterminal-revocation|'.$digest),'event_id'=>'scm-revoked-'.substr($digest,0,48)];
     }
+    private static function validSupersessionEvidence(array $row): bool {
+        $hasHistory=array_key_exists('supersession_history',$row);
+        $hasCount=array_key_exists('supersession_count',$row);
+        if(!$hasHistory&&!$hasCount)return ($row['status']??null)!=='superseded';
+        if(!$hasHistory||!$hasCount||!is_int($row['supersession_count'])
+            ||$row['supersession_count']<1||!is_array($row['supersession_history'])
+            ||!array_is_list($row['supersession_history']))return false;
+        $history=$row['supersession_history'];$count=$row['supersession_count'];
+        if(count($history)!==min($count,32))return false;
+        $reasons=['asset_missing','owner_changed','rights_changed',
+            'asset_terminal','policy_changed','policy_unbound'];
+        $previousVersion=0;$previousAt=0;
+        foreach($history as $entry){
+            if(!is_array($entry)||count($entry)!==3
+                ||!array_key_exists('at',$entry)||!array_key_exists('reason',$entry)
+                ||!array_key_exists('prior_version',$entry)
+                ||!is_int($entry['at'])||$entry['at']<($row['created_at']??1)
+                ||$entry['at']<$previousAt
+                ||!in_array($entry['reason'],$reasons,true)
+                ||!is_int($entry['prior_version'])||$entry['prior_version']<1
+                ||$entry['prior_version']<=$previousVersion
+                ||$entry['prior_version']>=($row['version']??0))return false;
+            $previousVersion=$entry['prior_version'];$previousAt=$entry['at'];
+        }
+        if(($row['status']??null)==='superseded'){
+            $last=$history[count($history)-1];
+            return ($row['superseded_at']??null)===$last['at']
+                &&($row['superseded_reason']??null)===$last['reason'];
+        }
+        return !array_key_exists('superseded_at',$row)
+            &&!array_key_exists('superseded_reason',$row);
+    }
     private static function dispatch(array $row): array {
         $id=$row['id']??null;
         $fields=[];
@@ -197,8 +229,7 @@ final class RevocationDispatchService {
                 ||!is_int($row['superseded_at']??null)||$row['superseded_at']<1
                 ||!in_array($row['superseded_reason']??null,
                     ['asset_missing','owner_changed','rights_changed','asset_terminal','policy_changed','policy_unbound'],true)))
-            ||(isset($row['supersession_history'])&&(!is_array($row['supersession_history'])
-                ||!array_is_list($row['supersession_history'])||count($row['supersession_history'])>32)))
+            ||!self::validSupersessionEvidence($row))
             throw new Error('revocation_dispatch_invalid','Stored revocation dispatch evidence is invalid.',500);
         if($row['projection_revocation_id']!==''){
             $projection=RecordStore::get('projection_revocation',$row['projection_revocation_id']);
@@ -253,7 +284,10 @@ final class RevocationDispatchService {
             $history=$row['supersession_history']??[];
             $history[]=['at'=>$row['superseded_at'],'reason'=>$stale,'prior_version'=>(int)$row['version']];
             $row['supersession_history']=array_slice($history,-32);
-            $row['supersession_count']=(int)($row['supersession_count']??0)+1;
+            $count=$row['supersession_count']??0;
+            if(!is_int($count)||$count===PHP_INT_MAX)
+                throw new Error('revocation_dispatch_invalid','Supersession counter exhausted.',500);
+            $row['supersession_count']=$count+1;
             return RecordStore::put('revocation_dispatch',$id,$row,(int)$row['version']);
         }
         if(!function_exists('do_action'))
