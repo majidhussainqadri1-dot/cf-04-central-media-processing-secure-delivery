@@ -77,7 +77,29 @@ final class AccessibilityMetadataService {
     }
 
     public static function forAsset(string $assetId): array {
-        return array_values(array_filter(RecordStore::all('accessibility_metadata',0,null,100000),fn($row)=>($row['asset_id']??'')===$assetId));
+        RuntimeGuard::requireReady(['streaming']);$actor=Auth::requireUser();
+        $asset=Future40Registry::asset($assetId,true);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_delivery',
+            ['asset'=>$asset,'actor_id'=>$actor,'purpose'=>'accessibility_metadata']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Accessibility metadata read authorization is stale.',409);
+        $rows=array_values(array_filter(RecordStore::all('accessibility_metadata',0,null,100000),
+            fn($row)=>($row['asset_id']??null)===$assetId
+                &&($row['status']??null)==='approved'
+                &&is_int($row['owner_object_version']??null)
+                &&$row['owner_object_version']===$asset['object_version']
+                &&is_string($row['policy_hash']??null)
+                &&hash_equals((string)$asset['policy_hash'],$row['policy_hash'])
+                &&is_string($row['rights_hash']??null)
+                &&hash_equals((string)$asset['rights']['policy_hash'],$row['rights_hash'])));
+        $latest=Future40Registry::asset($assetId,true);
+        if(($latest['object_version']??null)!==($asset['object_version']??null)
+            ||($latest['policy_hash']??null)!==($asset['policy_hash']??null)
+            ||($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null)
+            ||($latest['owner_domain']??null)!==($asset['owner_domain']??null)
+            ||($latest['owner_object']??null)!==($asset['owner_object']??null))
+            throw new Error('asset_state_changed','Asset changed during accessibility metadata projection.',409);
+        return $rows;
     }
 }
 

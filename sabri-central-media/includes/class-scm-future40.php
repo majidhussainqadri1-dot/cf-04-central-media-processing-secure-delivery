@@ -214,16 +214,94 @@ final class MediaOptimizationService {
 }
 
 final class RichMediaMetadataService {
-    private static function putTrack(string $type,string $assetId,int $actor,array $input,array $required): array {RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);Utils::requireFields($input,$required,'track_metadata_incomplete');$id=hash('sha256',$assetId.'|'.$type.'|'.Utils::canonicalJson($input));return RecordStore::put($type,$id,['actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,'owner_object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'data'=>Utils::redact($input),'created_at'=>Utils::now()]);}
+    private static function identity(array $asset): array {
+        return [
+            'id'=>$asset['id']??null,'status'=>$asset['status']??null,
+            'sha256'=>$asset['sha256']??null,'owner_domain'=>$asset['owner_domain']??null,
+            'owner_object'=>$asset['owner_object']??null,'object_version'=>$asset['object_version']??null,
+            'privacy_class'=>$asset['privacy_class']??null,'policy_hash'=>$asset['policy_hash']??null,
+            'rights_hash'=>$asset['rights']['policy_hash']??null,
+        ];
+    }
+    private static function authorizeTrack(array $asset,int $actor,string $type): void {
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>$type]);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Owning-domain track authorization is stale.',409);
+    }
+    private static function putTrack(string $type,string $assetId,int $actor,array $input,array $required,?array $expectedAsset=null): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        if($expectedAsset!==null&&self::identity($asset)!==self::identity($expectedAsset))
+            throw new Error('asset_state_changed','Asset changed during track generation.',409);
+        self::authorizeTrack($asset,$actor,$type);
+        Utils::requireFields($input,$required,'track_metadata_incomplete');
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed before track persistence.',409);
+        $id=hash('sha256',$assetId.'|'.$type.'|'.Utils::canonicalJson($input));
+        return RecordStore::put($type,$id,[
+            'actor_id'=>$actor,'status'=>'active','asset_id'=>$assetId,
+            'owner_object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],'data'=>Utils::redact($input),
+            'created_at'=>Utils::now()
+        ]);
+    }
     private static function hash256(mixed $value,string $code): string {$hash=strtolower(Utils::text((string)$value,64));if(!preg_match('/^[a-f0-9]{64}$/',$hash))throw new Error($code,'Track integrity hash must be a SHA-256 value.',400);return $hash;}
     private static function locale(mixed $value): string {$locale=Utils::key((string)$value,32);if($locale==='')throw new Error('track_locale_invalid','Track locale is required.',400);return $locale;}
-    public static function smartPreview(string $assetId,int $actor,array $profile): array {$asset=Future40Registry::asset($assetId,true);$result=FutureAdapterRegistry::call('future_014',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'profile'=>$profile]);$poster=Utils::text((string)($result['poster_ref']??''),191);$storyboard=Utils::text((string)($result['storyboard_ref']??''),191);if($poster===''||$storyboard==='')throw new Error('smart_preview_invalid','Smart preview requires usable poster and storyboard references.',503);return self::putTrack('smart_preview',$assetId,$actor,['poster_ref'=>$poster,'storyboard_ref'=>$storyboard,'selection'=>(array)($result['selection']??[])],['poster_ref','storyboard_ref']);}
+    public static function smartPreview(string $assetId,int $actor,array $profile): array {
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        self::authorizeTrack($asset,$actor,'smart_preview');
+        $result=FutureAdapterRegistry::call('future_014',
+            ['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'profile'=>$profile]);
+        $poster=Utils::text((string)($result['poster_ref']??''),191);
+        $storyboard=Utils::text((string)($result['storyboard_ref']??''),191);
+        if($poster===''||$storyboard==='')
+            throw new Error('smart_preview_invalid','Smart preview requires usable poster and storyboard references.',503);
+        return self::putTrack('smart_preview',$assetId,$actor,
+            ['poster_ref'=>$poster,'storyboard_ref'=>$storyboard,'selection'=>(array)($result['selection']??[])],
+            ['poster_ref','storyboard_ref'],$asset);
+    }
     public static function chapters(string $assetId,int $actor,array $chapters): array {if($chapters===[])throw new Error('chapter_manifest_empty','At least one chapter is required.',400);$last=-1;$safe=[];foreach($chapters as $chapter){$raw=$chapter['start_ms']??null;if(!(is_int($raw)||(is_string($raw)&&preg_match('/^\d+$/',$raw))))throw new Error('chapter_manifest_invalid','Chapter timecode must be a non-negative integer.',400);$start=(int)$raw;$title=Utils::text((string)($chapter['title']??''),160);if($start<0||$start<=$last||$title==='')throw new Error('chapter_manifest_invalid','Chapter order/title is invalid.',400);$safe[]=['start_ms'=>$start,'title'=>$title];$last=$start;}return self::putTrack('chapter_manifest',$assetId,$actor,['chapters'=>$safe],['chapters']);}
     public static function captionTrack(string $assetId,int $actor,array $input): array {$kind=Utils::key((string)($input['kind']??''),32);if(!in_array($kind,['standard','sdh','forced'],true))throw new Error('caption_kind_invalid','Caption kind is invalid.',400);$input['kind']=$kind;$input['locale']=self::locale($input['locale']??'');$input['source']=Utils::key((string)($input['source']??''),64);if($input['source']==='')throw new Error('caption_source_invalid','Caption provenance source is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','caption_hash_invalid');return self::putTrack('rich_caption',$assetId,$actor,$input,['locale','kind','content_hash','source']);}
     public static function audioDescription(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Audio-description track reference is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','audio_description_hash_invalid');return self::putTrack('audio_description',$assetId,$actor,$input,['locale','track_ref','content_hash']);}
     public static function signLanguage(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Sign-language track reference is required.',400);$input['synchronization_hash']=self::hash256($input['synchronization_hash']??'','sign_language_hash_invalid');return self::putTrack('sign_language_track',$assetId,$actor,$input,['locale','track_ref','synchronization_hash']);}
     public static function ocrMap(string $assetId,int $actor,array $pages): array {if($pages===[])throw new Error('ocr_map_empty','OCR coordinate map is empty.',400);foreach($pages as $page){if((int)($page['page']??0)<1||!isset($page['items'])||!is_array($page['items']))throw new Error('ocr_map_invalid','OCR page map is invalid.',400);foreach($page['items'] as $item){$confidence=(float)($item['confidence']??NAN);$box=(array)($item['box']??[]);if(!is_finite($confidence)||$confidence<0||$confidence>1||count($box)!==4)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);foreach($box as $coordinate){$coordinate=(float)$coordinate;if(!is_finite($coordinate)||$coordinate<0.0||$coordinate>1.0)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);}}}return self::putTrack('ocr_coordinate_map',$assetId,$actor,['pages'=>$pages],['pages']);}
-    public static function accessibilityManifest(string $assetId): array {$asset=Future40Registry::asset($assetId,true);$collect=[];foreach(['accessibility_metadata','rich_caption','audio_description','sign_language_track','ocr_coordinate_map','chapter_manifest'] as $type)$collect[$type]=array_values(array_filter(RecordStore::all($type,0,null,100000),fn($r)=>($r['asset_id']??'')===$assetId));$manifest=['asset_id'=>$assetId,'privacy_class'=>$asset['privacy_class'],'object_version'=>$asset['object_version'],'tracks'=>$collect,'complete'=>($collect['accessibility_metadata']!==[]||$collect['rich_caption']!==[]),'generated_at'=>Utils::now()];$manifest['manifest_hash']=hash('sha256',Utils::canonicalJson($manifest));return $manifest;}
+    private static function currentTrack(array $row,array $asset,string $status): bool {
+        return ($row['asset_id']??null)===($asset['id']??null)
+            &&($row['status']??null)===$status
+            &&is_int($row['owner_object_version']??null)
+            &&$row['owner_object_version']===$asset['object_version']
+            &&is_string($row['policy_hash']??null)
+            &&hash_equals((string)$asset['policy_hash'],$row['policy_hash'])
+            &&is_string($row['rights_hash']??null)
+            &&hash_equals((string)$asset['rights']['policy_hash'],$row['rights_hash']);
+    }
+    public static function accessibilityManifest(string $assetId): array {
+        RuntimeGuard::requireReady();$actor=Auth::requireUser();
+        $asset=Future40Registry::asset($assetId,true);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_delivery',
+            ['asset'=>$asset,'actor_id'=>$actor,'purpose'=>'accessibility_manifest']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','Manifest authorization is stale.',409);
+        $collect=[];
+        foreach(['accessibility_metadata','rich_caption','audio_description','sign_language_track','ocr_coordinate_map','chapter_manifest'] as $type){
+            $status=$type==='accessibility_metadata'?'approved':'active';
+            $collect[$type]=array_values(array_filter(RecordStore::all($type,0,null,100000),
+                fn($row)=>self::currentTrack($row,$asset,$status)));
+        }
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during manifest projection.',409);
+        $manifest=['asset_id'=>$assetId,'privacy_class'=>$asset['privacy_class'],
+            'object_version'=>$asset['object_version'],'policy_hash'=>$asset['policy_hash'],
+            'rights_hash'=>$asset['rights']['policy_hash'],'tracks'=>$collect,
+            'complete'=>($collect['accessibility_metadata']!==[]||$collect['rich_caption']!==[])];
+        $manifest['manifest_hash']=hash('sha256',Utils::canonicalJson($manifest));
+        $manifest['generated_at']=Utils::now();
+        return $manifest;
+    }
 }
 
 final class SensitiveDataProtectionService {
