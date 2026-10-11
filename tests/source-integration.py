@@ -15,4 +15,5 @@ for n in range(1,7): assert f'CF04-NJ-{n:02d}' in matrix
 assert "define('SCM_RUNTIME_ENABLED',false)" in plugin
 subprocess.run(['php',str(root/'tests/review-round-151-deletion-integrity.php')],check=True)
 subprocess.run(['php',str(root/'tests/review-round-166-ocr-chapter-contracts.php')],check=True)
+subprocess.run(['php',str(root/'tests/review-round-167-track-metadata-contracts.php')],check=True)
 print('SOURCE INTEGRATION: PASS')

@@ -236,6 +236,17 @@ final class RichMediaMetadataService {
             throw new Error('asset_state_changed','Asset changed during track generation.',409);
         self::authorizeTrack($asset,$actor,$type);
         Utils::requireFields($input,$required,'track_metadata_incomplete');
+        $allowed=match($type){
+            'smart_preview'=>['poster_ref','storyboard_ref','selection'],
+            'chapter_manifest'=>['chapters'],
+            'rich_caption'=>['locale','kind','content_hash','source'],
+            'audio_description'=>['locale','track_ref','content_hash'],
+            'sign_language_track'=>['locale','track_ref','synchronization_hash'],
+            'ocr_coordinate_map'=>['pages'],
+            default=>[]
+        };
+        if($allowed===[]||array_diff(array_keys($input),$allowed)!==[])
+            throw new Error('track_metadata_invalid','Track metadata contains unsupported fields.',400);
         $latest=Future40Registry::asset($assetId,true);
         if(self::identity($latest)!==self::identity($asset))
             throw new Error('asset_state_changed','Asset changed before track persistence.',409);
@@ -247,20 +258,38 @@ final class RichMediaMetadataService {
             'created_at'=>Utils::now()
         ]);
     }
-    private static function hash256(mixed $value,string $code): string {$hash=strtolower(Utils::text((string)$value,64));if(!preg_match('/^[a-f0-9]{64}$/',$hash))throw new Error($code,'Track integrity hash must be a SHA-256 value.',400);return $hash;}
-    private static function locale(mixed $value): string {$locale=Utils::key((string)$value,32);if($locale==='')throw new Error('track_locale_invalid','Track locale is required.',400);return $locale;}
+    private static function hash256(mixed $value,string $code): string {
+        if(!is_string($value)||!preg_match('/^[a-fA-F0-9]{64}$/D',$value))
+            throw new Error($code,'Track integrity hash must be exactly SHA-256.',400);
+        return strtolower($value);
+    }
+    private static function locale(mixed $value): string {
+        if(!is_string($value))throw new Error('track_locale_invalid','Track locale must be text.',400);
+        $locale=Utils::key($value,32);
+        if(!preg_match('/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/D',$locale))
+            throw new Error('track_locale_invalid','Track locale is invalid.',400);
+        return $locale;
+    }
+    private static function trackRef(mixed $value,string $code): string {
+        if(!is_string($value)||!preg_match('/^(?:asset|derivative):[A-Za-z0-9._:-]{1,160}$/D',$value))
+            throw new Error($code,'Track reference must be an internal asset or derivative reference.',400);
+        return $value;
+    }
     public static function smartPreview(string $assetId,int $actor,array $profile): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
         $asset=Future40Registry::asset($assetId,true);
         self::authorizeTrack($asset,$actor,'smart_preview');
         $result=FutureAdapterRegistry::call('future_014',
             ['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'profile'=>$profile]);
-        $poster=Utils::text((string)($result['poster_ref']??''),191);
-        $storyboard=Utils::text((string)($result['storyboard_ref']??''),191);
-        if($poster===''||$storyboard==='')
-            throw new Error('smart_preview_invalid','Smart preview requires usable poster and storyboard references.',503);
+        $poster=self::trackRef($result['poster_ref']??null,'smart_preview_invalid');
+        $storyboard=self::trackRef($result['storyboard_ref']??null,'smart_preview_invalid');
+        $selection=$result['selection']??[];
+        if(!is_array($selection)||array_diff(array_keys($selection),['method'])!==[]
+            ||(array_key_exists('method',$selection)&&(!is_string($selection['method'])
+                ||!in_array($selection['method'],['scene-change','first-frame','frame-sampling'],true))))
+            throw new Error('smart_preview_invalid','Smart-preview selection metadata is invalid.',503);
         return self::putTrack('smart_preview',$assetId,$actor,
-            ['poster_ref'=>$poster,'storyboard_ref'=>$storyboard,'selection'=>(array)($result['selection']??[])],
+            ['poster_ref'=>$poster,'storyboard_ref'=>$storyboard,'selection'=>$selection],
             ['poster_ref','storyboard_ref'],$asset);
     }
     public static function chapters(string $assetId,int $actor,array $chapters): array {
@@ -276,9 +305,31 @@ final class RichMediaMetadataService {
         }
         return self::putTrack('chapter_manifest',$assetId,$actor,['chapters'=>$safe],['chapters']);
     }
-    public static function captionTrack(string $assetId,int $actor,array $input): array {$kind=Utils::key((string)($input['kind']??''),32);if(!in_array($kind,['standard','sdh','forced'],true))throw new Error('caption_kind_invalid','Caption kind is invalid.',400);$input['kind']=$kind;$input['locale']=self::locale($input['locale']??'');$input['source']=Utils::key((string)($input['source']??''),64);if($input['source']==='')throw new Error('caption_source_invalid','Caption provenance source is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','caption_hash_invalid');return self::putTrack('rich_caption',$assetId,$actor,$input,['locale','kind','content_hash','source']);}
-    public static function audioDescription(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Audio-description track reference is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','audio_description_hash_invalid');return self::putTrack('audio_description',$assetId,$actor,$input,['locale','track_ref','content_hash']);}
-    public static function signLanguage(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Sign-language track reference is required.',400);$input['synchronization_hash']=self::hash256($input['synchronization_hash']??'','sign_language_hash_invalid');return self::putTrack('sign_language_track',$assetId,$actor,$input,['locale','track_ref','synchronization_hash']);}
+    public static function captionTrack(string $assetId,int $actor,array $input): array {
+        if(!is_string($input['kind']??null))throw new Error('caption_kind_invalid','Caption kind must be text.',400);
+        $kind=Utils::key($input['kind'],32);
+        if(!in_array($kind,['standard','sdh','forced'],true))
+            throw new Error('caption_kind_invalid','Caption kind is invalid.',400);
+        $input['kind']=$kind;$input['locale']=self::locale($input['locale']??null);
+        if(!is_string($input['source']??null))throw new Error('caption_source_invalid','Caption source must be text.',400);
+        $input['source']=Utils::key($input['source'],64);
+        if(!in_array($input['source'],['human','machine','provider'],true))
+            throw new Error('caption_source_invalid','Caption provenance source is invalid.',400);
+        $input['content_hash']=self::hash256($input['content_hash']??null,'caption_hash_invalid');
+        return self::putTrack('rich_caption',$assetId,$actor,$input,['locale','kind','content_hash','source']);
+    }
+    public static function audioDescription(string $assetId,int $actor,array $input): array {
+        $input['locale']=self::locale($input['locale']??null);
+        $input['track_ref']=self::trackRef($input['track_ref']??null,'track_reference_invalid');
+        $input['content_hash']=self::hash256($input['content_hash']??null,'audio_description_hash_invalid');
+        return self::putTrack('audio_description',$assetId,$actor,$input,['locale','track_ref','content_hash']);
+    }
+    public static function signLanguage(string $assetId,int $actor,array $input): array {
+        $input['locale']=self::locale($input['locale']??null);
+        $input['track_ref']=self::trackRef($input['track_ref']??null,'track_reference_invalid');
+        $input['synchronization_hash']=self::hash256($input['synchronization_hash']??null,'sign_language_hash_invalid');
+        return self::putTrack('sign_language_track',$assetId,$actor,$input,['locale','track_ref','synchronization_hash']);
+    }
     public static function ocrMap(string $assetId,int $actor,array $pages): array {
         if($pages===[])throw new Error('ocr_map_empty','OCR coordinate map is empty.',400);
         if(!array_is_list($pages)||count($pages)>500)throw new Error('ocr_map_invalid','OCR page list invalid.',400);
