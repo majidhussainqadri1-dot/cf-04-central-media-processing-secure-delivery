@@ -1125,9 +1125,26 @@ final class DeliveryResilienceService {
             'canonical_owner'=>$asset['owner_domain'],'authorization_refresh_required'=>true];
     }
     public static function adaptiveUpload(array $network,array $bounds): array {
-        $rtt=max(0,(int)($network['rtt_ms']??0));$down=(float)($network['mbps']??0);if(!is_finite($down)||$down<0.0)throw new Error('network_profile_invalid','Network throughput must be finite and non-negative.',400);$unstable=Utils::bool($network['unstable']??false);$maxPart=max(65536,min(67108864,(int)($bounds['max_part_size_bytes']??8388608)));
-        $part=$unstable||$rtt>400||$down<2?min($maxPart,1048576):($down<10?min($maxPart,4194304):min($maxPart,16777216));$parallel=$unstable?1:($down>=20?4:2);
-        return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,'retry'=>'exponential-jitter','checkpoint_each_part'=>true];
+        if(array_diff(array_keys($network),['rtt_ms','mbps','unstable'])!==[]
+            ||array_diff(array_keys($bounds),['max_part_size_bytes','max_parallel_parts'])!==[])
+            throw new Error('network_profile_invalid','Adaptive upload contains unsupported fields.',400);
+        $rtt=$network['rtt_ms']??0;
+        $down=$network['mbps']??0.0;
+        $unstable=$network['unstable']??false;
+        $maxPart=$bounds['max_part_size_bytes']??8388608;
+        $maxParallel=$bounds['max_parallel_parts']??4;
+        if(!is_int($rtt)||$rtt<0||$rtt>60000
+            ||!(is_int($down)||is_float($down))||!is_finite((float)$down)
+            ||$down<0||$down>100000
+            ||!is_bool($unstable)||!is_int($maxPart)||$maxPart<65536||$maxPart>67108864
+            ||!is_int($maxParallel)||$maxParallel<1||$maxParallel>16)
+            throw new Error('network_profile_invalid','Adaptive upload network or policy bounds are invalid.',400);
+        $part=$unstable||$rtt>400||$down<2
+            ?min($maxPart,1048576)
+            :($down<10?min($maxPart,4194304):min($maxPart,16777216));
+        $parallel=min($maxParallel,$unstable?1:($down>=20?4:2));
+        return ['part_size_bytes'=>$part,'parallel_parts'=>$parallel,
+            'retry'=>'exponential-jitter','checkpoint_each_part'=>true];
     }
     public static function offlineGrant(string $assetId,int $actor,int $ttlSeconds): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor);$asset=Future40Registry::asset($assetId,true);
