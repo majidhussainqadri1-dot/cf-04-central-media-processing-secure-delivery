@@ -185,15 +185,21 @@ final class RevocationDispatchService {
             ||!is_string($row['rights_fingerprint'])||!preg_match('/^[a-f0-9]{64}$/D',$row['rights_fingerprint'])
             ||!is_string($row['projection_revocation_id'])
             ||($row['projection_revocation_id']!==''&&!preg_match('/^[a-f0-9]{64}$/D',$row['projection_revocation_id']))
-            ||!in_array($row['status']??null,['pending','dispatched'],true)
-            ||($row['status']==='pending'&&array_key_exists('dispatched_at',$row))
-            ||($row['status']==='dispatched'&&(!is_int($row['dispatched_at']??null)||$row['dispatched_at']<1)))
+            ||(array_key_exists('policy_hash',$row)
+                &&(!is_string($row['policy_hash'])||!preg_match('/^[a-f0-9]{64}$/D',$row['policy_hash'])))
+            ||!in_array($row['status']??null,['pending','dispatched','superseded'],true)
+            ||($row['status']==='pending'&&(array_key_exists('dispatched_at',$row)
+                ||array_key_exists('superseded_at',$row)||array_key_exists('superseded_reason',$row)))
+            ||($row['status']==='dispatched'&&(!is_int($row['dispatched_at']??null)
+                ||$row['dispatched_at']<1||array_key_exists('superseded_at',$row)
+                ||array_key_exists('superseded_reason',$row)))
+            ||($row['status']==='superseded'&&(array_key_exists('dispatched_at',$row)
+                ||!is_int($row['superseded_at']??null)||$row['superseded_at']<1
+                ||!in_array($row['superseded_reason']??null,
+                    ['asset_missing','owner_changed','rights_changed','asset_terminal','policy_changed','policy_unbound'],true)))
+            ||(isset($row['supersession_history'])&&(!is_array($row['supersession_history'])
+                ||!array_is_list($row['supersession_history'])||count($row['supersession_history'])>32)))
             throw new Error('revocation_dispatch_invalid','Stored revocation dispatch evidence is invalid.',500);
-        $asset=RecordStore::get('asset',$row['asset_id']);
-        if(!$asset||($asset['owner_domain']??null)!==$row['owner_domain']
-            ||($asset['object_version']??null)!==$row['object_version']
-            ||!hash_equals($row['owner_object_hash'],Utils::hashReference((string)($asset['owner_object']??''))))
-            throw new Error('revocation_dispatch_stale','Revocation owner identity has changed.',409);
         if($row['projection_revocation_id']!==''){
             $projection=RecordStore::get('projection_revocation',$row['projection_revocation_id']);
             $expectedProjectionId=hash('sha256',Utils::canonicalJson([
@@ -223,13 +229,33 @@ final class RevocationDispatchService {
                 ||($projection['backup_status']??null)!=='retention_policy_applies')
                 throw new Error('revocation_projection_invalid','Revocation projection evidence is invalid.',500);
         }
-        if($row['status']==='dispatched')return $row;
-        // Pending notices must not dispatch an obsolete rights or terminal asset snapshot.
-        $currentRights=hash('sha256',Utils::canonicalJson((array)($asset['rights']??[])));
-        if(!hash_equals($row['rights_fingerprint'],$currentRights))
-            throw new Error('revocation_dispatch_stale','Pending revocation rights have changed.',409);
-        if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))
-            throw new Error('revocation_dispatch_stale','Pending revocation asset is terminal.',409);
+        // A completed local hook is historical evidence, not a live-state assertion.
+        // Superseded records remain durable and are never retried by the cron scanner.
+        if($row['status']==='dispatched'||$row['status']==='superseded')return $row;
+        $asset=RecordStore::get('asset',$row['asset_id']);
+        $stale=null;
+        if(!is_array($asset))$stale='asset_missing';
+        elseif(($asset['owner_domain']??null)!==$row['owner_domain']
+            ||($asset['object_version']??null)!==$row['object_version']
+            ||!hash_equals($row['owner_object_hash'],Utils::hashReference((string)($asset['owner_object']??''))))
+            $stale='owner_changed';
+        elseif(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true))
+            $stale='asset_terminal';
+        elseif(!hash_equals($row['rights_fingerprint'],
+            hash('sha256',Utils::canonicalJson((array)($asset['rights']??[])))))
+            $stale='rights_changed';
+        elseif(!array_key_exists('policy_hash',$row))$stale='policy_unbound';
+        elseif(!hash_equals($row['policy_hash'],(string)($asset['policy_hash']??'')))
+            $stale='policy_changed';
+        if($stale!==null){
+            $row['status']='superseded';$row['superseded_at']=Utils::now();
+            $row['superseded_reason']=$stale;
+            $history=$row['supersession_history']??[];
+            $history[]=['at'=>$row['superseded_at'],'reason'=>$stale,'prior_version'=>(int)$row['version']];
+            $row['supersession_history']=array_slice($history,-32);
+            $row['supersession_count']=(int)($row['supersession_count']??0)+1;
+            return RecordStore::put('revocation_dispatch',$id,$row,(int)$row['version']);
+        }
         if(!function_exists('do_action'))
             throw new Error('revocation_dispatch_unavailable','Owner revocation hook is unavailable.',503);
         $event=['event_id'=>$row['event_id'],'asset_id'=>$row['asset_id'],
@@ -247,11 +273,33 @@ final class RevocationDispatchService {
         if($row===null){
             try{$row=RecordStore::put('revocation_dispatch',$id,$fields+[
                 'actor_id'=>0,'status'=>'pending','created_at'=>Utils::now(),
+                'policy_hash'=>(string)($asset['policy_hash']??''),
             ],0);}
             catch(Error $e){
                 if($e->errorCode!=='record_version_conflict')throw $e;
                 $row=RecordStore::get('revocation_dispatch',$id);
                 if($row===null)throw $e;
+            }
+        }
+        if(($row['status']??null)==='superseded'){
+            // Validate stored evidence before any reactivation. The caller's
+            // snapshot must still agree with the current authoritative asset.
+            self::dispatch($row);
+            $live=RecordStore::get('asset',$fields['asset_id']);
+            if(is_array($live)
+                &&($live['owner_domain']??null)===$fields['owner_domain']
+                &&($live['object_version']??null)===$fields['object_version']
+                &&hash_equals($fields['owner_object_hash'],
+                    Utils::hashReference((string)($live['owner_object']??'')))
+                &&hash_equals($fields['rights_fingerprint'],
+                    hash('sha256',Utils::canonicalJson((array)($live['rights']??[]))))
+                &&!in_array(($live['status']??''),['deleted','deletion_pending','rejected'],true)
+                &&($asset['policy_hash']??null)===($live['policy_hash']??null)
+                &&is_string($live['policy_hash']??null)
+                &&preg_match('/^[a-f0-9]{64}$/D',$live['policy_hash'])){
+                $row['status']='pending';unset($row['superseded_at'],$row['superseded_reason']);
+                $row['policy_hash']=$live['policy_hash'];
+                $row=RecordStore::put('revocation_dispatch',$id,$row,(int)$row['version']);
             }
         }
         return self::dispatch($row);
@@ -266,10 +314,15 @@ final class RevocationDispatchService {
             array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)>0)),
             array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)<=0))
         );
-        $result=['checked'=>0,'dispatched'=>0,'failed'=>0];
+        $result=['checked'=>0,'dispatched'=>0,'superseded'=>0,'failed'=>0];
         foreach(array_slice($ordered,0,$limit) as $row){
             $result['checked']++;$after=(string)$row['id'];
-            try{self::dispatch($row);$result['dispatched']++;}
+            try{
+                $out=self::dispatch($row);
+                if($out['status']==='dispatched')$result['dispatched']++;
+                elseif($out['status']==='superseded')$result['superseded']++;
+                else throw new Error('revocation_dispatch_invalid','Recovery did not reach a terminal local state.',500);
+            }
             catch(\Throwable $e){
                 $result['failed']++;
                 try{DegradedStateService::record('revocation-dispatch',$e instanceof Error?$e->errorCode:'unexpected',
@@ -408,7 +461,9 @@ final class RightsRevocationService {
         Audit::recordOnce('media_rights_revocation_propagated',[
             'actor_id'=>0,'asset_id'=>$assetId,'reason'=>$reason,'projection_revocation_id'=>$row['id'],
         ],$id);
-        RevocationDispatchService::notify($current,$reason,$id);
+        $notice=RevocationDispatchService::notify($current,$reason,$id);
+        if(($notice['status']??null)!=='dispatched')
+            throw new Error('revocation_dispatch_superseded','Revocation notice was superseded before dispatch.',409);
         // Synchronous hooks may mutate or delete the asset; never reconcile their new state.
         $fresh=self::assertCurrent($assetId,$asset,'after_revocation_dispatch');
         if(in_array($reason,['rights_expired','rights_invalid'],true)){

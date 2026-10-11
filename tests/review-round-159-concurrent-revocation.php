@@ -58,9 +58,10 @@ $fresh=RecordStore::get('asset',$asset['id']);$fresh['rights']['expires_at']--;
 RecordStore::put('asset',$asset['id'],$fresh,(int)$fresh['version']);
 $GLOBALS['r159_mutation']=null;
 $recovery=RevocationDispatchService::reconcile();
-ok($recovery['checked']===1&&$recovery['failed']===1&&$recovery['dispatched']===0
-    &&RecordStore::get('revocation_dispatch',$pending[0]['id'])['status']==='pending',
-    'Round 159 stale pending rights cannot emit an obsolete revocation event');
+ok($recovery['checked']===1&&$recovery['failed']===0&&$recovery['dispatched']===0
+    &&$recovery['superseded']===1
+    &&RecordStore::get('revocation_dispatch',$pending[0]['id'])['status']==='superseded',
+    'Round 159 stale pending rights are durably superseded without obsolete dispatch');
 $events=array_values(array_filter($GLOBALS['scm_actions'],
     static fn(array $a): bool=>$a['tag']==='scm.media.revoked'));
 ok(count($events)===0,'Round 159 stale pending notice never reaches the hook');
