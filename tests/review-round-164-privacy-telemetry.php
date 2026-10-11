@@ -19,5 +19,9 @@ err(fn()=>PrivacyTelemetry::metric('media_playback_rebuffer_count',1.5),'privacy
 err(fn()=>PrivacyTelemetry::metric('media_processing_completed',0.5),'privacy_metric_value_invalid','Round 164 fractional completion');
 err(fn()=>Observability::metric('unapproved_metric',1.0),'privacy_metric_name_denied','Round 164 direct metric gate');
 err(fn()=>Observability::metric('media_playback_startup_ms',1.0,['domain'=>'unapproved']),'privacy_metric_label_value_denied','Round 164 direct label gate');
-ok(count(RecordStore::all('metric',0,null,1000))===2,'Round 164 no rejected persistence');
+$legacy=Observability::metric('queue.depth',3.0,['tenant'=>'file17']);
+ok($legacy['metric']==='queue.depth','Round 164 FR-033 bounded operational queue metric preserved');
+err(fn()=>Observability::metric('queue.depth',3.0,['tenant'=>'unapproved']),
+    'metric_label_invalid','Round 164 operational metric tenant bounded');
+ok(count(RecordStore::all('metric',0,null,1000))===3,'Round 164 no rejected persistence');
 echo "REVIEW ROUND 164 PRIVACY TELEMETRY: PASS\n";

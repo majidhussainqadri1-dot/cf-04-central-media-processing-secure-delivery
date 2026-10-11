@@ -404,7 +404,17 @@ final class RestoreService {
 
 final class Observability {
     public static function metric(string $name,float $value,array $labels=[]): array {
-        [$name,$value,$safe]=PrivacyTelemetry::validate($name,$value,$labels);
+        if($name==='queue.depth'){
+            if(!is_finite($value)||$value<0||floor($value)!==$value)
+                throw new Error('metric_invalid','Queue depth must be a finite non-negative count.',400);
+            if(count($labels)!==1||!array_key_exists('tenant',$labels)||
+               !is_string($labels['tenant'])||
+               !in_array($labels['tenant'],['file00','file10','file11','file12','file17','file21','file22','cf01','cf04'],true))
+                throw new Error('metric_label_invalid','Queue depth tenant must be an approved domain bucket.',400);
+            $safe=['tenant'=>$labels['tenant']];
+        }else{
+            [$name,$value,$safe]=PrivacyTelemetry::validate($name,$value,$labels);
+        }
         return RecordStore::put('metric',Utils::id('met'),[
             'actor_id'=>0,'metric'=>$name,'value'=>$value,'labels'=>$safe,
             'status'=>'recorded','created_at'=>Utils::now()
