@@ -263,11 +263,56 @@ final class RichMediaMetadataService {
             ['poster_ref'=>$poster,'storyboard_ref'=>$storyboard,'selection'=>(array)($result['selection']??[])],
             ['poster_ref','storyboard_ref'],$asset);
     }
-    public static function chapters(string $assetId,int $actor,array $chapters): array {if($chapters===[])throw new Error('chapter_manifest_empty','At least one chapter is required.',400);$last=-1;$safe=[];foreach($chapters as $chapter){$raw=$chapter['start_ms']??null;if(!(is_int($raw)||(is_string($raw)&&preg_match('/^\d+$/',$raw))))throw new Error('chapter_manifest_invalid','Chapter timecode must be a non-negative integer.',400);$start=(int)$raw;$title=Utils::text((string)($chapter['title']??''),160);if($start<0||$start<=$last||$title==='')throw new Error('chapter_manifest_invalid','Chapter order/title is invalid.',400);$safe[]=['start_ms'=>$start,'title'=>$title];$last=$start;}return self::putTrack('chapter_manifest',$assetId,$actor,['chapters'=>$safe],['chapters']);}
+    public static function chapters(string $assetId,int $actor,array $chapters): array {
+        if($chapters===[])throw new Error('chapter_manifest_empty','At least one chapter is required.',400);
+        if(!array_is_list($chapters)||count($chapters)>10000)throw new Error('chapter_manifest_invalid','Chapter list shape/count invalid.',400);
+        $last=-1;$safe=[];
+        foreach($chapters as $chapter){
+            if(!is_array($chapter)||!is_string($chapter['title']??null))throw new Error('chapter_manifest_invalid','Chapter title invalid.',400);
+            $start=Utils::integer($chapter['start_ms']??null,'chapter_manifest_invalid',0,86400000);
+            $title=Utils::text($chapter['title'],160);
+            if($start<=$last||$title==='')throw new Error('chapter_manifest_invalid','Chapter order/title invalid.',400);
+            $safe[]=['start_ms'=>$start,'title'=>$title];$last=$start;
+        }
+        return self::putTrack('chapter_manifest',$assetId,$actor,['chapters'=>$safe],['chapters']);
+    }
     public static function captionTrack(string $assetId,int $actor,array $input): array {$kind=Utils::key((string)($input['kind']??''),32);if(!in_array($kind,['standard','sdh','forced'],true))throw new Error('caption_kind_invalid','Caption kind is invalid.',400);$input['kind']=$kind;$input['locale']=self::locale($input['locale']??'');$input['source']=Utils::key((string)($input['source']??''),64);if($input['source']==='')throw new Error('caption_source_invalid','Caption provenance source is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','caption_hash_invalid');return self::putTrack('rich_caption',$assetId,$actor,$input,['locale','kind','content_hash','source']);}
     public static function audioDescription(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Audio-description track reference is required.',400);$input['content_hash']=self::hash256($input['content_hash']??'','audio_description_hash_invalid');return self::putTrack('audio_description',$assetId,$actor,$input,['locale','track_ref','content_hash']);}
     public static function signLanguage(string $assetId,int $actor,array $input): array {$input['locale']=self::locale($input['locale']??'');$input['track_ref']=Utils::text((string)($input['track_ref']??''),191);if($input['track_ref']==='')throw new Error('track_reference_invalid','Sign-language track reference is required.',400);$input['synchronization_hash']=self::hash256($input['synchronization_hash']??'','sign_language_hash_invalid');return self::putTrack('sign_language_track',$assetId,$actor,$input,['locale','track_ref','synchronization_hash']);}
-    public static function ocrMap(string $assetId,int $actor,array $pages): array {if($pages===[])throw new Error('ocr_map_empty','OCR coordinate map is empty.',400);foreach($pages as $page){if((int)($page['page']??0)<1||!isset($page['items'])||!is_array($page['items']))throw new Error('ocr_map_invalid','OCR page map is invalid.',400);foreach($page['items'] as $item){$confidence=(float)($item['confidence']??NAN);$box=(array)($item['box']??[]);if(!is_finite($confidence)||$confidence<0||$confidence>1||count($box)!==4)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);foreach($box as $coordinate){$coordinate=(float)$coordinate;if(!is_finite($coordinate)||$coordinate<0.0||$coordinate>1.0)throw new Error('ocr_map_invalid','OCR confidence/box is invalid.',400);}}}return self::putTrack('ocr_coordinate_map',$assetId,$actor,['pages'=>$pages],['pages']);}
+    public static function ocrMap(string $assetId,int $actor,array $pages): array {
+        if($pages===[])throw new Error('ocr_map_empty','OCR coordinate map is empty.',400);
+        if(!array_is_list($pages)||count($pages)>500)throw new Error('ocr_map_invalid','OCR page list invalid.',400);
+        $last=0;$total=0;$safe=[];
+        foreach($pages as $page){
+            if(!is_array($page)||!is_array($page['items']??null)||!array_is_list($page['items']))
+                throw new Error('ocr_map_invalid','OCR page items invalid.',400);
+            $number=Utils::integer($page['page']??null,'ocr_map_invalid',1,500);
+            if($number<=$last||count($page['items'])>2000)throw new Error('ocr_map_invalid','OCR page order/count invalid.',400);
+            $last=$number;$total+=count($page['items']);
+            if($total>10000)throw new Error('ocr_map_invalid','OCR item volume invalid.',400);
+            $items=[];
+            foreach($page['items'] as $item){
+                if(!is_array($item)||!is_string($item['text']??null)||trim($item['text'])===''||strlen($item['text'])>1024
+                    ||!(is_int($item['confidence']??null)||is_float($item['confidence']??null))
+                    ||!is_array($item['box']??null)||!array_is_list($item['box'])||count($item['box'])!==4)
+                    throw new Error('ocr_map_invalid','OCR item shape invalid.',400);
+                $confidence=(float)$item['confidence'];
+                if(!is_finite($confidence)||$confidence<0||$confidence>1)throw new Error('ocr_map_invalid','OCR confidence invalid.',400);
+                $box=[];
+                foreach($item['box'] as $coordinate){
+                    if(!(is_int($coordinate)||is_float($coordinate)))throw new Error('ocr_map_invalid','OCR coordinate type invalid.',400);
+                    $v=(float)$coordinate;
+                    if(!is_finite($v)||$v<0||$v>1)throw new Error('ocr_map_invalid','OCR coordinate range invalid.',400);
+                    $box[]=$v;
+                }
+                if($box[2]<=0||$box[3]<=0||$box[0]+$box[2]>1.00000001||$box[1]+$box[3]>1.00000001)
+                    throw new Error('ocr_map_invalid','OCR box geometry invalid.',400);
+                $items[]=['text'=>$item['text'],'confidence'=>$confidence,'box'=>$box];
+            }
+            $safe[]=['page'=>$number,'items'=>$items];
+        }
+        return self::putTrack('ocr_coordinate_map',$assetId,$actor,['pages'=>$safe],['pages']);
+    }
     private static function currentTrack(array $row,array $asset,string $status): bool {
         return ($row['asset_id']??null)===($asset['id']??null)
             &&($row['status']??null)===$status
