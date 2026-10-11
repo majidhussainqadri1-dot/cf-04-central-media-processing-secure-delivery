@@ -3,7 +3,7 @@ declare(strict_types=1);
 require __DIR__.'/bootstrap.php';
 use Sabri\CentralMedia\{DisasterCostRoutingService,RecordStore};
 RecordStore::resetMemory();
-$asset=RecordStore::put('asset','round146-asset',['actor_id'=>11,'status'=>'ready','size'=>1048576,'sha256'=>hash('sha256','round146'),'policy'=>['retention'=>['class'=>'standard']],'rights'=>['expires_at'=>0],'privacy_class'=>'C0']);
+$asset=RecordStore::put('asset','round146-asset',['actor_id'=>11,'status'=>'ready','owner_domain'=>'file17','owner_object'=>'round146-object','object_version'=>1,'size'=>1048576,'sha256'=>hash('sha256','round146'),'policy'=>['retention'=>['class'=>'standard']],'rights'=>['expires_at'=>0],'privacy_class'=>'C0']);
 $prices=['storage_gb_month'=>0.02,'transcode_minute'=>0.01,'egress_gb'=>0.05,'currency'=>'USD'];
 $good=DisasterCostRoutingService::costEstimate($asset['id'],$prices,['minutes'=>10,'egress_gb'=>1]);
 ok($good['estimated_cost']>0,'Round 146 canonical cost estimate');

@@ -1589,17 +1589,100 @@ final class DisasterCostRoutingService {
         if(!preg_match('/^[A-Z0-9-]{2,16}$/D',$region))throw new Error('dr_regions_invalid','Region identity is invalid.',400);
         return $region;
     }
+    private static function drRegion(mixed $value): string {
+        if(!is_string($value)||strlen($value)>16
+            ||!preg_match('/^[A-Z0-9-]{2,16}$/D',$value))
+            throw new Error('dr_regions_invalid','DR region must be canonical uppercase text.',400);
+        return $value;
+    }
+    private static function drAuditContext(array $row): array {
+        return [
+            'actor_id'=>$row['actor_id'],'asset_id'=>$row['asset_id'],
+            'plan_version'=>$row['version'],'primary_region'=>$row['primary_region'],
+            'secondary_region'=>$row['secondary_region'],
+            'rpo_seconds'=>$row['rpo_seconds'],'rto_seconds'=>$row['rto_seconds'],
+            'integrity_hash'=>$row['integrity_hash']
+        ];
+    }
+    private static function drAuditKey(array $row): string {
+        return hash('sha256',Utils::canonicalJson([
+            'context'=>self::drAuditContext($row),'created_at'=>$row['created_at']
+        ]));
+    }
+    private static function reconcileDrAudit(array $row): void {
+        if(!array_key_exists('audit_key',$row))return; // Historical plan without binding.
+        if(!is_string($row['audit_key'])||!preg_match('/^[a-f0-9]{64}$/D',$row['audit_key'])
+            ||!hash_equals(self::drAuditKey($row),$row['audit_key']))
+            throw new Error('dr_plan_record_invalid','Stored DR audit binding is invalid.',409);
+        Audit::recordOnce('future40_disaster_plan_set',self::drAuditContext($row),
+            'disaster-plan|'.$row['audit_key']);
+    }
     public static function disasterPlan(string $assetId,int $actor,array $input): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_manage_providers');
         $asset=Future40Registry::asset($assetId,true);
         Utils::requireFields($input,['primary_region','secondary_region','rpo_seconds','rto_seconds'],'dr_plan_incomplete');
-        $primary=self::region($input['primary_region']);$secondary=self::region($input['secondary_region']);
-        $rpo=Utils::integer($input['rpo_seconds'],'dr_plan_numeric_invalid',0,PHP_INT_MAX);
-        $rto=Utils::integer($input['rto_seconds'],'dr_plan_numeric_invalid',0,PHP_INT_MAX);
+        if(array_diff(array_keys($input),['primary_region','secondary_region','rpo_seconds','rto_seconds'])!==[])
+            throw new Error('dr_plan_invalid','DR plan contains unapproved fields.',400);
+        $primary=self::drRegion($input['primary_region']);
+        $secondary=self::drRegion($input['secondary_region']);
+        $rpo=Utils::integer($input['rpo_seconds'],'dr_plan_numeric_invalid',0,31536000);
+        $rto=Utils::integer($input['rto_seconds'],'dr_plan_numeric_invalid',0,31536000);
         if($primary===$secondary)throw new Error('dr_regions_invalid','Regions must differ.',400);
-        ResidencyCryptoService::assertRegion($assetId,$primary);ResidencyCryptoService::assertRegion($assetId,$secondary);
+        $sha=$asset['sha256']??null;
+        if(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha))
+            throw new Error('dr_asset_invalid','DR source integrity hash is invalid.',409);
+        $version=Utils::integer($asset['object_version']??null,'dr_asset_invalid',1);
+        $decision=DomainRegistry::decision((string)($asset['owner_domain']??''),
+            'authorize_reprocess',['asset'=>$asset,'actor_id'=>$actor,'transform'=>'disaster_plan']);
+        if($decision['object_version']!==$version)
+            throw new Error('domain_object_version_stale','DR authorization is stale.',409);
+        ResidencyCryptoService::assertRegion($assetId,$primary);
+        ResidencyCryptoService::assertRegion($assetId,$secondary);
+        $latest=Future40Registry::asset($assetId,true);
+        foreach(['sha256','owner_domain','owner_object','object_version','policy_hash'] as $field)
+            if(($latest[$field]??null)!==($asset[$field]??null))
+                throw new Error('asset_state_changed','Asset changed during DR planning.',409);
+        if(($latest['rights']['policy_hash']??null)!==($asset['rights']['policy_hash']??null))
+            throw new Error('asset_state_changed','Asset rights changed during DR planning.',409);
         $id=hash('sha256',$assetId);$existing=RecordStore::get('disaster_plan',$id);
-        return RecordStore::put('disaster_plan',$id,['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,'primary_region'=>$primary,'secondary_region'=>$secondary,'rpo_seconds'=>$rpo,'rto_seconds'=>$rto,'integrity_hash'=>$asset['sha256'],'failback_required'=>true,'created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
+        if($existing!==null){
+            try {
+                if(($existing['asset_id']??null)!==$assetId
+                    ||($existing['status']??null)!=='planned'
+                    ||($existing['failback_required']??null)!==true
+                    ||($existing['integrity_hash']??null)!==$sha
+                    ||!is_int($existing['actor_id']??null)||$existing['actor_id']<1)
+                    throw new Error('dr_plan_record_invalid','Stored DR plan identity is invalid.',409);
+                self::drRegion($existing['primary_region']??null);
+                self::drRegion($existing['secondary_region']??null);
+                if($existing['primary_region']===$existing['secondary_region'])
+                    throw new Error('dr_plan_record_invalid','Stored DR regions are identical.',409);
+                Utils::integer($existing['rpo_seconds']??null,'dr_plan_record_invalid',0,31536000);
+                Utils::integer($existing['rto_seconds']??null,'dr_plan_record_invalid',0,31536000);
+                $created=Utils::integer($existing['created_at']??null,'dr_plan_record_invalid',1);
+                if($created>Utils::now()+300)
+                    throw new Error('dr_plan_record_invalid','Stored DR creation time is invalid.',409);
+                Utils::integer($existing['version']??null,'dr_plan_record_invalid',1);
+            }catch(Error $e){
+                throw new Error('dr_plan_record_invalid','Stored DR plan evidence is invalid.',409);
+            }
+            self::reconcileDrAudit($existing);
+            if($existing['primary_region']===$primary
+                &&$existing['secondary_region']===$secondary
+                &&$existing['rpo_seconds']===$rpo&&$existing['rto_seconds']===$rto)
+                return $existing;
+        }
+        $row=['actor_id'=>$actor,'status'=>'planned','asset_id'=>$assetId,
+            'primary_region'=>$primary,'secondary_region'=>$secondary,
+            'rpo_seconds'=>$rpo,'rto_seconds'=>$rto,'integrity_hash'=>$sha,
+            'failback_required'=>true,'created_at'=>$existing['created_at']??Utils::now(),
+            'version'=>$existing?(int)$existing['version']+1:1];
+        $row['audit_key']=self::drAuditKey($row);
+        $context=self::drAuditContext($row);
+        Audit::recordOnce('future40_disaster_plan_intent',$context,'disaster-plan|'.$row['audit_key']);
+        $saved=RecordStore::put('disaster_plan',$id,$row,$existing?(int)$existing['version']:0);
+        self::reconcileDrAudit($saved);
+        return $saved;
     }
     public static function optimizeTier(string $assetId,array $metrics): array {
         $asset=Future40Registry::asset($assetId,true);
