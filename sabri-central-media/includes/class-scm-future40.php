@@ -239,29 +239,109 @@ final class PerceptualMediaService {
 }
 
 final class ContentSafetyUpgradeService {
+    private static function identity(array $asset): array {
+        return [$asset['id']??null,$asset['status']??null,$asset['sha256']??null,
+            $asset['owner_domain']??null,$asset['owner_object']??null,
+            $asset['object_version']??null,$asset['privacy_class']??null,
+            $asset['policy_hash']??null,$asset['rights']['policy_hash']??null];
+    }
     public static function disarm(string $assetId,int $actor,string $profile): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);$profile=Utils::key($profile,64);if($profile==='')throw new Error('cdr_profile_invalid','CDR profile is required.',400);
-        $result=FutureAdapterRegistry::call('future_006',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'profile'=>$profile]);
-        $safeHash=Utils::text((string)($result['safe_sha256']??''),64);if(!preg_match('/^[a-f0-9]{64}$/',$safeHash))throw new Error('cdr_output_invalid','Safe reconstruction hash is invalid.',503);
-        $row=RecordStore::put('cdr_result',hash('sha256',$assetId.'|'.$profile),['actor_id'=>$actor,'status'=>'validated','asset_id'=>$assetId,'source_sha256'=>$asset['sha256'],'safe_sha256'=>$safeHash,'removed_features'=>(array)($result['removed_features']??[]),'profile'=>$profile,'created_at'=>Utils::now()]);
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        $asset=Future40Registry::asset($assetId,true);
+        $profile=Utils::key($profile,64);
+        if($profile==='')throw new Error('cdr_profile_invalid','CDR profile is required.',400);
+        $decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_reprocess',
+            ['asset'=>$asset,'actor_id'=>$actor,'transform'=>'content_disarm']);
+        if((int)$decision['object_version']!==(int)$asset['object_version'])
+            throw new Error('domain_object_version_stale','CDR owner authorization is stale.',409);
+        $result=FutureAdapterRegistry::call('future_006',[
+            'asset_id'=>$assetId,'sha256'=>$asset['sha256'],'mime'=>$asset['mime'],'profile'=>$profile]);
+        $hash=$result['safe_sha256']??null;
+        if(!is_string($hash)||!preg_match('/^[a-fA-F0-9]{64}$/D',$hash))
+            throw new Error('cdr_output_invalid','Safe reconstruction hash must be exact SHA-256.',503);
+        $removed=$result['removed_features']??[];
+        if(!is_array($removed)||!array_is_list($removed)||count($removed)>64)
+            throw new Error('cdr_output_invalid','Removed-feature evidence must be a bounded list.',503);
+        $safe=[];
+        foreach($removed as $feature){
+            if(!is_string($feature)||$feature===''||strlen($feature)>64)
+                throw new Error('cdr_output_invalid','Removed-feature evidence contains invalid text.',503);
+            $normalized=Utils::key($feature,64);
+            if($normalized===''||in_array($normalized,$safe,true))
+                throw new Error('cdr_output_invalid','Removed-feature evidence contains duplicate/invalid names.',503);
+            $safe[]=$normalized;
+        }
+        $latest=Future40Registry::asset($assetId,true);
+        if(self::identity($latest)!==self::identity($asset))
+            throw new Error('asset_state_changed','Asset changed during content disarm.',409);
+        $decision=DomainRegistry::decision((string)$latest['owner_domain'],'authorize_reprocess',
+            ['asset'=>$latest,'actor_id'=>$actor,'transform'=>'content_disarm']);
+        if((int)$decision['object_version']!==(int)$latest['object_version'])
+            throw new Error('domain_object_version_stale','CDR owner authorization changed.',409);
+        $id=hash('sha256',$assetId.'|'.$profile.'|'.$asset['sha256'].'|'.$asset['object_version'].'|'.$asset['policy_hash'].'|'.$asset['rights']['policy_hash']);
+        $row=RecordStore::put('cdr_result',$id,[
+            'actor_id'=>$actor,'status'=>'validated','asset_id'=>$assetId,
+            'source_sha256'=>$asset['sha256'],'owner_object_version'=>$asset['object_version'],
+            'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],
+            'safe_sha256'=>strtolower($hash),'removed_features'=>$safe,
+            'profile'=>$profile,'created_at'=>Utils::now()]);
         Audit::record('future40_cdr_completed',['asset_id'=>$assetId,'profile'=>$profile]);return $row;
     }
     public static function scheduleRescan(string $reason,array $filters=[],int $limit=1000,int $actor=0): array {
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$reason=Utils::key($reason,96);if($reason==='')throw new Error('rescan_reason_required','Re-scan reason is required.',400);$limit=max(1,min(5000,$limit));$queued=0;$scanned=0;$offset=0;$pageSize=500;
+        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');
+        Auth::capability('media_reprocess');
+        $reason=Utils::key($reason,96);
+        if($reason==='')throw new Error('rescan_reason_required','Re-scan reason is required.',400);
+        $limit=max(1,min(5000,$limit));$queued=0;$scanned=0;$offset=0;$pageSize=500;
         while($queued<$limit&&$scanned<1000000){
-            $page=RecordStore::list('asset',0,null,$pageSize,$offset);if($page===[])break;$offset+=count($page);$scanned+=count($page);
-            foreach($page as $asset){if($queued>=$limit)break;if(in_array(($asset['status']??''),['deleted','rejected'],true))continue;if(isset($filters['mime'])&&$asset['mime']!==$filters['mime'])continue;if(isset($filters['media_class'])&&$asset['media_class']!==$filters['media_class'])continue;
-                $id=hash('sha256',$asset['id'].'|'.$reason);if(RecordStore::get('future_rescan',$id))continue;try{RecordStore::put('future_rescan',$id,['actor_id'=>$actor,'status'=>'queued','asset_id'=>$asset['id'],'reason'=>$reason,'requested_at'=>Utils::now()],0);$queued++;}catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}}
+            $page=RecordStore::list('asset',0,null,$pageSize,$offset);
+            if($page===[])break;
+            $offset+=count($page);$scanned+=count($page);
+            foreach($page as $asset){
+                if($queued>=$limit)break;
+                if(in_array(($asset['status']??''),['deleted','rejected'],true))continue;
+                if(isset($filters['mime'])&&($asset['mime']??null)!==$filters['mime'])continue;
+                if(isset($filters['media_class'])&&($asset['media_class']??null)!==$filters['media_class'])continue;
+                $sha=(string)($asset['sha256']??'');$policy=(string)($asset['policy_hash']??'');
+                $rights=(string)($asset['rights']['policy_hash']??'');$version=$asset['object_version']??null;
+                if(!preg_match('/^[a-f0-9]{64}$/D',$sha)||!is_int($version)||$version<1||$policy===''||$rights==='')
+                    throw new Error('rescan_asset_invalid','Re-scan source identity is incomplete.',503);
+                $id=hash('sha256',$asset['id'].'|'.$reason.'|'.$sha.'|'.$version.'|'.$policy.'|'.$rights);
+                if(RecordStore::get('future_rescan',$id))continue;
+                try{
+                    RecordStore::put('future_rescan',$id,[
+                        'actor_id'=>$actor,'status'=>'queued','asset_id'=>$asset['id'],
+                        'source_sha256'=>$sha,'owner_object_version'=>$version,
+                        'policy_hash'=>$policy,'rights_hash'=>$rights,
+                        'reason'=>$reason,'requested_at'=>Utils::now()
+                    ],0);$queued++;
+                }catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+            }
             if(count($page)<$pageSize)break;
         }
-        $truncated=$scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[];Audit::record('future40_rescan_scheduled',['actor_id'=>$actor,'reason'=>$reason,'queued'=>$queued,'scanned'=>$scanned,'scan_truncated'=>$truncated]);return ['queued'=>$queued,'reason'=>$reason,'scanned'=>$scanned,'scan_truncated'=>$truncated];
+        $truncated=$scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[];
+        Audit::record('future40_rescan_scheduled',[
+            'actor_id'=>$actor,'reason'=>$reason,'queued'=>$queued,'scanned'=>$scanned,'scan_truncated'=>$truncated]);
+        return ['queued'=>$queued,'reason'=>$reason,'scanned'=>$scanned,'scan_truncated'=>$truncated];
     }
     public static function killSwitch(string $format,int $actor,bool $enabled,string $reason): array {
-        Auth::assertActor($actor,'media_manage_providers');$format=strtolower(Utils::text($format,96));$reason=Utils::text($reason,255);if($format===''||$reason==='')throw new Error('kill_switch_invalid','Format and reason are required.',400);
-        $id=hash('sha256',$format);$existing=RecordStore::get('format_kill_switch',$id);$row=RecordStore::put('format_kill_switch',$id,['actor_id'=>$actor,'status'=>$enabled?'blocked':'released','format'=>$format,'reason'=>$reason,'updated_by'=>$actor,'created_at'=>$existing?($existing['created_at']??Utils::now()):Utils::now()],$existing?(int)$existing['version']:0);
-        Audit::record('future40_format_kill_switch',['format'=>$format,'enabled'=>$enabled,'reason'=>$reason]);return $row;
+        Auth::assertActor($actor,'media_manage_providers');Auth::capability('media_manage_providers');
+        $format=strtolower(Utils::text($format,96));$reason=Utils::text($reason,255);
+        if($format===''||$reason==='')throw new Error('kill_switch_invalid','Format and reason are required.',400);
+        $id=hash('sha256',$format);$existing=RecordStore::get('format_kill_switch',$id);
+        $row=RecordStore::put('format_kill_switch',$id,[
+            'actor_id'=>$actor,'status'=>$enabled?'blocked':'released','format'=>$format,
+            'reason'=>$reason,'updated_by'=>$actor,
+            'created_at'=>$existing?($existing['created_at']??Utils::now()):Utils::now()
+        ],$existing?(int)$existing['version']:0);
+        Audit::record('future40_format_kill_switch',[
+            'format'=>$format,'enabled'=>$enabled,'reason'=>$reason]);return $row;
     }
-    public static function assertAllowed(string $format): void {$row=RecordStore::get('format_kill_switch',hash('sha256',strtolower(Utils::text($format,96))));if($row&&($row['status']??'')==='blocked')throw new Error('format_emergency_blocked','Format is disabled by emergency security policy.',503,['format'=>$format]);}
+    public static function assertAllowed(string $format): void {
+        $row=RecordStore::get('format_kill_switch',hash('sha256',strtolower(Utils::text($format,96))));
+        if($row&&($row['status']??'')==='blocked')
+            throw new Error('format_emergency_blocked','Format is disabled by emergency security policy.',503,['format'=>$format]);
+    }
 }
 
 final class MediaOptimizationService {
