@@ -1686,18 +1686,37 @@ final class DisasterCostRoutingService {
     }
     public static function optimizeTier(string $assetId,array $metrics): array {
         $asset=Future40Registry::asset($assetId,true);
-        $access=Utils::integer(array_key_exists('accesses_30d',$metrics)?$metrics['accesses_30d']:0,'storage_tier_metric_invalid',0,PHP_INT_MAX);
-        $age=Utils::integer(array_key_exists('age_days',$metrics)?$metrics['age_days']:0,'storage_tier_metric_invalid',0,PHP_INT_MAX);
+        if(array_diff(array_keys($metrics),['accesses_30d','age_days','cost_score'])!==[])
+            throw new Error('storage_tier_metric_invalid','Unapproved tier metric.',400);
+        $access=Utils::integer(array_key_exists('accesses_30d',$metrics)?$metrics['accesses_30d']:0,'storage_tier_metric_invalid',0,1000000000);
+        $age=Utils::integer(array_key_exists('age_days',$metrics)?$metrics['age_days']:0,'storage_tier_metric_invalid',0,365000);
         $cost=self::decimal(array_key_exists('cost_score',$metrics)?$metrics['cost_score']:0.0,'storage_tier_metric_invalid');
-        $rights=$asset['rights']??[];
-        if(!is_array($rights))throw new Error('storage_tier_rights_invalid','Rights envelope is invalid.',409);
-        $rightsExpiry=Utils::integer(array_key_exists('expires_at',$rights)?$rights['expires_at']:0,'storage_tier_rights_invalid',0,PHP_INT_MAX);
-        $objectLock=ResidencyCryptoService::isLocked($assetId);$legalHold=LegalHoldService::active($assetId)!==[];
-        $retentionClass=Utils::key((string)($asset['policy']['retention']['class']??''),64);
-        $privacyClass=Utils::key((string)($asset['privacy_class']??''),16);
+        $rights=$asset['rights']??null;
+        if(!is_array($rights)||!array_key_exists('expires_at',$rights))
+            throw new Error('storage_tier_rights_invalid','Explicit rights expiry evidence is required.',409);
+        $rightsExpiry=Utils::integer($rights['expires_at'],'storage_tier_rights_invalid',0,PHP_INT_MAX);
+        $policy=$asset['policy']??null;
+        if(!is_array($policy)||!is_array($policy['retention']??null))
+            throw new Error('storage_tier_policy_invalid','Retention policy evidence is required.',409);
+        $retention=$policy['retention']['class']??null;
+        if(!is_string($retention)||strlen($retention)>64
+            ||!preg_match('/^[a-z0-9][a-z0-9._:-]{0,63}$/D',$retention))
+            throw new Error('storage_tier_policy_invalid','Retention class must be canonical.',409);
+        $privacy=$asset['privacy_class']??null;
+        if(!is_string($privacy)||!in_array($privacy,['C0','C1','C2','C3','C4','C5'],true))
+            throw new Error('storage_tier_privacy_invalid','Privacy class evidence is invalid.',409);
+        $objectLock=ResidencyCryptoService::isLocked($assetId);
+        $legalHold=LegalHoldService::active($assetId)!==[];
         $rightsActive=$rightsExpiry===0||$rightsExpiry>Utils::now();
-        $tier=($objectLock||$legalHold)?'archive_locked':(!$rightsActive?'rights_restricted':($access>100?'hot':($access>10?'warm':($age>180&&$cost>0?'archive':'cold'))));
-        return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>false,'transition_requires_owner_authorization'=>true,'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'cost_score'=>$cost,'object_lock'=>$objectLock,'legal_hold'=>$legalHold,'retention_class'=>$retentionClass,'privacy_class'=>$privacyClass,'rights_active'=>$rightsActive,'rights_expires_at'=>$rightsExpiry,'residency_policy'=>ResidencyCryptoService::hasPolicy($assetId)]];
+        $tier=($objectLock||$legalHold)?'archive_locked':(!$rightsActive?'rights_restricted':
+            ($access>100?'hot':($access>10?'warm':($age>180&&$cost>0?'archive':'cold'))));
+        return ['asset_id'=>$assetId,'recommended_tier'=>$tier,'automatic_move'=>false,
+            'transition_requires_owner_authorization'=>true,
+            'reason'=>['accesses_30d'=>$access,'age_days'=>$age,'cost_score'=>$cost,
+                'object_lock'=>$objectLock,'legal_hold'=>$legalHold,
+                'retention_class'=>$retention,'privacy_class'=>$privacy,
+                'rights_active'=>$rightsActive,'rights_expires_at'=>$rightsExpiry,
+                'residency_policy'=>ResidencyCryptoService::hasPolicy($assetId)]];
     }
     public static function costEstimate(string $assetId,array $prices,array $plan): array {
         $asset=Future40Registry::asset($assetId);
