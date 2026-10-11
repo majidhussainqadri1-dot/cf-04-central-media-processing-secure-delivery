@@ -1717,28 +1717,71 @@ final class DisasterCostRoutingService {
         if(!is_finite($cost)||$cost>1000000000)throw new Error('cost_estimate_invalid','Estimate exceeds ceiling.',400);
         return ['asset_id'=>$assetId,'currency'=>$currency,'estimated_cost'=>round($cost,6),'components'=>['storage_gb'=>$gb,'minutes'=>$minutes,'egress_gb'=>$egress],'estimate_only'=>true];
     }
+    private static function routeCapability(mixed $value,string $code): string {
+        if(!is_string($value)||strlen($value)>64
+            ||!preg_match('/^[a-z0-9][a-z0-9._:-]{0,63}$/D',$value))
+            throw new Error($code,'Routing capability must be canonical bounded text.',400);
+        return $value;
+    }
     public static function autoRoute(array $providers,array $requirements): array {
-        if(!is_array($requirements['capabilities']??[])||!is_array($requirements['regions']??[]))throw new Error('route_requirements_invalid','Routing requirements must be arrays.',400);
-        $requiredCaps=[];foreach($requirements['capabilities']??[] as $v){if(!is_string($v))throw new Error('route_requirements_invalid','Capability identity invalid.',400);$key=Utils::key($v,64);if($key==='')throw new Error('route_requirements_invalid','Capability identity invalid.',400);$requiredCaps[]=$key;}
-        $requiredCaps=array_values(array_unique($requiredCaps));
-        $requiredRegions=[];foreach($requirements['regions']??[] as $v)$requiredRegions[]=self::region($v);
-        $requiredRegions=array_values(array_unique($requiredRegions));
-        $eligible=[];
+        if(!array_is_list($providers)||count($providers)>256)
+            throw new Error('route_providers_invalid','Provider candidates must be a bounded list.',400);
+        if(array_diff(array_keys($requirements),['capabilities','regions'])!==[])
+            throw new Error('route_requirements_invalid','Unknown routing requirement.',400);
+        $capsInput=$requirements['capabilities']??[];
+        $regionsInput=$requirements['regions']??[];
+        if(!is_array($capsInput)||!array_is_list($capsInput)||count($capsInput)>32
+            ||!is_array($regionsInput)||!array_is_list($regionsInput)||count($regionsInput)>32)
+            throw new Error('route_requirements_invalid','Routing requirements must be bounded lists.',400);
+        $requiredCaps=[];
+        foreach($capsInput as $value){
+            $cap=self::routeCapability($value,'route_requirements_invalid');
+            if(in_array($cap,$requiredCaps,true))
+                throw new Error('route_requirements_invalid','Duplicate required capability.',400);
+            $requiredCaps[]=$cap;
+        }
+        $requiredRegions=[];
+        foreach($regionsInput as $value){
+            try{$region=self::drRegion($value);}catch(Error){
+                throw new Error('route_requirements_invalid','Required region must be canonical.',400);
+            }
+            if(in_array($region,$requiredRegions,true))
+                throw new Error('route_requirements_invalid','Duplicate required region.',400);
+            $requiredRegions[]=$region;
+        }
+        $eligible=[];$seen=[];
         foreach($providers as $p){
             if(!is_array($p)||($p['approved']??false)!==true||($p['healthy']??false)!==true)continue;
-            if(!is_string($p['id']??null)||!is_string($p['region']??null)||!is_array($p['capabilities']??null))continue;
-            $id=Utils::key($p['id'],64);
-            try{$region=self::region($p['region']);$cost=self::decimal($p['cost_score']??null,'route_score_invalid');$latency=self::decimal($p['latency_score']??null,'route_score_invalid');}catch(\Throwable){continue;}
-            if($id==='')continue;
-            $caps=[];foreach($p['capabilities'] as $v){if(!is_string($v))continue;$key=Utils::key($v,64);if($key!=='')$caps[]=$key;}
-            if(array_diff($requiredCaps,array_unique($caps))!==[])continue;
+            if(!is_string($p['id']??null)||!is_string($p['region']??null)
+                ||!is_array($p['capabilities']??null))continue;
+            try {
+                $id=self::routeCapability($p['id'],'route_provider_invalid');
+                $region=self::drRegion($p['region']);
+                $cost=self::decimal($p['cost_score']??null,'route_score_invalid');
+                $latency=self::decimal($p['latency_score']??null,'route_score_invalid');
+                if(!array_is_list($p['capabilities'])||count($p['capabilities'])>32)
+                    continue;
+                $caps=[];
+                foreach($p['capabilities'] as $v){
+                    $cap=self::routeCapability($v,'route_provider_invalid');
+                    if(in_array($cap,$caps,true))throw new Error('route_provider_invalid','Duplicate provider capability.',400);
+                    $caps[]=$cap;
+                }
+            }catch(\Throwable){continue;}
+            if(isset($seen[$id]))
+                throw new Error('route_provider_conflict','Approved healthy provider identity is duplicated.',409);
+            $seen[$id]=true;
+            if(array_diff($requiredCaps,$caps)!==[])continue;
             if($requiredRegions!==[]&&!in_array($region,$requiredRegions,true))continue;
             $eligible[]=['id'=>$id,'region'=>$region,'cost'=>$cost,'latency'=>$latency];
         }
         if($eligible===[])throw new Error('approved_provider_unavailable','No approved provider satisfies requirements.',503);
-        usort($eligible,fn($a,$b)=>(($a['cost']+$a['latency'])<=>($b['cost']+$b['latency'])) ?: strcmp($a['id'],$b['id']));
-        return ['provider'=>$eligible[0]['id'],'region'=>$eligible[0]['region'],'eligible_count'=>count($eligible),'decision'=>'approved_health_capability_cost_route'];
+        usort($eligible,fn($a,$b)=>(($a['cost']+$a['latency'])<=>($b['cost']+$b['latency']))
+            ?: strcmp($a['id'],$b['id']) ?: strcmp($a['region'],$b['region']));
+        return ['provider'=>$eligible[0]['id'],'region'=>$eligible[0]['region'],
+            'eligible_count'=>count($eligible),'decision'=>'approved_health_capability_cost_route'];
     }
+
 }
 
 final class OperationsFutureService {
