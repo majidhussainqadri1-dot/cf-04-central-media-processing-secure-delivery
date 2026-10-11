@@ -1719,6 +1719,10 @@ final class DisasterCostRoutingService {
                 'residency_policy'=>ResidencyCryptoService::hasPolicy($assetId)]];
     }
     public static function costEstimate(string $assetId,array $prices,array $plan): array {
+        if(array_diff(array_keys($prices),['storage_gb_month','transcode_minute','egress_gb','currency'])!==[])
+            throw new Error('cost_price_invalid','Unknown price table component.',400);
+        if(array_diff(array_keys($plan),['minutes','egress_gb'])!==[])
+            throw new Error('cost_plan_invalid','Unknown cost estimate plan component.',400);
         $asset=Future40Registry::asset($assetId);
         $size=Utils::integer($asset['size']??null,'cost_asset_size_invalid',0,1073741824);
         $safe=[];
@@ -1729,9 +1733,9 @@ final class DisasterCostRoutingService {
         $gb=max(0.000001,$size/1073741824);
         $minutes=self::decimal(array_key_exists('minutes',$plan)?$plan['minutes']:0,'cost_plan_invalid');
         $egress=self::decimal(array_key_exists('egress_gb',$plan)?$plan['egress_gb']:$gb,'cost_plan_invalid');
-        $currency=array_key_exists('currency',$prices)?$prices['currency']:'USD';
-        if(!is_string($currency)||!preg_match('/^[A-Za-z]{3}$/D',$currency))throw new Error('cost_currency_invalid','Currency code invalid.',400);
-        $currency=Utils::key($currency,8);
+        $currency=$prices['currency']??null;
+        if(!is_string($currency)||!preg_match('/^[A-Z]{3}$/D',$currency))
+            throw new Error('cost_currency_invalid','Explicit canonical uppercase currency code required.',400);
         $cost=$gb*$safe['storage_gb_month']+$minutes*$safe['transcode_minute']+$egress*$safe['egress_gb'];
         if(!is_finite($cost)||$cost>1000000000)throw new Error('cost_estimate_invalid','Estimate exceeds ceiling.',400);
         return ['asset_id'=>$assetId,'currency'=>$currency,'estimated_cost'=>round($cost,6),'components'=>['storage_gb'=>$gb,'minutes'=>$minutes,'egress_gb'=>$egress],'estimate_only'=>true];
