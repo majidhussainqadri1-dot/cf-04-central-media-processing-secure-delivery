@@ -26,7 +26,7 @@ RecordStore::put('perceptual_fingerprint','r133-fb',['actor_id'=>11,'status'=>'a
 FutureAdapterRegistry::reset();FutureAdapterRegistry::register('future_004',static fn()=>['ok'=>true,'similarity'=>0.9]);
 err(fn()=>PerceptualMediaService::nearDuplicates('r133-a',11,NAN),'perceptual_threshold_invalid','Round 133 near-duplicate threshold rejects NaN');
 
-FutureAdapterRegistry::reset();FutureAdapterRegistry::register('future_009',static fn()=>['ok'=>true,'complexity'=>NAN,'renditions'=>[['kind'=>'video-low']]]);
+FutureAdapterRegistry::reset();FutureAdapterRegistry::register('future_009',static fn()=>['ok'=>true,'complexity'=>NAN,'renditions'=>[['kind'=>'video-low','bitrate'=>400000]]]);
 err(fn()=>MediaOptimizationService::encodingPlan('r133-a',11,[]),'encoding_complexity_invalid','Round 133 encoding complexity rejects NaN');
 err(fn()=>DeliveryResilienceService::adaptiveUpload(['rtt_ms'=>10,'mbps'=>NAN,'unstable'=>false],['max_part_size_bytes'=>8388608]),'network_profile_invalid','Round 133 adaptive upload rejects NaN throughput');
 err(fn()=>WorkspaceUploadService::normalize('audio',['trim_start'=>NAN,'trim_end'=>10],11),'audio_trim_invalid','Round 133 audio trim rejects NaN');
