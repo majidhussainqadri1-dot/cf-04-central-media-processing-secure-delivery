@@ -433,11 +433,6 @@ final class MediaOptimizationService {
             'renditions'=>$ladder,'complexity'=>(float)$complexity,
             'constraints'=>$safeConstraints,'created_at'=>Utils::now()]);
     }
-        RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);ContentSafetyUpgradeService::assertAllowed((string)$asset['mime']);
-        $result=FutureAdapterRegistry::call('future_009',['asset_id'=>$assetId,'sha256'=>$asset['sha256'],'media_class'=>$asset['media_class'],'size'=>$asset['size'],'constraints'=>$constraints]);
-        $ladder=(array)($result['renditions']??[]);if($ladder===[])throw new Error('encoding_plan_invalid','Encoding adapter returned no renditions.',503);$complexity=(float)($result['complexity']??0.0);if(!is_finite($complexity)||$complexity<0.0)throw new Error('encoding_complexity_invalid','Encoding complexity must be finite and non-negative.',503);
-        return RecordStore::put('encoding_plan',hash('sha256',$assetId.'|'.Utils::canonicalJson($constraints)),['actor_id'=>$actor,'status'=>'approved','asset_id'=>$assetId,'renditions'=>$ladder,'complexity'=>$complexity,'constraints'=>Utils::redact($constraints),'created_at'=>Utils::now()]);
-    }
     public static function qualityScore(string $assetId,string $derivativeId,int $actor,array $thresholds): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'media_reprocess');$asset=Future40Registry::asset($assetId,true);$derivative=RecordStore::get('derivative',$derivativeId);if(!$derivative||($derivative['asset_id']??'')!==$assetId)throw new Error('derivative_not_found','Derivative not found.',404);
         $safeThresholds=self::finiteNumericMap($thresholds,'quality_threshold_invalid','Quality thresholds');$result=FutureAdapterRegistry::call('future_010',['asset_sha256'=>$asset['sha256'],'derivative_sha256'=>$derivative['sha256'],'kind'=>$derivative['kind'],'thresholds'=>$safeThresholds]);
