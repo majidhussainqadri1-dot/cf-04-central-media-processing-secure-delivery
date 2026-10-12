@@ -55,6 +55,22 @@ ok($canonicalUpload['expected_size']===$meta['size']
     'Round 197 allows canonical size and TTL without silent widening');
 UploadService::abort($canonicalUpload['id'],11,$canonicalUpload['upload_credential'],'test-cleanup');
 
+// Round 199: idempotent upload replay must revalidate the native owner's current object version.
+$replayMeta=$meta;$replayMeta['owner_object']='message:r199-upload-replay';
+$firstReplay=UploadService::create(11,$replayMeta,$p,'r199-upload-key');
+$staleReplay=RecordStore::get('upload',$firstReplay['id']);
+$staleReplay['object_version']=2;
+RecordStore::put('upload',$staleReplay['id'],$staleReplay,(int)$staleReplay['version']);
+err(fn()=>UploadService::create(11,$replayMeta,$p,'r199-upload-key'),
+    'domain_object_version_stale','Round 199 refuses new credentials for a stale File17 owner object');
+$staleReplay=RecordStore::get('upload',$firstReplay['id']);
+$staleReplay['object_version']=1;
+RecordStore::put('upload',$staleReplay['id'],$staleReplay,(int)$staleReplay['version']);
+$goodReplay=UploadService::create(11,$replayMeta,$p,'r199-upload-key');
+ok($goodReplay['id']===$firstReplay['id']&&!empty($goodReplay['upload_credential']),
+    'Round 199 canonical replay reauthorizes and returns same active upload');
+UploadService::abort($goodReplay['id'],11,$goodReplay['upload_credential'],'test-cleanup');
+
 // FR-003 source identity/dedupe boundaries.
 ok(strlen($asset['sha256'])===64&&strlen($asset['fingerprint'])===64&&str_contains($asset['object_key'], '')&&$asset['policy_hash']!==''&&$asset['rights']['policy_hash']!=='','FR-003 hash, fingerprint and policy/rights-bound object identity');
 

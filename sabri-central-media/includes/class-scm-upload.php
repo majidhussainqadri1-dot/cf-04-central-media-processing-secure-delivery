@@ -131,7 +131,23 @@ final class UploadService {
     public static function create(int $actor,array $metadata,array $rawPolicy,string $idempotencyKey,array $quotaLimits=[]): array {
         RuntimeGuard::requireReady(['streaming']);Auth::assertActor($actor);Auth::verifiedUser($actor,'media_upload_create',(string)($rawPolicy['owner_domain']??''));RateLimiter::hit('upload-create',(string)$actor,60,60);
         $policy=Policy::normalize($rawPolicy,true);self::validateMetadata($metadata,$policy);$ttl=self::sessionTtl($metadata);$ownerType=self::ownerType((string)$metadata['owner_object']);$fingerprint=hash('sha256',Utils::canonicalJson(['actor'=>$actor,'metadata'=>Utils::redact($metadata),'policy_hash'=>$policy['policy_hash']]));$claim=Idempotency::claim('upload-create',$idempotencyKey,$fingerprint);
-        if($claim['replay']){$row=RecordStore::get('upload',(string)$claim['record']['result_id'])??throw new Error('upload_replay_missing','Replayed upload missing.',500);if(!in_array(($row['status']??''),['uploading','paused'],true))throw new Error('upload_replay_state_invalid','Replayed upload is no longer resumable.',409);[$row,$credential]=self::issueCredential($row,$ttl);$row=RecordStore::put('upload',(string)$row['id'],$row,(int)$row['version']);return $row+['upload_credential'=>$credential];}
+        if($claim['replay']){
+            $row=RecordStore::get('upload',(string)$claim['record']['result_id'])
+                ??throw new Error('upload_replay_missing','Replayed upload missing.',500);
+            if(!in_array(($row['status']??''),['uploading','paused'],true))
+                throw new Error('upload_replay_state_invalid','Replayed upload is no longer resumable.',409);
+            if((int)($row['actor_id']??0)!==$actor
+                ||($row['owner_domain']??'')!==$policy['owner_domain']
+                ||($row['owner_object']??'')!==$metadata['owner_object']
+                ||($row['policy_hash']??'')!==$policy['policy_hash']
+                ||(int)($row['expected_size']??0)!==Utils::integer($metadata['size'],'upload_size_invalid',1,$policy['max_size_bytes']))
+                throw new Error('upload_replay_binding_invalid','Replayed upload identity or policy no longer matches its caller.',409);
+            // The idempotency result does not replace live File 17/domain permission.
+            self::reauthorizeActiveUpload($row,$actor,'replay');
+            [$row,$credential]=self::issueCredential($row,$ttl);
+            $row=RecordStore::put('upload',(string)$row['id'],$row,(int)$row['version']);
+            return $row+['upload_credential'=>$credential];
+        }
         $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];$decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
         try{
             if(array_key_exists('governed_exception_authorized',$decision)
