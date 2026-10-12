@@ -125,6 +125,21 @@ err(fn()=>TransferService::create($altered,policy('document','C4'),[]),
 ok(TransferService::normalize($transfer)['native_transfer_version']===1,
     'Round 189 preserves valid canonical transfer identity');
 
+// Round 190: fail closed when File 17 clinical classification conflicts with CF-04 rights/data policy.
+$altered=$transfer;$altered['confidentiality_class']='C3';
+err(fn()=>TransferService::create($altered,policy('document','C4'),[]),
+    'transfer_confidentiality_class_mismatch','Round 190 rejects native classification downgrade');
+$altered=$transfer;$altered['clinical_confidentiality']=false;
+err(fn()=>TransferService::create($altered,policy('document','C4'),[]),
+    'transfer_clinical_rights_mismatch','Round 190 rejects clinical-rights contradiction');
+$altered=$transfer;$altered['clinical_confidentiality']='false';
+err(fn()=>TransferService::normalize($altered),
+    'transfer_confidentiality_boolean_invalid','Round 190 rejects coercible confidentiality boolean');
+$altered=$transfer;$altered['confidentiality_class']='C3';
+err(fn()=>TransferService::create($altered,policy('document','C3'),[]),
+    'transfer_clinical_rights_mismatch','Round 190 rejects clinical evidence classified below C4');
+
+
 
 // FR-024 retention scheduler.
 $ret=RetentionService::schedule($asset['id']);ok($ret['source_delete_at']>time()&&$ret['backup_expiry_at']>time(),'FR-024 class-specific retention schedule');
