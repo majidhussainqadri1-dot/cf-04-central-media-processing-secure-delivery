@@ -5,6 +5,8 @@ namespace Sabri\CentralMedia;
 final class DeliveryService {
     public static function issue(string $assetId,?string $derivativeId,int $actor,string $serviceId,array $audience,array $context,string $operation,array $rangePolicy,string $sessionId,int $ttl=300,int $maxUses=20,?string $transferId=null): string {
     RuntimeGuard::requireReady(['streaming']);RestoreService::assertServeAllowed();Auth::assertActor($actor);
+    if($ttl<1)throw new Error('delivery_grant_ttl_invalid','Delivery grant TTL must be a positive duration.',400);
+    if($maxUses<1)throw new Error('delivery_grant_uses_invalid','Delivery grant maximum uses must be positive.',400);
     $serviceId=Utils::key($serviceId,64);$sessionId=self::canonicalSession($sessionId);$audience=self::audience($audience);
     if($serviceId===''||$sessionId==='')throw new Error('delivery_context_incomplete','Service and session identity required.',400);
     Auth::verifiedUser($actor,'media_delivery_issue',$serviceId,['asset_id'=>$assetId]);
