@@ -240,9 +240,30 @@ final class UploadService {
     }
 
     public static function cleanupExpired(int $now=0,int $limit=500): array {
-        $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));$result=['expired'=>0,'parts_purged'=>0,'failed'=>0];
-        foreach(RecordStore::all('upload',0,null,100000) as $snapshot){
-            if($result['expired']+$result['failed']>=$limit)break;
+        $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));
+        $result=['expired'=>0,'parts_purged'=>0,'failed'=>0,'scanned'=>0];
+        $cursor=RecordStore::get('cron_cursor','upload-expiry');
+        if($cursor!==null){
+            $last=$cursor['last_id']??null;
+            if(($cursor['record_type']??null)!=='cron_cursor'
+                ||($cursor['id']??null)!=='upload-expiry'
+                ||($cursor['actor_id']??null)!==0
+                ||($cursor['status']??null)!=='active'
+                ||!is_int($cursor['version']??null)||$cursor['version']<1
+                ||!is_string($last)||strlen($last)>96
+                ||Utils::text($last,96)!==$last)
+                throw new Error('upload_expiry_cursor_invalid','Stored upload expiry cursor is invalid.',500);
+        }
+        $after=$cursor['last_id']??'';
+        // Bound each maintenance invocation and persist progress, including when
+        // most records are still active. Never materialize the whole upload table.
+        $scanBudget=min(20000,max(1000,$limit*4));
+        while($result['scanned']<$scanBudget&&$result['expired']+$result['failed']<$limit){
+            $page=RecordStore::scan('upload',min(250,$scanBudget-$result['scanned']),$after);
+            if($page===[]){$after='';break;}
+            foreach($page as $snapshot){
+                $after=(string)$snapshot['id'];$result['scanned']++;
+
             $state=(string)($snapshot['status']??'');if(!in_array($state,['uploading','paused','expiring'],true))continue;if($state!=='expiring'&&(int)($snapshot['expires_at']??0)>$now)continue;
             try{
                 $upload=RecordStore::get('upload',(string)$snapshot['id'])??$snapshot;$state=(string)($upload['status']??'');
@@ -259,6 +280,15 @@ final class UploadService {
                 $fresh['status']='expired';$fresh['expired_at']=$now;unset($fresh['expiry_started_at']);$fresh=RecordStore::put('upload',(string)$fresh['id'],$fresh,(int)$fresh['version']);
                 $result['expired']++;$result['parts_purged']+=count($parts);
             }catch(\Throwable $exception){$result['failed']++;try{Observability::alert('warning','upload_cleanup_failed',['upload_id'=>$snapshot['id']??'','exception'=>get_class($exception)]);}catch(\Throwable){}}
+                if($result['expired']+$result['failed']>=$limit)break;
+            }
+        }
+        if($result['scanned']>0||$cursor!==null){
+            RecordStore::put('cron_cursor','upload-expiry',[
+                'actor_id'=>0,'status'=>'active','last_id'=>$after,
+                'last_scanned'=>$result['scanned'],'last_completed'=>$result['expired'],
+                'updated_at'=>Utils::now(),
+            ],$cursor?(int)$cursor['version']:0);
         }
         return $result;
     }
