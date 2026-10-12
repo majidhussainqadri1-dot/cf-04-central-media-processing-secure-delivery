@@ -103,7 +103,35 @@ final class TransferService {
         if($remaining<=2)throw new Error('transfer_not_ready','Transfer is too close to expiry to grant access.',409);
         $grantTtl=min(300,$remaining-2);
         return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,$grantTtl,50);}
-    public static function revoke(string $transferId,int $actor,string $reason): array {Auth::assertActor($actor,'manage_options');$reason=Utils::key($reason,64);if($reason==='')throw new Error('transfer_revoke_reason_required','Transfer revoke reason required.',400);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if(($transfer['status']??'')==='revoked')return $transfer;if($actor!==(int)$transfer['sender_user_id'])Auth::capability('media_reprocess');$decision=DomainRegistry::decision('file17','authorize_transfer_revoke',['transfer'=>$transfer,'actor_id'=>$actor,'reason'=>$reason]);if((int)$decision['object_version']!==(int)$transfer['native_transfer_version'])throw new Error('transfer_revoke_version_stale','Transfer revocation authorization is stale.',409);$transfer['status']='revoked';$transfer['revoked_at']=Utils::now();$transfer['revoke_reason']=$reason;$transfer=RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);if(!empty($transfer['asset_id']))DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');self::notify('transfer.revoked',$transfer);return $transfer;}
+    public static function revoke(string $transferId,int $actor,string $reason): array {
+        Auth::assertActor($actor,'manage_options');
+        $reason=Utils::key($reason,64);
+        if($reason==='')throw new Error('transfer_revoke_reason_required','Transfer revoke reason required.',400);
+        $transfer=RecordStore::get('transfer',$transferId);
+        if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);
+        // Authorize before returning or inspecting a previously revoked owner's record.
+        if($actor!==(int)$transfer['sender_user_id'])Auth::capability('media_reprocess');
+        if(($transfer['status']??'')==='revoked'){
+            // A prior run may have committed transfer revocation but failed to revoke
+            // all issued grants. Do not make that partial failure permanently unrecoverable.
+            if(!empty($transfer['asset_id']))
+                DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');
+            return $transfer;
+        }
+        $decision=DomainRegistry::decision('file17','authorize_transfer_revoke',[
+            'transfer'=>$transfer,'actor_id'=>$actor,'reason'=>$reason
+        ]);
+        if((int)$decision['object_version']!==(int)$transfer['native_transfer_version'])
+            throw new Error('transfer_revoke_version_stale','Transfer revocation authorization is stale.',409);
+        $transfer['status']='revoked';
+        $transfer['revoked_at']=Utils::now();
+        $transfer['revoke_reason']=$reason;
+        $transfer=RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);
+        if(!empty($transfer['asset_id']))
+            DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');
+        self::notify('transfer.revoked',$transfer);
+        return $transfer;
+    }
     private static function notify(string $event,array $payload): void {if(function_exists('do_action'))do_action('scm_file19_notification',['event'=>$event,'payload'=>Utils::redact($payload)]);}
 }
 

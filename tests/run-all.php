@@ -317,6 +317,31 @@ $normalized=Policy::normalize($policyMin,true);
 ok($normalized['delivery']['grant_ttl_seconds']===30&&$normalized['retention']['temporary_seconds']===60,
     'Round 195 canonical lower bounds preserved without widening');
 
+// Round 196: a crash after durable transfer revocation must not strand active delivery grants.
+$transferForRevoke=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
+$transferForRevoke['status']='ready';
+$transferForRevoke['expires_at']=time()+600;
+$transferForRevoke['expected_size']=$transferAsset['size'];
+$transferForRevoke['asset_id']=$transferAsset['id'];
+$transferForRevoke=RecordStore::put('transfer',(string)$transferForRevoke['id'],$transferForRevoke,(int)$transferForRevoke['version']);
+$priorActor=$GLOBALS['scm_user_id'];$GLOBALS['scm_user_id']=12;
+try{
+    $revokeToken=TransferService::issueRecipientGrant(
+        (string)$transferForRevoke['id'],12,'round196-recovery-grant',['territory'=>'GLOBAL']);
+}finally{$GLOBALS['scm_user_id']=$priorActor;}
+$revokeGrantId=Crypto::verify($revokeToken)['grant_id'];
+ok(RecordStore::get('grant',$revokeGrantId)['status']==='active',
+    'Round 196 grant exists before simulated crash recovery');
+$transferForRevoke=RecordStore::get('transfer',(string)$transferForRevoke['id']);
+$transferForRevoke['status']='revoked';
+$transferForRevoke=RecordStore::put('transfer',(string)$transferForRevoke['id'],$transferForRevoke,(int)$transferForRevoke['version']);
+$recovered=TransferService::revoke((string)$transferForRevoke['id'],11,'crash-recovery');
+ok($recovered['status']==='revoked'&&RecordStore::get('grant',$revokeGrantId)['status']==='revoked',
+    'Round 196 idempotent revoked transfer repairs stranded grant revocation');
+$again=TransferService::revoke((string)$transferForRevoke['id'],11,'retry');
+ok($again['status']==='revoked','Round 196 repeat revocation remains idempotent');
+
+
 ok(RuntimeGuard::enabled()&&Schema::ready(),'coded runtime test gate ready while production default remains disabled in plugin bootstrap');
 
 echo "ALL 33 CF-04 REQUIREMENTS + CHAT-XFER-001: SOURCE TESTS PASSED\n";
