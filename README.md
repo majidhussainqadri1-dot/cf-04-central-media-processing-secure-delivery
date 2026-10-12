@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–161 are also represented in the quality gate, with round-specific regression evidence where applicable. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused review evidence extends through Round 203; Round 204 records the latest 20-aspect structural parity inspection and fail-closed webhook/grant regression fixes. Round numbers are evidence identifiers, not a claim of a fresh independent full-suite run per round. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
@@ -59,3 +59,7 @@ Nonterminal derivative expiry and rights invalidation now share a single logical
 ## Round 158 — Projection evidence fail-closed replay
 
 Persisted rights-revocation projections are validated for canonical identity, owner/rights hashes, status, actor, timestamps, and propagation evidence **before** repeat derivative expiry. Pending outbox reconciliation independently verifies that the projection matches the notice and its stable event identity; corrupt evidence is rejected without a hook dispatch. Owner identity changes without an authoritative object-version increment remain fail-closed, rather than silently treating a conflicting projection as a new owner event. These checks prove local source behavior only, not external delivery or deployed state.
+
+## Latest exact-source review (Round 204)
+
+See [`docs/reviews/REVIEW-ROUND-204-TWENTY-ASPECT-SOURCE-PARITY-2026-10-12.md`](docs/reviews/REVIEW-ROUND-204-TWENTY-ASPECT-SOURCE-PARITY-2026-10-12.md). The review identified and corrected noncanonical webhook timestamp ingress and nonpositive signed-delivery TTL/use-count coercion; test-fixture namespace escaping was subsequently corrected. Confirm the **current PR HEAD** has successful push and PR PHP 8.1/8.3/8.4 CI before relying on this correction. This does not establish real-provider, staging or live acceptance.
