@@ -12,7 +12,7 @@ if(!function_exists('add_filter')){function add_filter(string $tag,callable $cal
 if(!function_exists('apply_filters')){function apply_filters(string $tag,mixed $value,mixed ...$args): mixed {foreach($GLOBALS['scm_filters'][$tag]??[] as $cb)$value=$cb($value,...$args);return $value;}}
 if(!function_exists('do_action')){function do_action(string $tag,mixed ...$args): void {$GLOBALS['scm_actions'][]=['tag'=>$tag,'args'=>$args];}}
 if(!function_exists('get_current_user_id')){function get_current_user_id(): int {return (int)$GLOBALS['scm_user_id'];}}
-if(!function_exists('current_user_can')){function current_user_can(string $cap): bool {return true;}}
+if(!function_exists('current_user_can')){function current_user_can(string $cap): bool {return !in_array($cap,(array)($GLOBALS['scm_test_denied_caps']??[]),true);}}
 if(!function_exists('__')){function __(string $text,string $domain=''): string {return $text;}}
 if(!function_exists('esc_html__')){function esc_html__(string $text,string $domain=''): string {return $text;}}
 if(!function_exists('esc_html')){function esc_html(string $text): string {return htmlspecialchars($text,ENT_QUOTES);}}

@@ -170,6 +170,21 @@ ok(($asset['storage']['key_id']??'')==='test-v1'&&ProviderRegistry::store()->cap
 // FR-018 complete delivery grant binding/revocation/use policy.
 $aud=['type'=>'private','user_id'=>11];$ctx=['audience_type'=>'private','territory'=>'GLOBAL','route'=>'test'];$rangePolicy=['allow_ranges'=>true,'max_range_bytes'=>8388608];$token=DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'download',$rangePolicy,'session-1',300,2);$claims=Crypto::verify($token);ok(isset($claims['actor_id'],$claims['service_id'],$claims['audience_hash'],$claims['context_hash'],$claims['session_hash'],$claims['range_hash'],$claims['operation'],$claims['policy_hash'],$claims['rights_hash']),'FR-018 fully bound signed grant claims');
 $served=DeliveryService::serve($token,11,'file17',$aud,$ctx,'session-1','bytes=0-9');ok($served['status']===206&&$served['range']['length']===10,'FR-018 range-bound grant consumption');fclose($served['stream']);err(fn()=>DeliveryService::serve($token,11,'file17',$aud,$ctx,'wrong-session',null),'grant_binding_mismatch','FR-018 session binding');DeliveryService::revoke($claims['grant_id'],11);err(fn()=>DeliveryService::serve($token,11,'file17',$aud,$ctx,'session-1',null),'grant_revoked','FR-018 revocation');
+// R201: idempotent revoked grant must NOT bypass actor/capability authorization.
+$oldActor=$GLOBALS['scm_user_id'];
+$oldDeny=$GLOBALS['scm_test_denied_caps']??[];
+$GLOBALS['scm_user_id']=12;
+$GLOBALS['scm_test_denied_caps']=['media_reprocess'];
+try {
+    err(fn()=>DeliveryService::revoke((string)$claims['grant_id'],12,'unauthorized-retry'),
+        'capability_denied','R201 revoked grant never exposes its record to a different unprivileged actor');
+} finally {
+    $GLOBALS['scm_user_id']=$oldActor;
+    $GLOBALS['scm_test_denied_caps']=$oldDeny;
+}
+$revokedAgain=DeliveryService::revoke((string)$claims['grant_id'],11,'owner-idempotent-retry');
+ok($revokedAgain['status']==='revoked','R201 original owner may safely retry revoked grant');
+
 
 // FR-019 public CDN immutable publication/purge.
 $public=create_document_asset('message:public','C0');$publicDerivative=DerivativeService::forAsset($public['id'])[0];$cdn=DeliveryService::publishPublic($public['id'],$publicDerivative['id']);ok($cdn['status']==='published'&&str_contains($cdn['version_key'],$publicDerivative['sha256']),'FR-019 public derivative immutable CDN publication');
