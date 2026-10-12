@@ -71,6 +71,14 @@ final class RecordStore {
         if(self::test()){$rows=array_values(array_filter(self::$memory[$type]??[],fn(array $row)=>($actor<1||(int)($row['actor_id']??0)===$actor)&&($status===null||($row['status']??'')===$status)&&($afterId===''||strcmp((string)($row['id']??''),$afterId)>0)));usort($rows,fn($a,$b)=>strcmp((string)$a['id'],(string)$b['id']));return array_slice($rows,0,$limit);}
         self::requirePersistent();global $wpdb;$sql='SELECT payload FROM '.Db::table('records').' WHERE record_type=%s';$args=[$type];if($actor>0){$sql.=' AND actor_id=%d';$args[]=$actor;}if($status!==null){$sql.=' AND status=%s';$args[]=$status;}if($afterId!==''){$sql.=' AND id>%s';$args[]=$afterId;}$sql.=' ORDER BY id ASC LIMIT '.$limit;$rows=$wpdb->get_col($wpdb->prepare($sql,...$args));Db::assertRead('record_scan');$out=[];foreach((array)$rows as $raw){try{$value=json_decode((string)$raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent record scan contains invalid JSON.',500,['record_type'=>$type]);}if(!is_array($value)||($value['record_type']??'')!==$type||(int)($value['version']??0)<1)throw new Error('record_payload_invalid','Persistent record scan contains invalid identity.',500,['record_type'=>$type]);$out[]=$value;}return $out;
     }
+    /** Stable keyset page for bounded maintenance jobs: no full-table materialization. */
+    public static function scan(string $type,int $limit=500,string $afterId='',int $actor=0,?string $status=null): array {
+        if($afterId!==''&&(strlen($afterId)>96||Utils::text($afterId,96)!==$afterId))
+            throw new Error('record_scan_cursor_invalid','Record scan cursor must be an exact bounded ID.',500);
+        if($limit<1||$limit>2000)
+            throw new Error('record_scan_limit_invalid','Record scan page size must be between 1 and 2000.',500);
+        return self::scanPage($type,$actor,$status,$limit,$afterId);
+    }
     public static function all(string $type,int $actor=0,?string $status=null,int $maximum=100000): array {
         $maximum=max(1,min(1000000,$maximum));$out=[];$after='';
         while(count($out)<$maximum){$remaining=$maximum-count($out);$pageSize=min(2000,$remaining);$page=self::scanPage($type,$actor,$status,$pageSize,$after);$count=count($page);if($count===0)break;array_push($out,...$page);$after=(string)$page[$count-1]['id'];if(count($out)>=$maximum){$probe=self::scanPage($type,$actor,$status,1,$after);if($probe!==[])throw new Error('record_scan_limit','Record scan exceeded its explicit safety limit.',503,['record_type'=>Utils::key($type,48),'maximum'=>$maximum]);break;}if($count<$pageSize)break;}return $out;
