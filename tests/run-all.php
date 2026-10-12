@@ -165,6 +165,31 @@ $altered=$transfer;$altered['recipient_type']='group';$altered['recipient_group_
 ok(TransferService::normalize($altered)['recipient_group_id']==='group-1',
     'Round 191 valid group transfer retains exact canonical group ID');
 
+// Round 192: signed recipient grants must not outlive the File 17 native transfer expiry.
+$transferAsset=create_document_asset('message:transfer-1','C4');
+$nearExpiryTransfer=$transfer;
+$nearExpiryTransfer['asset_id']=$transferAsset['id'];
+$nearExpiryTransfer['status']='ready';
+$nearExpiryTransfer['expires_at']=time()+45;
+$nearExpiryTransfer=RecordStore::put('transfer',$transfer['id'],$nearExpiryTransfer,(int)$transfer['version']);
+$oldActor=$GLOBALS['scm_user_id'];$GLOBALS['scm_user_id']=12;
+try{
+    $transferToken=TransferService::issueRecipientGrant(
+        (string)$nearExpiryTransfer['id'],12,'round192-recipient-session',['territory'=>'GLOBAL']
+    );
+    $nativeExpiry=RecordStore::get('transfer',(string)$nearExpiryTransfer['id'])['expires_at'];
+    $claims=Crypto::verify($transferToken);
+    ok((int)$claims['exp']<=(int)$nativeExpiry,
+        'Round 192 signed recipient grant expires no later than native File17 transfer');
+    $nearExpiryTransfer=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
+    $nearExpiryTransfer['expires_at']=time()+1;
+    RecordStore::put('transfer',(string)$nearExpiryTransfer['id'],$nearExpiryTransfer,(int)$nearExpiryTransfer['version']);
+    err(fn()=>TransferService::issueRecipientGrant(
+        (string)$nearExpiryTransfer['id'],12,'round192-too-late',['territory'=>'GLOBAL']
+    ),'transfer_not_ready','Round 192 denies access grants too close to native transfer expiry');
+}finally{$GLOBALS['scm_user_id']=$oldActor;}
+
+
 
 
 
