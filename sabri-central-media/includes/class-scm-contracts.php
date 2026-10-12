@@ -122,12 +122,25 @@ final class Policy {
         $delivery=(array)$input['delivery'];Utils::requireFields($delivery,['modes','grant_ttl_seconds','allow_ranges','allow_download','public_cdn'],'delivery_policy_incomplete');
         $modes=array_values(array_filter(array_unique(array_map(fn($m)=>Utils::key((string)$m,32),(array)$delivery['modes']))));$allowedModes=['same_origin_proxy','token_endpoint','public_cdn'];if($modes===[]||array_diff($modes,$allowedModes)!==[])throw new Error('delivery_mode_invalid','Delivery mode is missing or unsupported.',400);
         $rights=RightsPolicy::normalize((array)$input['rights']);
-        $minimumConfidence=(float)($input['safety']['minimum_confidence']??0.80);if(!is_finite($minimumConfidence)||$minimumConfidence<0.0||$minimumConfidence>1.0)throw new Error('safety_confidence_invalid','Safety minimum confidence must be finite and normalized.',400);
+        $rawConfidence=$input['safety']['minimum_confidence']??0.80;
+        if(!is_float($rawConfidence)&&!is_int($rawConfidence)
+            &&!(is_string($rawConfidence)&&preg_match('/^(?:0|1)(?:\.[0-9]+)?$/D',$rawConfidence)))
+            throw new Error('safety_confidence_invalid','Safety confidence must be a canonical decimal.',400);
+        $minimumConfidence=(float)$rawConfidence;
+        if(!is_finite($minimumConfidence)||$minimumConfidence<0.0||$minimumConfidence>1.0)
+            throw new Error('safety_confidence_invalid','Safety minimum confidence must be finite and normalized.',400);
         $maxWidth=Utils::integer($input['max_width']??0,'policy_integer_invalid',0);$maxHeight=Utils::integer($input['max_height']??0,'policy_integer_invalid',0);$maxPixels=Utils::integer($input['max_pixels']??0,'policy_integer_invalid',0);
         $maxDuration=Utils::integer($input['max_duration_seconds']??0,'policy_integer_invalid',0);$maxPages=Utils::integer($input['max_pages']??0,'policy_integer_invalid',0);
         $maxArchiveRatio=Utils::integer($input['max_archive_ratio']??100,'policy_integer_invalid',1);$maxArchiveDepth=Utils::integer($input['max_archive_depth']??5,'policy_integer_invalid',1);$maxArchiveEntries=Utils::integer($input['max_archive_entries']??10000,'policy_integer_invalid',1);
-        $sourceSeconds=Utils::integer($ret['source_seconds'],'policy_integer_invalid',0);$derivativeSeconds=Utils::integer($ret['derivative_seconds'],'policy_integer_invalid',0);$temporarySeconds=Utils::integer($ret['temporary_seconds'],'policy_integer_invalid',0);$backupExpirySeconds=Utils::integer($ret['backup_expiry_seconds'],'policy_integer_invalid',0);
-        $grantTtl=Utils::integer($delivery['grant_ttl_seconds'],'policy_integer_invalid',0);$maxRangeBytes=Utils::integer($delivery['max_range_bytes']??8388608,'policy_integer_invalid',0);$issuedAt=Utils::integer($input['issued_at']??$input['created_at']??Utils::now(),'policy_integer_invalid',1);
+        $sourceSeconds=Utils::integer($ret['source_seconds'],'policy_integer_invalid',0);$derivativeSeconds=Utils::integer($ret['derivative_seconds'],'policy_integer_invalid',0);$temporarySeconds=Utils::integer($ret['temporary_seconds'],'policy_integer_invalid',60);$backupExpirySeconds=Utils::integer($ret['backup_expiry_seconds'],'policy_integer_invalid',0);
+        $grantTtl=Utils::integer($delivery['grant_ttl_seconds'],'policy_integer_invalid',30,86400);$maxRangeBytes=Utils::integer($delivery['max_range_bytes']??8388608,'policy_integer_invalid',0);$issuedAt=Utils::integer($input['issued_at']??$input['created_at']??Utils::now(),'policy_integer_invalid',1);
+        $asBool=static function(mixed $value,string $field): bool {
+            if(!is_bool($value))throw new Error('policy_boolean_invalid','Policy '.$field.' must be a canonical boolean.',400);
+            return $value;
+        };
+        $disposition=$delivery['content_disposition']??'inline';
+        if(!is_string($disposition)||!in_array($disposition,['inline','attachment'],true))
+            throw new Error('content_disposition_invalid','Delivery disposition must be inline or attachment.',400);
         $normalized=[
             'policy_id'=>Utils::text((string)$input['policy_id'],96),'policy_version'=>$policyVersion,
             'owner_domain'=>Utils::key((string)$input['owner_domain'],64),'purpose'=>Utils::key((string)$input['purpose'],96),'lawful_basis'=>Utils::key((string)$input['lawful_basis'],64),'revocation_hook'=>Utils::key((string)$input['revocation_hook'],96),
@@ -137,11 +150,11 @@ final class Policy {
             'max_width'=>$maxWidth,'max_height'=>$maxHeight,'max_pixels'=>$maxPixels,
             'max_duration_seconds'=>$maxDuration,'max_pages'=>$maxPages,
             'max_archive_ratio'=>$maxArchiveRatio,'max_archive_depth'=>$maxArchiveDepth,'max_archive_entries'=>$maxArchiveEntries,
-            'retention'=>['class'=>Utils::key((string)$ret['class'],48),'source_seconds'=>$sourceSeconds,'derivative_seconds'=>$derivativeSeconds,'temporary_seconds'=>max(60,$temporarySeconds),'backup_expiry_seconds'=>$backupExpirySeconds],
+            'retention'=>['class'=>Utils::key((string)$ret['class'],48),'source_seconds'=>$sourceSeconds,'derivative_seconds'=>$derivativeSeconds,'temporary_seconds'=>$temporarySeconds,'backup_expiry_seconds'=>$backupExpirySeconds],
             'rights'=>$rights,
-            'delivery'=>['modes'=>$modes,'grant_ttl_seconds'=>max(30,min(86400,$grantTtl)),'allow_ranges'=>Utils::bool($delivery['allow_ranges']),'max_range_bytes'=>$maxRangeBytes,'allow_download'=>Utils::bool($delivery['allow_download']),'public_cdn'=>Utils::bool($delivery['public_cdn']),'content_disposition'=>in_array(($delivery['content_disposition']??'inline'),['inline','attachment'],true)?$delivery['content_disposition']:'inline'],
-            'metadata'=>['strip_location'=>Utils::bool($input['metadata']['strip_location']??true),'strip_device'=>Utils::bool($input['metadata']['strip_device']??true),'strip_author'=>Utils::bool($input['metadata']['strip_author']??true),'preserve_orientation'=>Utils::bool($input['metadata']['preserve_orientation']??true),'preserve_rights'=>Utils::bool($input['metadata']['preserve_rights']??true),'preserve_accessibility'=>Utils::bool($input['metadata']['preserve_accessibility']??true)],
-            'safety'=>['require_reviewer_for_low_confidence'=>Utils::bool($input['safety']['require_reviewer_for_low_confidence']??true),'minimum_confidence'=>$minimumConfidence],
+            'delivery'=>['modes'=>$modes,'grant_ttl_seconds'=>$grantTtl,'allow_ranges'=>$asBool($delivery['allow_ranges'],'delivery.allow_ranges'),'max_range_bytes'=>$maxRangeBytes,'allow_download'=>$asBool($delivery['allow_download'],'delivery.allow_download'),'public_cdn'=>$asBool($delivery['public_cdn'],'delivery.public_cdn'),'content_disposition'=>$disposition],
+            'metadata'=>['strip_location'=>$asBool($input['metadata']['strip_location']??true,'metadata.strip_location'),'strip_device'=>$asBool($input['metadata']['strip_device']??true,'metadata.strip_device'),'strip_author'=>$asBool($input['metadata']['strip_author']??true,'metadata.strip_author'),'preserve_orientation'=>$asBool($input['metadata']['preserve_orientation']??true,'metadata.preserve_orientation'),'preserve_rights'=>$asBool($input['metadata']['preserve_rights']??true,'metadata.preserve_rights'),'preserve_accessibility'=>$asBool($input['metadata']['preserve_accessibility']??true,'metadata.preserve_accessibility')],
+            'safety'=>['require_reviewer_for_low_confidence'=>$asBool($input['safety']['require_reviewer_for_low_confidence']??true,'safety.require_reviewer_for_low_confidence'),'minimum_confidence'=>$minimumConfidence],
             'issued_at'=>$issuedAt,
         ];
         if($normalized['owner_domain']===''||$normalized['purpose']===''||$normalized['lawful_basis']===''||$normalized['revocation_hook']==='')throw new Error('policy_identity_invalid','Policy owner, purpose, lawful basis and revocation hook are required.',400);if($normalized['issued_at']>Utils::now()+300)throw new Error('policy_issued_at_invalid','Policy issue time is in the future.',400);if($normalized['delivery']['public_cdn']&&$normalized['privacy_class']!=='C0')throw new Error('public_cdn_privacy_denied','Public CDN requires privacy class C0.',400);if($normalized['rights']['clinical_confidentiality']&&($normalized['delivery']['public_cdn']||in_array('public',$normalized['rights']['allowed_audiences'],true)))throw new Error('clinical_public_delivery_denied','Clinically confidential media cannot use public delivery.',400);if($normalized['delivery']['allow_ranges']&&$normalized['delivery']['max_range_bytes']<1)throw new Error('range_policy_invalid','Range delivery requires a positive range limit.',400);$normalized['policy_hash']=hash('sha256',Utils::canonicalJson($normalized));return $normalized;

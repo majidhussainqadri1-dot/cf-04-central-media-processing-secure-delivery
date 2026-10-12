@@ -289,6 +289,34 @@ $audioGood=WorkspaceUploadService::normalize('audio',['trim_start'=>'0.25','trim
 ok($audioGood['trim_end']===3.5&&!$audioGood['normalize_loudness'],
     'Round 194 valid audio crop/loudness remains supported');
 
+
+// Round 195: do not silently widen permission/retention or disable privacy flags on invalid policy input.
+$policySeed=policy('document','C4');
+$policyInvalid=[
+    [['delivery'=>['grant_ttl_seconds'=>1]],'policy_integer_invalid'],
+    [['delivery'=>['grant_ttl_seconds'=>86401]],'policy_integer_invalid'],
+    [['retention'=>['temporary_seconds'=>0]],'policy_integer_invalid'],
+    [['delivery'=>['content_disposition'=>'javascript']], 'content_disposition_invalid'],
+    [['delivery'=>['allow_download'=>'false']], 'policy_boolean_invalid'],
+    [['metadata'=>['strip_location'=>'yes']], 'policy_boolean_invalid'],
+    [['metadata'=>['strip_device'=>'false']], 'policy_boolean_invalid'],
+    [['safety'=>['minimum_confidence'=>'0.8junk']], 'safety_confidence_invalid'],
+    [['safety'=>['minimum_confidence'=>INF]], 'safety_confidence_invalid'],
+    [['safety'=>['require_reviewer_for_low_confidence'=>'false']], 'policy_boolean_invalid']
+];
+foreach($policyInvalid as [$partial,$code]){
+    $candidate=$policySeed;
+    foreach($partial as $group=>$v) $candidate[$group]=array_replace((array)($candidate[$group]??[]),$v);
+    err(fn()=>Policy::normalize($candidate,true),$code,
+        'Round 195 invalid security/retention/media policy fails closed');
+}
+$policyMin=$policySeed;
+$policyMin['delivery']['grant_ttl_seconds']=30;
+$policyMin['retention']['temporary_seconds']=60;
+$normalized=Policy::normalize($policyMin,true);
+ok($normalized['delivery']['grant_ttl_seconds']===30&&$normalized['retention']['temporary_seconds']===60,
+    'Round 195 canonical lower bounds preserved without widening');
+
 ok(RuntimeGuard::enabled()&&Schema::ready(),'coded runtime test gate ready while production default remains disabled in plugin bootstrap');
 
 echo "ALL 33 CF-04 REQUIREMENTS + CHAT-XFER-001: SOURCE TESTS PASSED\n";
