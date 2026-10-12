@@ -170,6 +170,12 @@ ok(($asset['storage']['key_id']??'')==='test-v1'&&ProviderRegistry::store()->cap
 // FR-018 complete delivery grant binding/revocation/use policy.
 $aud=['type'=>'private','user_id'=>11];$ctx=['audience_type'=>'private','territory'=>'GLOBAL','route'=>'test'];$rangePolicy=['allow_ranges'=>true,'max_range_bytes'=>8388608];$token=DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'download',$rangePolicy,'session-1',300,2);$claims=Crypto::verify($token);ok(isset($claims['actor_id'],$claims['service_id'],$claims['audience_hash'],$claims['context_hash'],$claims['session_hash'],$claims['range_hash'],$claims['operation'],$claims['policy_hash'],$claims['rights_hash']),'FR-018 fully bound signed grant claims');
 $served=DeliveryService::serve($token,11,'file17',$aud,$ctx,'session-1','bytes=0-9');ok($served['status']===206&&$served['range']['length']===10,'FR-018 range-bound grant consumption');fclose($served['stream']);err(fn()=>DeliveryService::serve($token,11,'file17',$aud,$ctx,'wrong-session',null),'grant_binding_mismatch','FR-018 session binding');DeliveryService::revoke($claims['grant_id'],11);err(fn()=>DeliveryService::serve($token,11,'file17',$aud,$ctx,'session-1',null),'grant_revoked','FR-018 revocation');
+// R204: grant TTL and maximum-use inputs must never be silently widened from zero.
+err(fn()=>DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'view',$rangePolicy,'r204-zero-ttl',0,2),
+    'delivery_grant_ttl_invalid','R204 denies zero lifetime rather than issuing a one-second grant');
+err(fn()=>DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'view',$rangePolicy,'r204-zero-uses',300,0),
+    'delivery_grant_uses_invalid','R204 denies zero-use grant rather than issuing a one-use grant');
+
 // R201: idempotent revoked grant must NOT bypass actor/capability authorization.
 $oldActor=$GLOBALS['scm_user_id'];
 $oldDeny=$GLOBALS['scm_test_denied_caps']??[];
@@ -394,6 +400,30 @@ Observability::metric('queue.depth',3,['tenant'=>'file17']);Observability::trace
 // API/service/webhook replay defenses.
 $secret=str_repeat('s',32);add_filter('scm_service_secret',fn($value,string $service)=>$secret);$ts=time();$nonce='nonce-1';$canonical='file17|POST|/sabri-media/v1/uploads|'.$ts.'|'.$nonce.'|'.hash('sha256','{}');$sig=Utils::b64url(hash_hmac('sha256',$canonical,$secret,true));ServiceAuth::verify('file17','POST','/sabri-media/v1/uploads','{}',$nonce,$ts,$sig);err(fn()=>ServiceAuth::verify('file17','POST','/sabri-media/v1/uploads','{}',$nonce,$ts,$sig),'service_replay_denied','service request replay denied');
 $wts=time();$wid='event-1';$wbody='{}';$wsig=Utils::b64url(hash_hmac('sha256','provider|'.$wid.'|'.$wts.'|'.hash('sha256',$wbody),$secret,true));$wh=WebhookService::verify('provider',$wid,$wts,$wbody,$wsig,$secret);$whr=WebhookService::verify('provider',$wid,$wts,$wbody,$wsig,$secret);ok($wh['replay']===false&&$whr['replay']===true,'signed webhook replay handling');
+
+// R204: a signed webhook MUST use an exact canonical timestamp at REST ingress.
+$w204id='event-r204';$w204signature=Utils::b64url(hash_hmac('sha256','provider|'.$w204id.'|'.$wts.'|'.hash('sha256',$wbody),$secret,true));
+add_filter('scm_provider_webhook_secret',fn($value,string $provider)=>$secret);
+$w204req=new class($wts.'garbage',$w204id,$w204signature,$wbody) implements \\ArrayAccess {
+    public function __construct(public string $timestamp,public string $eventId,public string $signature,public string $body) {}
+    public function offsetExists(mixed $offset): bool {return $offset==='provider';}
+    public function offsetGet(mixed $offset): mixed {return $offset==='provider'?'provider':null;}
+    public function offsetSet(mixed $offset,mixed $value): void {throw new \\LogicException('Test route is immutable');}
+    public function offsetUnset(mixed $offset): void {throw new \\LogicException('Test route is immutable');}
+    public function get_header(string $name): string {return match($name){'x-event-id'=>$this->eventId,'x-event-timestamp'=>$this->timestamp,'x-event-signature'=>$this->signature,default=>''};}
+    public function get_body(): string {return $this->body;}
+};
+$w204bad=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+ok(is_array($w204bad)&&($w204bad['code']??'')==='webhook_timestamp_invalid',
+    'R204 malformed numeric webhook timestamp denied before signature verification and persistence');
+$w204req->timestamp='0'.$wts;
+$w204leading=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+ok(is_array($w204leading)&&($w204leading['code']??'')==='webhook_timestamp_invalid',
+    'R204 leading-zero timestamp aliases cannot reuse a canonical signed event');
+$w204req->timestamp=(string)$wts;
+$w204good=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+ok(is_array($w204good)&&($w204good['replay']??null)===false,
+    'R204 exact canonical timestamp preserves valid signed webhook acceptance');
 
 // Workspace and truthful runtime boundaries.
 $workspace=WorkspaceUploadService::normalize('image',['rotation_degrees'=>90,'compression_quality'=>80,'crop_requested'=>true,'crop_width'=>10,'crop_height'=>20],11);ok($workspace['strip_location_metadata']===true&&$workspace['crop']['width']===10,'image workspace privacy and transform contract');
