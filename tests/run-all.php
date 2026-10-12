@@ -126,6 +126,9 @@ ok(TransferService::normalize($transfer)['native_transfer_version']===1,
     'Round 189 preserves valid canonical transfer identity');
 
 // Round 190: fail closed when File 17 clinical classification conflicts with CF-04 rights/data policy.
+$altered=$transfer;$altered['confidentiality_class']='c4';
+err(fn()=>TransferService::normalize($altered),'transfer_confidentiality_class_invalid',
+    'Round 190 rejects lowercase/coerced native privacy class');
 $altered=$transfer;$altered['confidentiality_class']='C3';
 err(fn()=>TransferService::create($altered,policy('document','C4'),[]),
     'transfer_confidentiality_class_mismatch','Round 190 rejects native classification downgrade');

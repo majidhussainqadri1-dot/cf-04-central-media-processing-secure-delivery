@@ -33,7 +33,9 @@ final class TransferService {
         $nativeId=Utils::text((string)$input['native_transfer_id'],191);
         $relationship=Utils::key((string)$input['relationship'],48);
         $copyright=Utils::key((string)$input['copyright_basis'],48);
-        $confidentiality=Utils::key((string)$input['confidentiality_class'],32);
+        $confidentiality=$input['confidentiality_class'];
+        if(!is_string($confidentiality)||!in_array($confidentiality,['C3','C4','C5'],true))
+            throw new Error('transfer_confidentiality_class_invalid','Native transfer classification must be canonical C3, C4 or C5.',400);
         $abuseVersion=Utils::text((string)$input['abuse_policy_version'],32);
         if($nativeId===''||$relationship===''||$copyright===''||$confidentiality===''||$abuseVersion==='')
             throw new Error('transfer_envelope_incomplete','Transfer governance identity is incomplete.',400);

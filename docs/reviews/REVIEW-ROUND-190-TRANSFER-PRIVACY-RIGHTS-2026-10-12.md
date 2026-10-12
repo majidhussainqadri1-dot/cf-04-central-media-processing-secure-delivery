@@ -12,3 +12,6 @@ Reject ambiguous confidentiality boolean values; require native confidentiality 
 
 ## Acceptance
 Only accepted after matching exact SHA Push and PR PHP 8.1, 8.3 and 8.4 QA pass. Do not claim a live exploit, live deployment, staging or migration parity. This is ONE complete targeted review and not evidence of 20 new complete reviews.
+
+## Exact-head CI correction (same Round 190, prior to acceptance)
+Initial CI #747/#748 failed in `tests/run-all.php` because pre-existing `Utils::key` lowercased valid `C4` to `c4`; this was an implementation normalization bug in the Round 190 patch, not a live symptom. Corrected transfer confidentiality-class normalization to preserve exact `C3`/`C4`/`C5` canonical values and reject lowercase or malformed input; added regression. Round remains pending until fresh exact-head CI succeeds.
