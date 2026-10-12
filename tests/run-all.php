@@ -98,6 +98,34 @@ RightsPolicy::assert($asset['rights'],'download',['territory'=>'GLOBAL','audienc
 // CHAT-XFER-001 and FR-005/018 transfer party checks.
 $transfer=TransferService::create(['native_transfer_id'=>'message:transfer-1','native_transfer_version'=>1,'sender_user_id'=>11,'recipient_type'=>'user','recipient_user_id'=>12,'expected_size'=>1024,'media_class'=>'document','declared_name'=>'private.pdf','relationship'=>'doctor-patient','consent_status'=>'granted','copyright_basis'=>'owner','clinical_confidentiality'=>true,'confidentiality_class'=>'C4','abuse_policy_version'=>'1.0'],policy('document','C4'),[]);ok($transfer['status']==='pending_upload'&&$transfer['recipient_user_id']===12&&$transfer['expected_size']<=TransferService::MAX_FILE_BYTES,'CHAT-XFER-001 sender/recipient verified private 1 GiB contract');
 
+// Round 189: a native transfer must reject malformed identity/size/version/expiry input,
+// rather than silently coercing it into a different authorized File 17 transfer.
+$nativeEnvelopeChecks=[
+    ['sender_user_id','11junk','transfer_party_invalid'],
+    ['sender_user_id',11.4,'transfer_party_invalid'],
+    ['recipient_user_id','12x','transfer_recipient_invalid'],
+    ['recipient_user_id',12.8,'transfer_recipient_invalid'],
+    ['expected_size','1024junk','transfer_bounds_invalid'],
+    ['expected_size',1073741825,'transfer_bounds_invalid'],
+    ['native_transfer_version',0,'transfer_native_version_invalid'],
+    ['native_transfer_version','1x','transfer_native_version_invalid'],
+    ['recipient_type','User','transfer_recipient_type_invalid'],
+    ['media_class','document-wrong','transfer_media_class_invalid'],
+    ['expires_at',time()+60,'transfer_expiry_invalid'],
+    ['expires_at',time()+700000,'transfer_expiry_invalid'],
+    ['expires_at','1700000000broken','transfer_expiry_invalid'],
+];
+foreach($nativeEnvelopeChecks as [$field,$value,$code]){
+    $altered=$transfer;$altered[$field]=$value;
+    err(fn()=>TransferService::normalize($altered),$code,'Round 189 rejects malformed transfer '.$field);
+}
+$altered=$transfer;$altered['media_class']='image';
+err(fn()=>TransferService::create($altered,policy('document','C4'),[]),
+    'transfer_media_policy_mismatch','Round 189 rejects mismatch between File 17 media and upload policy');
+ok(TransferService::normalize($transfer)['native_transfer_version']===1,
+    'Round 189 preserves valid canonical transfer identity');
+
+
 // FR-024 retention scheduler.
 $ret=RetentionService::schedule($asset['id']);ok($ret['source_delete_at']>time()&&$ret['backup_expiry_at']>time(),'FR-024 class-specific retention schedule');
 
