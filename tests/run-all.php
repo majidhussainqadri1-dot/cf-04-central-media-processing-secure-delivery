@@ -168,6 +168,9 @@ ok(TransferService::normalize($altered)['recipient_group_id']==='group-1',
 // Round 192: signed recipient grants must not outlive the File 17 native transfer expiry.
 $transferAsset=create_document_asset('message:transfer-1','C4');
 $nearExpiryTransfer=$transfer;
+$nearExpiryTransfer['expected_size']=$transferAsset['size'];
+$nearExpiryTransfer['policy']=$transferAsset['policy'];
+$nearExpiryTransfer['policy_hash']=$transferAsset['policy_hash'];
 $nearExpiryTransfer['asset_id']=$transferAsset['id'];
 $nearExpiryTransfer['status']='ready';
 $nearExpiryTransfer['expires_at']=time()+45;
@@ -188,6 +191,30 @@ try{
         (string)$nearExpiryTransfer['id'],12,'round192-too-late',['territory'=>'GLOBAL']
     ),'transfer_not_ready','Round 192 denies access grants too close to native transfer expiry');
 }finally{$GLOBALS['scm_user_id']=$oldActor;}
+
+// Round 193: a ready transfer cannot mint a grant for a different or drifting asset.
+$bound=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
+$bound['expires_at']=time()+180;
+$bound['asset_id']=$asset['id']; // different File17 native object/privacy owner.
+$bound=RecordStore::put('transfer',(string)$bound['id'],$bound,(int)$bound['version']);
+$GLOBALS['scm_user_id']=12;
+try{
+    err(fn()=>TransferService::issueRecipientGrant((string)$bound['id'],12,'round193-other-asset',['territory'=>'GLOBAL']),
+        'transfer_asset_mismatch','Round 193 rejects wrong asset owner/policy on recipient grant');
+    $bound=RecordStore::get('transfer',(string)$bound['id']);
+    $bound['asset_id']=$transferAsset['id'];
+    $bound['expected_size']=$transferAsset['size']+1;
+    $bound=RecordStore::put('transfer',(string)$bound['id'],$bound,(int)$bound['version']);
+    err(fn()=>TransferService::issueRecipientGrant((string)$bound['id'],12,'round193-size-drift',['territory'=>'GLOBAL']),
+        'transfer_asset_mismatch','Round 193 rejects transfer size drift after readiness');
+    $bound=RecordStore::get('transfer',(string)$bound['id']);
+    $bound['expected_size']=$transferAsset['size'];
+    $bound=RecordStore::put('transfer',(string)$bound['id'],$bound,(int)$bound['version']);
+    $valid=TransferService::issueRecipientGrant((string)$bound['id'],12,'round193-valid',['territory'=>'GLOBAL']);
+    ok(Crypto::verify($valid)['asset_id']===$transferAsset['id'],
+        'Round 193 valid File17-bound ready asset still issues recipient grant');
+}finally{$GLOBALS['scm_user_id']=$oldActor;}
+
 
 
 
