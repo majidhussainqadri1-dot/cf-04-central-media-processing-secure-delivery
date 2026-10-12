@@ -5,7 +5,7 @@ namespace Sabri\CentralMedia;
 final class DeliveryService {
     public static function issue(string $assetId,?string $derivativeId,int $actor,string $serviceId,array $audience,array $context,string $operation,array $rangePolicy,string $sessionId,int $ttl=300,int $maxUses=20): string {
     RuntimeGuard::requireReady(['streaming']);RestoreService::assertServeAllowed();Auth::assertActor($actor);
-    $serviceId=Utils::key($serviceId,64);$sessionId=Utils::text($sessionId,128);$audience=self::audience($audience);
+    $serviceId=Utils::key($serviceId,64);$sessionId=self::canonicalSession($sessionId);$audience=self::audience($audience);
     if($serviceId===''||$sessionId==='')throw new Error('delivery_context_incomplete','Service and session identity required.',400);
     Auth::verifiedUser($actor,'media_delivery_issue',$serviceId,['asset_id'=>$assetId]);
     $asset=self::asset($assetId);$target=self::target($asset,$derivativeId);$operation=Utils::key($operation,32);
@@ -33,7 +33,7 @@ final class DeliveryService {
     $grant=RecordStore::get('grant',(string)$claims['grant_id']);if(!$grant||($grant['status']??'')!=='active')throw new Error('grant_revoked','Delivery grant unavailable or revoked.',403);
     self::assertGrantUsable($grant);
     if(!hash_equals((string)$grant['token_hash'],hash('sha256',$token)))throw new Error('grant_record_mismatch','Delivery grant record mismatch.',403);
-    $serviceId=Utils::key($serviceId,64);$sessionId=Utils::text($sessionId,128);$sessionHash=Utils::hashReference($sessionId);$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));
+    $serviceId=Utils::key($serviceId,64);$sessionId=self::canonicalSession($sessionId);$sessionHash=Utils::hashReference($sessionId);$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));
     foreach(['actor_id'=>$actor,'service_id'=>$serviceId,'audience_hash'=>$audienceHash,'context_hash'=>$contextHash,'session_hash'=>$sessionHash] as $field=>$value)if(($claims[$field]??null)!==$value||($grant[$field]??null)!==$value)throw new Error('grant_binding_mismatch','Delivery grant binding mismatch.',403,['field'=>$field]);
     Auth::verifiedUser($actor,'media_delivery_consume',$serviceId,['asset_id'=>$claims['asset_id']]);
     $asset=self::asset((string)$claims['asset_id']);$target=self::target($asset,$claims['derivative_id']==='source'?null:(string)$claims['derivative_id']);self::assertDeliverable($asset,$target,(string)$claims['operation']);
@@ -66,15 +66,24 @@ final class DeliveryService {
     }
     private static function sliceStream($source,int $start,int $length){$output=Utils::tempStream();try{rewind($source);if($start>0&&fseek($source,$start)!==0)throw new Error('delivery_seek_failed','Delivery seek failed.',500);$remaining=$length;while($remaining>0&&!feof($source)){$chunk=fread($source,min(1048576,$remaining));if($chunk===false)throw new Error('delivery_read_failed','Delivery read failed.',500);if($chunk==='')break;Utils::writeAll($output,$chunk);$remaining-=strlen($chunk);}if($remaining!==0)throw new Error('delivery_range_incomplete','Delivery range incomplete.',500);rewind($output);return $output;}catch(\Throwable $exception){fclose($output);throw $exception;}}
     private static function headers(array $target,string $filename,bool $download,array $range,bool $allowRanges): array {$filename=str_replace(["\r","\n"],'',Utils::filename($filename));$headers=['Content-Type'=>(string)($target['mime']??'application/octet-stream'),'Content-Length'=>(string)$range['length'],'Content-Disposition'=>($download?'attachment':'inline').'; filename="'.addcslashes($filename,'"\\').'"; filename*=UTF-8\'\''.rawurlencode($filename),'Cache-Control'=>'private, no-store, max-age=0','Pragma'=>'no-cache','Referrer-Policy'=>'no-referrer','X-Content-Type-Options'=>'nosniff','Content-Security-Policy'=>"default-src 'none'; sandbox",'Cross-Origin-Resource-Policy'=>'same-origin'];if($allowRanges)$headers['Accept-Ranges']='bytes';if($range['partial'])$headers['Content-Range']='bytes '.$range['start'].'-'.$range['end'].'/'.$target['size'];return $headers;}
+    private static function canonicalSession(string $session): string {
+        if($session===''||strlen($session)>128||Utils::text($session,128)!==$session)
+            throw new Error('delivery_session_invalid','Session identity must remain exactly canonical and bounded.',400);
+        return $session;
+    }
     private static function audience(array $audience): array {
-    $type=Utils::key((string)($audience['type']??''),32);
+    $type=$audience['type']??null;
+     if(!is_string($type)||!in_array($type,['private','user','recipient','group','public'],true))
+         throw new Error('audience_invalid','Delivery audience type must be canonical.',400);
     if(!in_array($type,['private','user','recipient','group','public'],true))throw new Error('audience_invalid','Delivery audience invalid.',400);
     if(in_array($type,['user','recipient'],true)){
         $userId=Utils::integer($audience['user_id']??null,'audience_invalid',1);
         return ['type'=>$type,'user_id'=>$userId];
     }
     if($type==='group'){
-        $groupId=Utils::text((string)($audience['group_id']??''),96);if($groupId==='')throw new Error('audience_invalid','Audience group identity required.',400);
+        $groupId=$audience['group_id']??null;
+         if(!is_string($groupId)||$groupId===''||strlen($groupId)>96||Utils::text($groupId,96)!==$groupId)
+             throw new Error('audience_invalid','Exact canonical group identity required.',400);
         $out=['type'=>'group','group_id'=>$groupId];if(array_key_exists('user_id',$audience))$out['user_id']=Utils::integer($audience['user_id'],'audience_invalid',1);return $out;
     }
     return ['type'=>$type];

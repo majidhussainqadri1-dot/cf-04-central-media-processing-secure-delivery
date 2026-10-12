@@ -186,6 +186,36 @@ $revokedAgain=DeliveryService::revoke((string)$claims['grant_id'],11,'owner-idem
 ok($revokedAgain['status']==='revoked','R201 original owner may safely retry revoked grant');
 
 
+// R202: group and session identity cannot alias from silent truncation.
+$badAudience=[
+ ['type'=>'group','group_id'=>str_repeat('g',97)],
+ ['type'=>'group','group_id'=>"group-one\n"],
+ ['type'=>'group','group_id'=>' group-one '],
+ ['type'=>'group','group_id'=>1234],
+ ['type'=>'Group','group_id'=>'group-one']
+];
+foreach($badAudience as $idx=>$invalid){
+    err(fn()=>DeliveryService::issue($asset['id'],null,11,'file17',$invalid,
+        ['territory'=>'GLOBAL'],'view',$rangePolicy,'r202-audience-'.$idx),
+        'audience_invalid','R202 invalid group audience must fail closed');
+}
+foreach([str_repeat('s',129),"session-one\n",' session-one '] as $invalid){
+    err(fn()=>DeliveryService::issue($asset['id'],null,11,'file17',
+        ['type'=>'user','user_id'=>11],['territory'=>'GLOBAL'],'view',$rangePolicy,$invalid),
+        'delivery_session_invalid','R202 issue must not coerce session');
+}
+$groupAudience=['type'=>'group','group_id'=>'file17-group-one'];
+$groupContext=['territory'=>'GLOBAL'];
+$r202Token=DeliveryService::issue($asset['id'],null,11,'file17',$groupAudience,
+    $groupContext,'view',$rangePolicy,'r202-valid-group-session',300,2);
+$r202Claims=Crypto::verify($r202Token);
+ok($r202Claims['audience_hash']===Utils::hashReference(Utils::canonicalJson($groupAudience)),
+    'R202 canonical File 17 group preserved in signed grant');
+err(fn()=>DeliveryService::serve($r202Token,11,'file17',$groupAudience,$groupContext,
+    "r202-valid-group-session\n"),
+    'delivery_session_invalid','R202 serve rejects altered session');
+DeliveryService::revoke((string)$r202Claims['grant_id'],11,'r202-cleanup');
+
 // FR-019 public CDN immutable publication/purge.
 $public=create_document_asset('message:public','C0');$publicDerivative=DerivativeService::forAsset($public['id'])[0];$cdn=DeliveryService::publishPublic($public['id'],$publicDerivative['id']);ok($cdn['status']==='published'&&str_contains($cdn['version_key'],$publicDerivative['sha256']),'FR-019 public derivative immutable CDN publication');
 
