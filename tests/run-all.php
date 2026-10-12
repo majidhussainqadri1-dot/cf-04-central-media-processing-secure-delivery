@@ -59,12 +59,18 @@ UploadService::abort($canonicalUpload['id'],11,$canonicalUpload['upload_credenti
 $replayMeta=$meta;$replayMeta['owner_object']='message:r199-upload-replay';
 $firstReplay=UploadService::create(11,$replayMeta,$p,'r199-upload-key');
 $staleReplay=RecordStore::get('upload',$firstReplay['id']);
-$staleReplay['object_version']=2;
+$staleReplay['actor_id']=12;
 RecordStore::put('upload',$staleReplay['id'],$staleReplay,(int)$staleReplay['version']);
 err(fn()=>UploadService::create(11,$replayMeta,$p,'r199-upload-key'),
-    'domain_object_version_stale','Round 199 refuses new credentials for a stale File17 owner object');
+    'upload_replay_binding_invalid','Round 199 rejects replay of an actor-mismatched stored upload');
 $staleReplay=RecordStore::get('upload',$firstReplay['id']);
-$staleReplay['object_version']=1;
+$staleReplay['actor_id']=11;
+$staleReplay['expected_size']=$replayMeta['size']+1;
+RecordStore::put('upload',$staleReplay['id'],$staleReplay,(int)$staleReplay['version']);
+err(fn()=>UploadService::create(11,$replayMeta,$p,'r199-upload-key'),
+    'upload_replay_binding_invalid','Round 199 rejects replay of tampered stored upload byte size');
+$staleReplay=RecordStore::get('upload',$firstReplay['id']);
+$staleReplay['expected_size']=$replayMeta['size'];
 RecordStore::put('upload',$staleReplay['id'],$staleReplay,(int)$staleReplay['version']);
 $goodReplay=UploadService::create(11,$replayMeta,$p,'r199-upload-key');
 ok($goodReplay['id']===$firstReplay['id']&&!empty($goodReplay['upload_credential']),

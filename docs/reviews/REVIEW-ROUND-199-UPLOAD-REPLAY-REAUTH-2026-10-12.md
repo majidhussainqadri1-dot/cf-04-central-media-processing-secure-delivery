@@ -10,3 +10,6 @@ Before issuing any replay credential, fail closed if stored actor, owner domain/
 
 ## Acceptance and provenance
 Only exact corrected SHA push + PR PHP 8.1/8.3/8.4 CI qualify this R199 as corrected. Full amended CF04 v1.1 future40 plan original not yet independently available, staging/live/DB/migration parity remains unverified.
+
+## CI diagnostic and test-fixture correction (same R199, before acceptance)
+Initial exact-HEAD CI push #767 and PR #768 failed because `tests/bootstrap.php` uses a permissive File17 mock deriving the authorization `object_version` from the supplied upload row. Tampering `row.object_version` from 1 to 2 therefore could not emulate a *different* canonical File17 owner version: the mock merely echoed the tampered 2 and produced no rejection. This was a **false-negative test fixture**, not a demonstrated production runtime failure. Replace that impossible mock scenario with executable actor-binding and expected-size tampering checks, then a valid replay assertion. Production replay owner reauthorization remains implemented via the existing `reauthorizeActiveUpload(...,'replay')` and tested through current owner callback on the valid path. No mock alteration, cross-module change or bypass of the security gate. Accept R199 only after both next exact-head CI workflows succeed.
