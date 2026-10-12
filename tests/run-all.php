@@ -259,6 +259,36 @@ $wts=time();$wid='event-1';$wbody='{}';$wsig=Utils::b64url(hash_hmac('sha256','p
 
 // Workspace and truthful runtime boundaries.
 $workspace=WorkspaceUploadService::normalize('image',['rotation_degrees'=>90,'compression_quality'=>80,'crop_requested'=>true,'crop_width'=>10,'crop_height'=>20],11);ok($workspace['strip_location_metadata']===true&&$workspace['crop']['width']===10,'image workspace privacy and transform contract');
+
+// Round 194: workspace media transformations reject malformed numbers and coercible flags.
+$workspaceInvalid=[
+    [['rotation_degrees'=>'90junk'],'image_rotation_invalid'],
+    [['rotation_degrees'=>90.5],'image_rotation_invalid'],
+    [['compression_quality'=>'80junk'],'image_compression_quality_invalid'],
+    [['crop_requested'=>true,'crop_width'=>'30garbage','crop_height'=>30],'image_crop_invalid'],
+    [['crop_requested'=>true,'crop_width'=>-1,'crop_height'=>20],'image_crop_invalid'],
+    [['crop_requested'=>true,'crop_width'=>0,'crop_height'=>20],'image_crop_invalid'],
+    [['crop_requested'=>'false'],'workspace_boolean_invalid']
+];
+foreach($workspaceInvalid as [$changes,$code]){
+    err(fn()=>WorkspaceUploadService::normalize('image',$changes,11),$code,
+        'Round 194 invalid image transform input fails closed');
+}
+$audioInvalid=[
+    [['trim_start'=>'5oops'],'audio_trim_invalid'],
+    [['trim_start'=>INF],'audio_trim_invalid'],
+    [['trim_start'=>'-0.5'],'audio_trim_invalid'],
+    [['trim_start'=>20,'trim_end'=>19],'audio_trim_invalid'],
+    [['normalize_loudness'=>'false'],'workspace_boolean_invalid']
+];
+foreach($audioInvalid as [$changes,$code]){
+    err(fn()=>WorkspaceUploadService::normalize('audio',$changes,11),$code,
+        'Round 194 invalid audio trim/flag input fails closed');
+}
+$audioGood=WorkspaceUploadService::normalize('audio',['trim_start'=>'0.25','trim_end'=>'3.5','normalize_loudness'=>false],11);
+ok($audioGood['trim_end']===3.5&&!$audioGood['normalize_loudness'],
+    'Round 194 valid audio crop/loudness remains supported');
+
 ok(RuntimeGuard::enabled()&&Schema::ready(),'coded runtime test gate ready while production default remains disabled in plugin bootstrap');
 
 echo "ALL 33 CF-04 REQUIREMENTS + CHAT-XFER-001: SOURCE TESTS PASSED\n";

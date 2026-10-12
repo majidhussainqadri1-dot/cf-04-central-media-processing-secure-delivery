@@ -114,5 +114,41 @@ final class DownloadManagerService {
 }
 
 final class WorkspaceUploadService {
-    public static function normalize(string $type,array $input,int $actor): array {if(!in_array($type,['image','audio'],true))throw new Error('workspace_type_invalid','Workspace upload type invalid.',400);Auth::assertActor($actor);Auth::verifiedUser($actor,'workspace_upload','workspace',['type'=>$type]);$base=['actor_id'=>$actor,'workspace_type'=>$type,'source'=>Utils::key((string)($input['source']??'device'),32),'strip_location_metadata'=>true,'created_at'=>Utils::now()];if($type==='image'){$rotation=(int)($input['rotation_degrees']??0);if(!in_array($rotation,[0,90,180,270],true))throw new Error('image_rotation_invalid','Image rotation invalid.',400);$quality=(int)($input['compression_quality']??82);if($quality<40||$quality>95)throw new Error('image_compression_quality_invalid','Image quality outside safe range.',400);$base+=['rotation_degrees'=>$rotation,'compression_quality'=>$quality,'crop'=>['requested'=>Utils::bool($input['crop_requested']??false),'x'=>max(0,(int)($input['crop_x']??0)),'y'=>max(0,(int)($input['crop_y']??0)),'width'=>max(0,(int)($input['crop_width']??0)),'height'=>max(0,(int)($input['crop_height']??0))]];}else{$trimStart=(float)($input['trim_start']??0);$trimEnd=(float)($input['trim_end']??0);if(!is_finite($trimStart)||!is_finite($trimEnd)||$trimStart<0.0||$trimEnd<0.0||($trimEnd>0&&$trimEnd<=$trimStart))throw new Error('audio_trim_invalid','Audio trim range invalid.',400);$base+=['trim_start'=>$trimStart,'trim_end'=>$trimEnd,'normalize_loudness'=>Utils::bool($input['normalize_loudness']??true)];}return $base;}
+    private static function flag(mixed $value,string $name): bool {
+        if(!is_bool($value))throw new Error('workspace_boolean_invalid','Workspace '.$name.' must be an explicit boolean.',400);
+        return $value;
+    }
+    private static function trimTime(mixed $value): float {
+        if(is_int($value)||is_float($value))$result=(float)$value;
+        elseif(is_string($value)&&preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$value))$result=(float)$value;
+        else throw new Error('audio_trim_invalid','Audio trim time must be a canonical number.',400);
+        if(!is_finite($result)||$result<0.0)throw new Error('audio_trim_invalid','Audio trim time must be nonnegative and finite.',400);
+        return $result;
+    }
+    public static function normalize(string $type,array $input,int $actor): array {
+        if(!in_array($type,['image','audio'],true))throw new Error('workspace_type_invalid','Workspace upload type invalid.',400);
+        Auth::assertActor($actor);
+        Auth::verifiedUser($actor,'workspace_upload','workspace',['type'=>$type]);
+        $base=['actor_id'=>$actor,'workspace_type'=>$type,'source'=>Utils::key((string)($input['source']??'device'),32),'strip_location_metadata'=>true,'created_at'=>Utils::now()];
+        if($type==='image'){
+            $rotation=Utils::integer($input['rotation_degrees']??0,'image_rotation_invalid',0,270);
+            if(!in_array($rotation,[0,90,180,270],true))throw new Error('image_rotation_invalid','Image rotation invalid.',400);
+            $quality=Utils::integer($input['compression_quality']??82,'image_compression_quality_invalid',40,95);
+            $crop=[
+                'requested'=>self::flag($input['crop_requested']??false,'crop_requested'),
+                'x'=>Utils::integer($input['crop_x']??0,'image_crop_invalid',0,100000),
+                'y'=>Utils::integer($input['crop_y']??0,'image_crop_invalid',0,100000),
+                'width'=>Utils::integer($input['crop_width']??0,'image_crop_invalid',0,100000),
+                'height'=>Utils::integer($input['crop_height']??0,'image_crop_invalid',0,100000)
+            ];
+            if($crop['requested']&&($crop['width']<1||$crop['height']<1))throw new Error('image_crop_invalid','Requested crop must have positive dimensions.',400);
+            $base+=['rotation_degrees'=>$rotation,'compression_quality'=>$quality,'crop'=>$crop];
+        }else{
+            $start=self::trimTime($input['trim_start']??0);
+            $end=self::trimTime($input['trim_end']??0);
+            if($end>0&&$end<=$start)throw new Error('audio_trim_invalid','Audio trim range invalid.',400);
+            $base+=['trim_start'=>$start,'trim_end'=>$end,'normalize_loudness'=>self::flag($input['normalize_loudness']??true,'normalize_loudness')];
+        }
+        return $base;
+    }
 }
