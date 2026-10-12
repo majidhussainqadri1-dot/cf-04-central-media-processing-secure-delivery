@@ -223,7 +223,7 @@ $public=create_document_asset('message:public','C0');$publicDerivative=Derivativ
 $pt=DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'view',$rangePolicy,'session-private');$private=DeliveryService::serve($pt,11,'file17',$aud,$ctx,'session-private',null);ok($private['headers']['Cache-Control']==='private, no-store, max-age=0'&&$private['headers']['Referrer-Policy']==='no-referrer'&&$private['headers']['X-Content-Type-Options']==='nosniff','FR-020 private proxy security headers');fclose($private['stream']);
 
 // R203: a revoked File17 transfer must block existing signed grants even when grant revocation is incomplete.
-$transferR203=RecordStore::get('transfer',(string)$transfer['id']);
+$transferR203=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
 $transferR203['status']='ready';
 $transferR203['expires_at']=time()+600;
 $transferR203['asset_id']=$transferAsset['id'];

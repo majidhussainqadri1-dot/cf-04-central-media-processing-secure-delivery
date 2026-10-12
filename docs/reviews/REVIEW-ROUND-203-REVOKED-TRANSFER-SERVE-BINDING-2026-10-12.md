@@ -10,3 +10,6 @@ Attach exact CF04 File17 transfer ID to signed claim and durable grant only for 
 
 ## Acceptance
 Require exact corrected SHA push+PR all three PHP jobs and package gate Green before marking R203 accepted. Full amended CF04 v1.1 plan, staging, deployed source/version, DB/migration and live checks remain unverified. Do not infer 20/20 from 3 scoped reviews.
+
+## Pre-acceptance CI regression fix
+The first corrected-source push #777 and PR #778 signaled a test-fixture failure at tests/run-all.php line 231: the fixture looked up transfer using the baseline envelope `$transfer['id']`, which was not a durable transfer ID. The already-existing Round 192/196 persisted transfer reference is `$nearExpiryTransfer['id']`. Corrected only this fixture reference without changing production authority checks. This is a test setup defect, not a verified live vulnerability. R203 acceptance remains pending the fresh exact new SHA quality jobs.
