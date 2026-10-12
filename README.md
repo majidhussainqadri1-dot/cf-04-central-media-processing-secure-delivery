@@ -2,7 +2,7 @@
 
 **Runtime candidate:** `1.3.0-rc.1`
 
-**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused review evidence extends through Round 203; Round 204 records the latest 20-aspect structural parity inspection and fail-closed webhook/grant regression fixes. Round numbers are evidence identifiers, not a claim of a fresh independent full-suite run per round. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
+**Sequential hardening evidence:** historical review/fix evidence includes rounds 15–54 and the completed 62–71 batch; subsequent focused rounds 72–203 are represented by focused review evidence; Round 204 records the latest 20-aspect structural parity inspection and fail-closed webhook/grant regression fixes. Round numbers are evidence identifiers, not a claim of a fresh independent full-suite run per round. Each defect-bearing round is corrected only after that round ends and is verified before the next round begins.
 **Schema / contract:** `1.5.0 / 1.5.0`
 **Governing scope:** Definitive Master Plan 2026 v3.0, Consolidated All-Chats Directive Register, and CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
 
