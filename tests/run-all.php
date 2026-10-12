@@ -28,6 +28,33 @@ $s=stream_of($pdf);$part=UploadService::putPart($u['id'],11,1,$s,hash('sha256',$
 $asset=create_document_asset('message:primary');
 ok($asset['status']==='ready'&&$asset['scan_status']==='passed'&&$asset['processing_status']==='completed','FR-002 end-to-end streaming completion');
 
+// Round 197: upload request must not coerce native size, owner identity, or session TTL.
+$badUploads=[
+    [['size'=>'1024junk'],'upload_size_invalid'],
+    [['size'=>3.2],'upload_size_invalid'],
+    [['size'=>0],'upload_size_invalid'],
+    [['size'=>1073741825],'upload_size_invalid'],
+    [['owner_object'=>str_repeat('a',192)],'owner_object_invalid'],
+    [['owner_object'=>" message:primary "],'owner_object_invalid'],
+    [['owner_object'=>"message:primary\n"],'owner_object_invalid'],
+    [['session_ttl_seconds'=>'3600junk'],'upload_session_ttl_invalid'],
+    [['session_ttl_seconds'=>1],'upload_session_ttl_invalid'],
+    [['session_ttl_seconds'=>86401],'upload_session_ttl_invalid']
+];
+foreach($badUploads as $index=>[$changes,$expectedCode]){
+    $badMeta=array_replace($meta,$changes);
+    err(fn()=>UploadService::create(11,$badMeta,$p,'r197-invalid-'.$index),
+        $expectedCode,'Round 197 rejects coerced upload metadata/TTL');
+}
+// Canonical numeric strings remain permissible without reinterpretation.
+$canonical=$meta;$canonical['size']=(string)$meta['size'];
+$canonical['session_ttl_seconds']='3600';
+$canonicalUpload=UploadService::create(11,$canonical,$p,'r197-valid-canonical');
+ok($canonicalUpload['expected_size']===$meta['size']
+    &&$canonicalUpload['expires_at']>=time()+3590,
+    'Round 197 allows canonical size and TTL without silent widening');
+UploadService::abort($canonicalUpload['id'],11,$canonicalUpload['upload_credential'],'test-cleanup');
+
 // FR-003 source identity/dedupe boundaries.
 ok(strlen($asset['sha256'])===64&&strlen($asset['fingerprint'])===64&&str_contains($asset['object_key'], '')&&$asset['policy_hash']!==''&&$asset['rights']['policy_hash']!=='','FR-003 hash, fingerprint and policy/rights-bound object identity');
 
