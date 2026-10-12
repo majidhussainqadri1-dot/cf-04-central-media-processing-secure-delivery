@@ -148,8 +148,9 @@ final class UploadService {
             $row=RecordStore::put('upload',(string)$row['id'],$row,(int)$row['version']);
             return $row+['upload_credential'=>$credential];
         }
-        $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];$decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
+        $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];
         try{
+            $decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
             if(array_key_exists('governed_exception_authorized',$decision)
                 &&!is_bool($decision['governed_exception_authorized']))
                 throw new Error('quota_exception_invalid','Owner burst exception must be an explicit boolean.',403);

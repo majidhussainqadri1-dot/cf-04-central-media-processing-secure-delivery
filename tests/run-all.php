@@ -115,6 +115,20 @@ $retriedUpload=UploadService::create(11,$meta,$p,$badQuotaKey,['daily_bytes'=>10
 ok($retriedUpload['status']==='uploading','Round 198 retry after corrected quota is not stranded by idempotency claim');
 UploadService::abort($retriedUpload['id'],11,$retriedUpload['upload_credential'],'test-cleanup');
 
+// Round 200: owner-contract failure must release a claimed upload idempotency key.
+$missingDomainPolicy=$p;
+$missingDomainPolicy['owner_domain']='r200-native-offline';
+$missingDomainPolicy=Policy::normalize($missingDomainPolicy,true);
+$offlineKey='round200-native-contract-unavailable';
+err(fn()=>UploadService::create(11,$meta,$missingDomainPolicy,$offlineKey),
+    'domain_contract_unavailable','Round 200 owner authorization unavailable is fail-closed');
+$offlineClaimId=hash('sha256','upload-create|11|'.$offlineKey);
+$offlineClaim=RecordStore::get('idempotency',$offlineClaimId);
+ok($offlineClaim&&$offlineClaim['status']==='failed',
+    'Round 200 failed owner contract releases in-progress idempotency claim for safe retry');
+err(fn()=>UploadService::create(11,$meta,$missingDomainPolicy,$offlineKey),
+    'domain_contract_unavailable','Round 200 a retry checks current owner contract instead of getting stuck');
+
 // FR-006 private quarantine and encrypted storage.
 ok(($asset['storage']['encrypted']??false)===true&&($asset['storage']['provider_id']??'')==='source-private','FR-006 private encrypted quarantine/provider identity');
 
