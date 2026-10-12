@@ -142,6 +142,30 @@ $altered=$transfer;$altered['confidentiality_class']='C3';
 err(fn()=>TransferService::create($altered,policy('document','C3'),[]),
     'transfer_clinical_rights_mismatch','Round 190 rejects clinical evidence classified below C4');
 
+// Round 191 — File 17 canonical native/group identifiers must never alias after truncation.
+$altered=$transfer;$altered['native_transfer_id']=str_repeat('n',192);
+err(fn()=>TransferService::normalize($altered),'transfer_native_identity_invalid',
+    'Round 191 rejects native transfer ID truncation');
+$altered=$transfer;$altered['native_transfer_id']="message:transfer-1\n";
+err(fn()=>TransferService::normalize($altered),'transfer_native_identity_invalid',
+    'Round 191 rejects native transfer ID control-character normalization');
+$altered=$transfer;$altered['recipient_group_id']='group-other';
+err(fn()=>TransferService::normalize($altered),'transfer_recipient_ambiguous',
+    'Round 191 rejects a user transfer carrying a conflicting group');
+$altered=$transfer;$altered['recipient_type']='group';$altered['recipient_group_id']=str_repeat('g',97);$altered['recipient_user_id']=0;
+err(fn()=>TransferService::normalize($altered),'transfer_group_identity_invalid',
+    'Round 191 rejects group ID truncation');
+$altered=$transfer;$altered['recipient_type']='group';$altered['recipient_group_id']=' group-1 ';$altered['recipient_user_id']=0;
+err(fn()=>TransferService::normalize($altered),'transfer_group_identity_invalid',
+    'Round 191 rejects group ID whitespace normalization');
+$altered=$transfer;$altered['recipient_type']='group';$altered['recipient_group_id']='group-1';$altered['recipient_user_id']=12;
+err(fn()=>TransferService::normalize($altered),'transfer_recipient_ambiguous',
+    'Round 191 rejects group transfer carrying a conflicting user');
+$altered=$transfer;$altered['recipient_type']='group';$altered['recipient_group_id']='group-1';$altered['recipient_user_id']=0;
+ok(TransferService::normalize($altered)['recipient_group_id']==='group-1',
+    'Round 191 valid group transfer retains exact canonical group ID');
+
+
 
 
 // FR-024 retention scheduler.

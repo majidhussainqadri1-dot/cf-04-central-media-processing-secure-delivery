@@ -22,7 +22,15 @@ final class TransferService {
             :0;
         if(array_key_exists('clinical_confidentiality',$input)&&!is_bool($input['clinical_confidentiality']))
             throw new Error('transfer_confidentiality_boolean_invalid','Clinical confidentiality must be an explicit boolean.',400);
-        $group=Utils::text((string)($input['recipient_group_id']??''),96);
+        $groupRaw=$input['recipient_group_id']??'';
+        if(!is_string($groupRaw)||strlen($groupRaw)>96||$groupRaw!==Utils::text($groupRaw,96))
+            throw new Error('transfer_group_identity_invalid','Recipient group identity must not be changed during normalization.',400);
+        $group=$groupRaw;
+        if($type==='user'&&$group!=='')
+            throw new Error('transfer_recipient_ambiguous','User transfer cannot also carry group identity.',400);
+        if($type==='group'&&array_key_exists('recipient_user_id',$input)
+            &&$input['recipient_user_id']!==0&&$input['recipient_user_id']!==null)
+            throw new Error('transfer_recipient_ambiguous','Group transfer cannot also carry a user recipient.',400);
         if($type==='user'&&$recipient===$sender)
             throw new Error('transfer_recipient_invalid','Sender cannot be the recipient.',400);
         if($type==='group'&&$group==='')
@@ -30,7 +38,10 @@ final class TransferService {
         if(!is_string($input['consent_status'])||
             !in_array($input['consent_status'],['granted','not_required'],true))
             throw new Error('transfer_consent_denied','Transfer consent is not valid.',403);
-        $nativeId=Utils::text((string)$input['native_transfer_id'],191);
+        $nativeRaw=$input['native_transfer_id'];
+        if(!is_string($nativeRaw)||strlen($nativeRaw)>191||$nativeRaw!==Utils::text($nativeRaw,191)||$nativeRaw==='')
+            throw new Error('transfer_native_identity_invalid','Native transfer identity must not be truncated or coerced.',400);
+        $nativeId=$nativeRaw;
         $relationship=Utils::key((string)$input['relationship'],48);
         $copyright=Utils::key((string)$input['copyright_basis'],48);
         $confidentiality=$input['confidentiality_class'];
