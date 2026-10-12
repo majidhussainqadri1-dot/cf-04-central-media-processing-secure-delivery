@@ -13,3 +13,6 @@ Require exact corrected SHA push+PR all three PHP jobs and package gate Green be
 
 ## Pre-acceptance CI regression fix
 The first corrected-source push #777 and PR #778 signaled a test-fixture failure at tests/run-all.php line 231: the fixture looked up transfer using the baseline envelope `$transfer['id']`, which was not a durable transfer ID. The already-existing Round 192/196 persisted transfer reference is `$nearExpiryTransfer['id']`. Corrected only this fixture reference without changing production authority checks. This is a test setup defect, not a verified live vulnerability. R203 acceptance remains pending the fresh exact new SHA quality jobs.
+
+## Exact CI follow-up: fixture ordering correction
+Push #779 and PR #780 failed the same missing test-fixture reference: tests/run-all.php executes FR-020 (where R203 was first inserted) BEFORE the R192 creation of `$nearExpiryTransfer` and `$transferAsset` in later integration tests. This is a test-order defect. Moved the complete R203 adversarial exercise to after the R196 persisted-transfer/grant setup, immediately before the final runtime gate. Production code unchanged. Verify fresh exact-head CI before acceptance.

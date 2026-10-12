@@ -222,35 +222,7 @@ $public=create_document_asset('message:public','C0');$publicDerivative=Derivativ
 // FR-020 private same-origin proxy headers/ranges.
 $pt=DeliveryService::issue($asset['id'],null,11,'file17',$aud,$ctx,'view',$rangePolicy,'session-private');$private=DeliveryService::serve($pt,11,'file17',$aud,$ctx,'session-private',null);ok($private['headers']['Cache-Control']==='private, no-store, max-age=0'&&$private['headers']['Referrer-Policy']==='no-referrer'&&$private['headers']['X-Content-Type-Options']==='nosniff','FR-020 private proxy security headers');fclose($private['stream']);
 
-// R203: a revoked File17 transfer must block existing signed grants even when grant revocation is incomplete.
-$transferR203=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
-$transferR203['status']='ready';
-$transferR203['expires_at']=time()+600;
-$transferR203['asset_id']=$transferAsset['id'];
-$transferR203['expected_size']=$transferAsset['size'];
-$transferR203=RecordStore::put('transfer',(string)$transferR203['id'],$transferR203,(int)$transferR203['version']);
-$prior203=$GLOBALS['scm_user_id'];$GLOBALS['scm_user_id']=12;
-try {
-    $token203=TransferService::issueRecipientGrant((string)$transferR203['id'],12,
-        'r203-native-recipient-session',['territory'=>'GLOBAL']);
-    $claims203=Crypto::verify($token203);
-    ok(($claims203['transfer_id']??'')===$transferR203['id'],
-        'R203 signed grant is bound to exact native File17 transfer');
-    $grant203=RecordStore::get('grant',(string)$claims203['grant_id']);
-    ok($grant203['status']==='active'&&($grant203['transfer_id']??'')===$transferR203['id'],
-        'R203 durable grant carries same native transfer identity');
-    $transferR203=RecordStore::get('transfer',(string)$transferR203['id']);
-    $transferR203['status']='revoked';
-    RecordStore::put('transfer',(string)$transferR203['id'],$transferR203,(int)$transferR203['version']);
-    // Simulate crash between transfer status commit and revokeForAsset.
-    ok(RecordStore::get('grant',(string)$claims203['grant_id'])['status']==='active',
-        'R203 simulated partial revoke leaves token grant active for adversarial test');
-    err(fn()=>DeliveryService::serve($token203,12,'file17-transfer',
-        ['type'=>'user','user_id'=>12],
-        ['territory'=>'GLOBAL','audience_type'=>'recipient'],
-        'r203-native-recipient-session'),
-        'transfer_not_ready','R203 serve denies persisted revoked native transfer despite active token');
-}finally{$GLOBALS['scm_user_id']=$prior203;}
+
 
 // FR-021 actual download manager and disposition.
 $download=DownloadManagerService::create(11,$asset['id'],null,'download',$ctx);$dt=DownloadManagerService::grant($download['id'],11,'download-session',$ctx);$dr=DeliveryService::serve($dt,11,'file20-download-manager',['type'=>'user','user_id'=>11],$ctx+['audience_type'=>'private'],'download-session',null);ok(str_starts_with($dr['headers']['Content-Disposition'],'attachment;')&&is_resource($dr['stream']),'FR-021 actual byte delivery and safe disposition');fclose($dr['stream']);
@@ -507,6 +479,36 @@ ok($recovered['status']==='revoked'&&RecordStore::get('grant',$revokeGrantId)['s
 $again=TransferService::revoke((string)$transferForRevoke['id'],11,'retry');
 ok($again['status']==='revoked','Round 196 repeat revocation remains idempotent');
 
+
+// R203: a revoked File17 transfer must block existing signed grants even when grant revocation is incomplete.
+$transferR203=RecordStore::get('transfer',(string)$nearExpiryTransfer['id']);
+$transferR203['status']='ready';
+$transferR203['expires_at']=time()+600;
+$transferR203['asset_id']=$transferAsset['id'];
+$transferR203['expected_size']=$transferAsset['size'];
+$transferR203=RecordStore::put('transfer',(string)$transferR203['id'],$transferR203,(int)$transferR203['version']);
+$prior203=$GLOBALS['scm_user_id'];$GLOBALS['scm_user_id']=12;
+try {
+    $token203=TransferService::issueRecipientGrant((string)$transferR203['id'],12,
+        'r203-native-recipient-session',['territory'=>'GLOBAL']);
+    $claims203=Crypto::verify($token203);
+    ok(($claims203['transfer_id']??'')===$transferR203['id'],
+        'R203 signed grant is bound to exact native File17 transfer');
+    $grant203=RecordStore::get('grant',(string)$claims203['grant_id']);
+    ok($grant203['status']==='active'&&($grant203['transfer_id']??'')===$transferR203['id'],
+        'R203 durable grant carries same native transfer identity');
+    $transferR203=RecordStore::get('transfer',(string)$transferR203['id']);
+    $transferR203['status']='revoked';
+    RecordStore::put('transfer',(string)$transferR203['id'],$transferR203,(int)$transferR203['version']);
+    // Simulate crash between transfer status commit and revokeForAsset.
+    ok(RecordStore::get('grant',(string)$claims203['grant_id'])['status']==='active',
+        'R203 simulated partial revoke leaves token grant active for adversarial test');
+    err(fn()=>DeliveryService::serve($token203,12,'file17-transfer',
+        ['type'=>'user','user_id'=>12],
+        ['territory'=>'GLOBAL','audience_type'=>'recipient'],
+        'r203-native-recipient-session'),
+        'transfer_not_ready','R203 serve denies persisted revoked native transfer despite active token');
+}finally{$GLOBALS['scm_user_id']=$prior203;}
 
 ok(RuntimeGuard::enabled()&&Schema::ready(),'coded runtime test gate ready while production default remains disabled in plugin bootstrap');
 
