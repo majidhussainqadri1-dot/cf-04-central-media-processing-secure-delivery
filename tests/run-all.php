@@ -65,6 +65,34 @@ err(function(){$s=stream_of('not a pdf');try{Validator::inspectStream($s,'x.pdf'
 // FR-005 quotas, reservations, abuse and rate.
 $q=QuotaService::reserve('quota-test',11,100,1,['storage_bytes'=>1000,'daily_bytes'=>1000,'jobs'=>10,'burst_bytes'=>500]);QuotaService::settle($q['quota_id'],$q['reservation_id'],true,100,1);ok((RecordStore::get('quota',$q['quota_id'])['used_bytes']??0)===100,'FR-005 atomic quota reserve/settle');QuotaService::scoreAbuse('quota-test',11,101,'malicious');err(fn()=>QuotaService::reserve('quota-test',11,1,1,['storage_bytes'=>1000,'daily_bytes'=>1000,'jobs'=>10,'burst_bytes'=>500,'abuse_block_score'=>100]),'abuse_policy_block','FR-005 abuse score blocks');
 
+// Round 198: owner quota-zero/invalid limits and ambiguous exceptions must fail closed.
+$quotaNegative=[
+    [['storage_bytes'=>0],'quota_limit_invalid'],
+    [['daily_bytes'=>'100junk'],'quota_limit_invalid'],
+    [['jobs'=>-1],'quota_limit_invalid'],
+    [['burst_bytes'=>1.4],'quota_limit_invalid'],
+    [['abuse_block_score'=>0],'quota_limit_invalid']
+];
+foreach($quotaNegative as $index=>[$invalid,$code]){
+    $values=array_replace(['storage_bytes'=>1000,'daily_bytes'=>1000,'jobs'=>20,'burst_bytes'=>500],$invalid);
+    err(fn()=>QuotaService::reserve('r198-quota-'.$index,11,1,1,$values),$code,
+        'Round 198 rejects malformed or zero quota authority');
+}
+err(fn()=>QuotaService::reserve('r198-burst-invalid',11,600,1,
+    ['storage_bytes'=>1000,'daily_bytes'=>1000,'jobs'=>20,'burst_bytes'=>500],
+    ['governed_exception_authorized'=>'true']),
+    'quota_exception_invalid','Round 198 never coerces a string to a governed burst waiver');
+err(fn()=>QuotaService::reserve('r198-burst-denied',11,600,1,
+    ['storage_bytes'=>1000,'daily_bytes'=>1000,'jobs'=>20,'burst_bytes'=>500],
+    ['governed_exception_authorized'=>false]),
+    'quota_burst_exceeded','Round 198 enforces an unwaived burst limit');
+$badQuotaKey='r198-retry-valid-quota';
+err(fn()=>UploadService::create(11,$meta,$p,$badQuotaKey,['daily_bytes'=>0]),
+    'quota_limit_invalid','Round 198 owner upload quota zero rejects request and preserves retry');
+$retriedUpload=UploadService::create(11,$meta,$p,$badQuotaKey,['daily_bytes'=>1024]);
+ok($retriedUpload['status']==='uploading','Round 198 retry after corrected quota is not stranded by idempotency claim');
+UploadService::abort($retriedUpload['id'],11,$retriedUpload['upload_credential'],'test-cleanup');
+
 // FR-006 private quarantine and encrypted storage.
 ok(($asset['storage']['encrypted']??false)===true&&($asset['storage']['provider_id']??'')==='source-private','FR-006 private encrypted quarantine/provider identity');
 

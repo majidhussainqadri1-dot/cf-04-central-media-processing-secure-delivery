@@ -37,12 +37,19 @@ final class QuotaService {
         Auth::assertActor($actor);if($actor<1||$bytes<0||$jobs<0)throw new Error('quota_request_invalid','Quota request invalid.',400);
         $domain=Utils::key($domain,64);if($domain==='')throw new Error('quota_request_invalid','Quota domain invalid.',400);
         $window=(int)floor(Utils::now()/86400);$id=hash('sha256',$domain.'|'.$actor.'|'.$window);
-        $storageLimit=max(1,(int)($limits['storage_bytes']??1073741824));$dailyLimit=max(1,(int)($limits['daily_bytes']??1073741824));$jobLimit=max(1,(int)($limits['jobs']??100));$burst=max(1,(int)($limits['burst_bytes']??67108864));
-        if($bytes>$burst&&!Utils::bool($context['governed_exception_authorized']??false))throw new Error('quota_burst_exceeded','Upload burst exceeds policy.',429);
+        $storageLimit=Utils::integer($limits['storage_bytes']??1073741824,'quota_limit_invalid',1);
+        $dailyLimit=Utils::integer($limits['daily_bytes']??1073741824,'quota_limit_invalid',1);
+        $jobLimit=Utils::integer($limits['jobs']??100,'quota_limit_invalid',1);
+        $burst=Utils::integer($limits['burst_bytes']??67108864,'quota_limit_invalid',1);
+        $abuseBlock=Utils::integer($limits['abuse_block_score']??100,'quota_limit_invalid',1);
+        if(array_key_exists('governed_exception_authorized',$context)
+            &&!is_bool($context['governed_exception_authorized']))
+            throw new Error('quota_exception_invalid','Governed burst exception must be an explicit boolean.',403);
+        if($bytes>$burst&&($context['governed_exception_authorized']??false)!==true)throw new Error('quota_burst_exceeded','Upload burst exceeds policy.',429);
         for($attempt=0;$attempt<5;$attempt++){
             $r=RecordStore::get('quota',$id)??['actor_id'=>$actor,'domain'=>$domain,'window'=>$window,'status'=>'active','reserved_bytes'=>0,'used_bytes'=>0,'reserved_jobs'=>0,'used_jobs'=>0,'abuse_score'=>0,'reservations'=>[]];
             if((int)$r['reserved_bytes']+(int)$r['used_bytes']+$bytes>$dailyLimit||(int)$r['used_bytes']+$bytes>$storageLimit||(int)$r['reserved_jobs']+(int)$r['used_jobs']+$jobs>$jobLimit)throw new Error('quota_exceeded','Quota exhausted.',429,['domain'=>$domain]);
-            if((int)($r['abuse_score']??0)>=(int)($limits['abuse_block_score']??100))throw new Error('abuse_policy_block','Abuse policy blocked reservation.',403);
+            if((int)($r['abuse_score']??0)>=$abuseBlock)throw new Error('abuse_policy_block','Abuse policy blocked reservation.',403);
             $reservation=Utils::id('qres');$r['reserved_bytes']+=$bytes;$r['reserved_jobs']+=$jobs;$r['reservations'][$reservation]=['bytes'=>$bytes,'jobs'=>$jobs,'status'=>'reserved','created_at'=>Utils::now(),'context'=>Utils::redact($context)];
             try{$r=RecordStore::put('quota',$id,$r,(int)($r['version']??0));return ['quota_id'=>$id,'reservation_id'=>$reservation,'version'=>$r['version']];}
             catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
@@ -109,7 +116,14 @@ final class PartStore {
 
 final class UploadService {
     private const DEFAULT_LIMITS=['storage_bytes'=>1073741824,'daily_bytes'=>2147483648,'jobs'=>100,'burst_bytes'=>1073741824,'abuse_block_score'=>100];
-    private static function effectiveLimits(array $requested): array {$out=self::DEFAULT_LIMITS;foreach($out as $key=>$maximum){if(array_key_exists($key,$requested))$out[$key]=max(1,min($maximum,(int)$requested[$key]));}return $out;}
+    private static function effectiveLimits(array $requested): array {
+        $out=self::DEFAULT_LIMITS;
+        foreach($out as $key=>$maximum){
+            if(array_key_exists($key,$requested))
+                $out[$key]=Utils::integer($requested[$key],'quota_limit_invalid',1,$maximum);
+        }
+        return $out;
+    }
     private static function sessionTtl(array $metadata): int {
         return Utils::integer($metadata['session_ttl_seconds']??3600,'upload_session_ttl_invalid',300,86400);
     }
@@ -119,7 +133,22 @@ final class UploadService {
         $policy=Policy::normalize($rawPolicy,true);self::validateMetadata($metadata,$policy);$ttl=self::sessionTtl($metadata);$ownerType=self::ownerType((string)$metadata['owner_object']);$fingerprint=hash('sha256',Utils::canonicalJson(['actor'=>$actor,'metadata'=>Utils::redact($metadata),'policy_hash'=>$policy['policy_hash']]));$claim=Idempotency::claim('upload-create',$idempotencyKey,$fingerprint);
         if($claim['replay']){$row=RecordStore::get('upload',(string)$claim['record']['result_id'])??throw new Error('upload_replay_missing','Replayed upload missing.',500);if(!in_array(($row['status']??''),['uploading','paused'],true))throw new Error('upload_replay_state_invalid','Replayed upload is no longer resumable.',409);[$row,$credential]=self::issueCredential($row,$ttl);$row=RecordStore::put('upload',(string)$row['id'],$row,(int)$row['version']);return $row+['upload_credential'=>$credential];}
         $ownerContext=['actor_id'=>$actor,'owner_object'=>Utils::text((string)($metadata['owner_object']??''),191),'owner_type'=>$ownerType,'policy'=>$policy,'metadata'=>Utils::redact($metadata)];$decision=DomainRegistry::decision($policy['owner_domain'],'authorize_upload',$ownerContext);
-        $decisionLimits=is_array($decision['quota_limits']??null)?(array)$decision['quota_limits']:[];$effectiveQuota=self::effectiveLimits(array_replace($quotaLimits,$decisionLimits));$quota=QuotaService::reserve($policy['owner_domain'],$actor,(int)$metadata['size'],1,$effectiveQuota,['purpose'=>$policy['purpose'],'governed_exception_authorized'=>Utils::bool($decision['governed_exception_authorized']??false)]);
+        try{
+            if(array_key_exists('governed_exception_authorized',$decision)
+                &&!is_bool($decision['governed_exception_authorized']))
+                throw new Error('quota_exception_invalid','Owner burst exception must be an explicit boolean.',403);
+            if(array_key_exists('quota_limits',$decision)&&!is_array($decision['quota_limits']))
+                throw new Error('quota_limit_invalid','Owner quota limits must be a structured map.',400);
+            $decisionLimits=(array)($decision['quota_limits']??[]);
+            $effectiveQuota=self::effectiveLimits(array_replace($quotaLimits,$decisionLimits));
+            $quota=QuotaService::reserve($policy['owner_domain'],$actor,(int)$metadata['size'],1,$effectiveQuota,[
+                'purpose'=>$policy['purpose'],
+                'governed_exception_authorized'=>$decision['governed_exception_authorized']??false
+            ]);
+        }catch(\Throwable $e){
+            Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected');
+            throw $e;
+        }
         $id=Utils::id('upl');$row=['actor_id'=>$actor,'upload_id'=>$id,'owner_domain'=>$policy['owner_domain'],'owner_object'=>Utils::text((string)$metadata['owner_object'],191),'owner_type'=>$ownerType,'object_version'=>(int)$decision['object_version'],'declared_name'=>Utils::filename((string)$metadata['name']),'declared_mime'=>strtolower((string)$metadata['mime']),'expected_size'=>(int)$metadata['size'],'expected_sha256'=>strtolower((string)$metadata['sha256']),'media_class'=>$policy['media_class'],'policy'=>$policy,'policy_hash'=>$policy['policy_hash'],'quota'=>$quota,'received_size'=>0,'received_parts'=>0,'status'=>'uploading','created_at'=>Utils::now()];[$row,$credential]=self::issueCredential($row,$ttl);
         try{$row=RecordStore::put('upload',$id,$row);Audit::record('upload_session_created',['upload_id'=>$id,'actor_id'=>$actor,'owner_domain'=>$policy['owner_domain'],'expected_size'=>$metadata['size']]);Idempotency::complete('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],'upload',$id);return $row+['upload_credential'=>$credential];}
         catch(\Throwable $e){QuotaService::settle($quota['quota_id'],$quota['reservation_id'],false);Idempotency::fail('upload-create',$idempotencyKey,$fingerprint,(string)$claim['record']['claim_token'],$e instanceof Error?$e->errorCode:'unexpected');throw $e;}
