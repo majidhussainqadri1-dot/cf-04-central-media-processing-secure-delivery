@@ -62,7 +62,24 @@ final class Plugin {
             if($scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[])Observability::alert('warning','processing_inventory_scan_truncated',['scanned'=>$scanned]);
         }finally{self::release('cron-jobs',$token);}
     }
-    public static function cronRetention(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('retention',1800);if($token===null)return;try{RightsRevocationService::reconcileExpired();RetentionService::run();UploadService::cleanupExpired();}catch(\Throwable $e){self::cronAlert('retention_cron_failed',$e);throw $e;}finally{self::release('retention',$token);}}
+    public static function cronRetention(): void {
+        if(!RuntimeGuard::enabled())return;
+        $token=self::acquire('retention',1800);if($token===null)return;
+        try {
+            $failure=null;
+            // A broken rights/retention reconciliation must not permanently
+            // prevent expiry of unrelated abandoned and quota-reserving uploads.
+            foreach([
+                'rights_reconciliation_failed'=>static fn()=>RightsRevocationService::reconcileExpired(),
+                'retention_reconciliation_failed'=>static fn()=>RetentionService::run(),
+                'upload_expiry_reconciliation_failed'=>static fn()=>UploadService::cleanupExpired(),
+            ] as $code=>$operation){
+                try{$operation();}
+                catch(\Throwable $e){self::cronAlert($code,$e);$failure??=$e;}
+            }
+            if($failure!==null)throw $failure;
+        }finally{self::release('retention',$token);}
+    }
     public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();RevocationDispatchService::reconcile();DeliveryService::reconcilePublicPurges();KeyRotationService::reconcileDeferredCleanup();}catch(\Throwable $e){self::cronAlert('deletion_reconciliation_cron_failed',$e);throw $e;}finally{self::release('deletions',$token);}}
     public static function cronIntegrity(): void {
         if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;
