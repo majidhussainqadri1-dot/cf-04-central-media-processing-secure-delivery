@@ -3,12 +3,25 @@ declare(strict_types=1);
 namespace Sabri\CentralMedia;
 
 final class DeliveryService {
-    public static function issue(string $assetId,?string $derivativeId,int $actor,string $serviceId,array $audience,array $context,string $operation,array $rangePolicy,string $sessionId,int $ttl=300,int $maxUses=20): string {
+    public static function issue(string $assetId,?string $derivativeId,int $actor,string $serviceId,array $audience,array $context,string $operation,array $rangePolicy,string $sessionId,int $ttl=300,int $maxUses=20,?string $transferId=null): string {
     RuntimeGuard::requireReady(['streaming']);RestoreService::assertServeAllowed();Auth::assertActor($actor);
     $serviceId=Utils::key($serviceId,64);$sessionId=self::canonicalSession($sessionId);$audience=self::audience($audience);
     if($serviceId===''||$sessionId==='')throw new Error('delivery_context_incomplete','Service and session identity required.',400);
     Auth::verifiedUser($actor,'media_delivery_issue',$serviceId,['asset_id'=>$assetId]);
     $asset=self::asset($assetId);$target=self::target($asset,$derivativeId);$operation=Utils::key($operation,32);
+    // Only the explicitly authorized File 17 transfer path may mint recipient transfer grants.
+    if($serviceId==='file17-transfer'){
+        if($transferId===null||$transferId===''||strlen($transferId)>191||Utils::text($transferId,191)!==$transferId)
+            throw new Error('delivery_transfer_reference_required','Native transfer binding is required.',400);
+        $native=RecordStore::get('transfer',$transferId);
+        if(!$native||($native['status']??'')!=='ready'||(int)($native['expires_at']??0)<=Utils::now()
+            ||($native['asset_id']??'')!==$assetId)
+            throw new Error('transfer_not_ready','Bound native transfer is not ready.',409);
+        if(($native['recipient_type']??'')==='user'&&(int)($native['recipient_user_id']??0)!==$actor)
+            throw new Error('transfer_recipient_denied','Transfer recipient does not match the grant actor.',403);
+    }elseif($transferId!==null){
+        throw new Error('delivery_transfer_reference_invalid','Only File 17 transfer grants may carry transfer binding.',400);
+    }
     if($operation===''||!in_array($operation,['view','download','stream','extract_text','ocr'],true))throw new Error('delivery_operation_invalid','Delivery operation invalid.',400);
     if($audience['type']==='public'&&($asset['privacy_class']!=='C0'||!Utils::bool($asset['policy']['delivery']['public_cdn']??false)))throw new Error('public_delivery_denied','Public delivery requires an explicit public policy.',403);
     $rightsContext=array_replace($context,['audience_type'=>$audience['type']]);RightsPolicy::assert($asset['rights'],$operation,$rightsContext);self::assertDeliverable($asset,$target,$operation);
@@ -22,9 +35,10 @@ final class DeliveryService {
     if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner authorization is stale.',409);
     $grantId=Utils::id('gr');$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));$sessionHash=Utils::hashReference($sessionId);$rangeHash=Utils::hashReference(Utils::canonicalJson($effectiveRange));
     $claims=['type'=>'delivery-grant','grant_id'=>$grantId,'asset_id'=>$assetId,'derivative_id'=>$derivativeId??'source','actor_id'=>$actor,'service_id'=>$serviceId,'owner_domain'=>$asset['owner_domain'],'owner_object'=>$asset['owner_object'],'object_version'=>(int)$asset['object_version'],'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'purpose'=>$asset['policy']['purpose'],'privacy_class'=>$asset['privacy_class'],'audience_hash'=>$audienceHash,'context_hash'=>$contextHash,'session_hash'=>$sessionHash,'operation'=>$operation,'range_hash'=>$rangeHash,'download_mode'=>$operation==='download','target_sha256'=>$target['sha256']];
+    if($serviceId==='file17-transfer')$claims['transfer_id']=$transferId;
     $ttl=max(1,min($ttl,(int)$asset['policy']['delivery']['grant_ttl_seconds']));$token=Crypto::sign($claims,$ttl);
     $record=['actor_id'=>$actor,'grant_id'=>$grantId,'asset_id'=>$assetId,'derivative_id'=>$derivativeId??'source','service_id'=>$serviceId,'status'=>'active','audience_hash'=>$audienceHash,'context_hash'=>$contextHash,'session_hash'=>$sessionHash,'range_hash'=>$rangeHash,'range_policy'=>$effectiveRange,'operation'=>$operation,'token_hash'=>hash('sha256',$token),'policy_hash'=>$asset['policy_hash'],'rights_hash'=>$asset['rights']['policy_hash'],'object_version'=>$asset['object_version'],'target_sha256'=>$target['sha256'],'max_uses'=>max(1,min(1000,$maxUses)),'uses'=>0,'expires_at'=>Utils::now()+$ttl,'created_at'=>Utils::now()];
-    RecordStore::put('grant',$grantId,$record);Audit::record('delivery_grant_issued',['grant_id'=>$grantId,'asset_id'=>$assetId,'derivative_id'=>$derivativeId,'actor_id'=>$actor,'service_id'=>$serviceId,'operation'=>$operation,'expires_in'=>$ttl]);return $token;
+    if($serviceId==='file17-transfer')$record['transfer_id']=$transferId;RecordStore::put('grant',$grantId,$record);Audit::record('delivery_grant_issued',['grant_id'=>$grantId,'asset_id'=>$assetId,'derivative_id'=>$derivativeId,'actor_id'=>$actor,'service_id'=>$serviceId,'operation'=>$operation,'expires_in'=>$ttl]);return $token;
 }
     public static function serve(string $token,int $actor,string $serviceId,array $audience,array $context,string $sessionId,?string $rangeHeader=null): array {
     RuntimeGuard::requireReady(['streaming']);RestoreService::assertServeAllowed();Auth::assertActor($actor);$audience=self::audience($audience);
@@ -32,6 +46,7 @@ final class DeliveryService {
     if($claims['type']!=='delivery-grant')throw new Error('grant_type_invalid','Invalid grant type.',403);
     $grant=RecordStore::get('grant',(string)$claims['grant_id']);if(!$grant||($grant['status']??'')!=='active')throw new Error('grant_revoked','Delivery grant unavailable or revoked.',403);
     self::assertGrantUsable($grant);
+    if(($claims['service_id']??'')==='file17-transfer')self::assertNativeTransferLive($claims,$grant,$actor,$context,$sessionId);
     if(!hash_equals((string)$grant['token_hash'],hash('sha256',$token)))throw new Error('grant_record_mismatch','Delivery grant record mismatch.',403);
     $serviceId=Utils::key($serviceId,64);$sessionId=self::canonicalSession($sessionId);$sessionHash=Utils::hashReference($sessionId);$audienceHash=Utils::hashReference(Utils::canonicalJson($audience));$contextHash=Utils::hashReference(Utils::canonicalJson($context));
     foreach(['actor_id'=>$actor,'service_id'=>$serviceId,'audience_hash'=>$audienceHash,'context_hash'=>$contextHash,'session_hash'=>$sessionHash] as $field=>$value)if(($claims[$field]??null)!==$value||($grant[$field]??null)!==$value)throw new Error('grant_binding_mismatch','Delivery grant binding mismatch.',403,['field'=>$field]);
@@ -70,6 +85,29 @@ final class DeliveryService {
         if($session===''||strlen($session)>128||Utils::text($session,128)!==$session)
             throw new Error('delivery_session_invalid','Session identity must remain exactly canonical and bounded.',400);
         return $session;
+    }
+    private static function assertNativeTransferLive(array $claims,array $grant,int $actor,array $context,string $sessionId): void {
+        $id=$claims['transfer_id']??null;
+        if(!is_string($id)||$id===''||strlen($id)>191||($grant['transfer_id']??null)!==$id
+            ||Utils::text($id,191)!==$id)
+            throw new Error('delivery_transfer_binding_invalid','Signed native transfer binding does not match the durable grant.',403);
+        $transfer=RecordStore::get('transfer',$id);
+        if(!$transfer||($transfer['status']??'')!=='ready'||(int)($transfer['expires_at']??0)<=Utils::now()
+            ||($transfer['asset_id']??'')!==($grant['asset_id']??null)
+            ||($transfer['asset_id']??'')!==($claims['asset_id']??null))
+            throw new Error('transfer_not_ready','Transfer has expired, been revoked or changed since grant issuance.',403);
+        if(($transfer['recipient_type']??'')==='user'
+            &&(int)($transfer['recipient_user_id']??0)!==$actor)
+            throw new Error('transfer_recipient_denied','Transfer recipient is no longer authorized.',403);
+        Auth::transferParties($transfer,'transfer_download');
+        $asset=self::asset((string)$claims['asset_id']);
+        $decision=DomainRegistry::decision('file17','authorize_transfer_delivery',[
+            'transfer'=>$transfer,'asset'=>$asset,'recipient_user_id'=>$actor,
+            'session_id'=>$sessionId,'context'=>Utils::redact($context)
+        ]);
+        if((int)$decision['object_version']!==(int)($transfer['native_transfer_version']??0)
+            ||($decision['recipient_authorized']??false)!==true)
+            throw new Error('transfer_recipient_denied','Current native owner authorization denied recipient.',403);
     }
     private static function audience(array $audience): array {
     $type=$audience['type']??null;

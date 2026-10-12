@@ -102,7 +102,7 @@ final class TransferService {
         // Never mint a signed grant that can outlive the File 17 native transfer.
         if($remaining<=2)throw new Error('transfer_not_ready','Transfer is too close to expiry to grant access.',409);
         $grantTtl=min(300,$remaining-2);
-        return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,$grantTtl,50);}
+        return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,$grantTtl,50,$transferId);}
     public static function revoke(string $transferId,int $actor,string $reason): array {
         Auth::assertActor($actor,'manage_options');
         $reason=Utils::key($reason,64);
