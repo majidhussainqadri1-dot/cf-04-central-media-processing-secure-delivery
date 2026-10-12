@@ -74,13 +74,32 @@ final class Rest {
     private static function header($request,string $name): string {return is_object($request)&&method_exists($request,'get_header')?Utils::text((string)$request->get_header($name),8192):'';}
     private static function assertContract($request): void {$expected=defined('SCM_CONTRACT_VERSION')?(string)SCM_CONTRACT_VERSION:'';$actual=self::header($request,'x-scm-contract-version');if($expected===''||$actual===''||!hash_equals($expected,$actual))throw new Error('contract_version_mismatch','X-SCM-Contract-Version is required and must match the active CF-04 contract.',409,['expected'=>$expected]);}
     private static function idempotencyKey($request): string {$key=self::header($request,'idempotency-key');$key=Utils::text($key,128);if($key==='')throw new Error('idempotency_key_required','Idempotency-Key header is required for this operation.',400);return $key;}
-    private static function route($request,string $key): string {if(is_array($request))return Utils::text((string)($request[$key]??''),191);if($request instanceof \ArrayAccess)return Utils::text((string)($request[$key]??''),191);return '';}
-    private static function bodyText($request,int $max): string {$length=(int)self::header($request,'content-length');if($length>$max)throw new Error('request_body_too_large','Request body exceeds the permitted size.',413);$body=is_object($request)&&method_exists($request,'get_body')?(string)$request->get_body():'';if(strlen($body)>$max)throw new Error('request_body_too_large','Request body exceeds the permitted size.',413);return $body;}
+    private static function route($request,string $key): string {
+        $value=null;
+        if(is_array($request))$value=$request[$key]??null;
+        elseif($request instanceof \ArrayAccess)$value=$request[$key]??null;
+        $limit=$key==='id'?96:($key==='provider'?64:191);
+        if(!is_string($value)||$value===''||strlen($value)>$limit||Utils::text($value,$limit)!==$value)
+            throw new Error('route_identity_invalid','Route identity must be an exact bounded string.',400,['field'=>$key]);
+        return $value;
+    }
+    private static function declaredLength($request,int $max,string $oversizeCode): ?int {
+        $raw=self::header($request,'content-length');
+        if($raw==='')return null; // HTTP chunked bodies need not declare a size.
+        $length=Utils::integer($raw,'content_length_invalid',0);
+        if($length>$max)throw new Error($oversizeCode,'Declared request body exceeds the permitted size.',413);
+        return $length;
+    }
+    private static function bodyText($request,int $max): string {
+        self::declaredLength($request,$max,'request_body_too_large');
+        $body=is_object($request)&&method_exists($request,'get_body')?(string)$request->get_body():'';
+        if(strlen($body)>$max)throw new Error('request_body_too_large','Request body exceeds the permitted size.',413);
+        return $body;
+    }
     /** @return array{0:resource,1:bool} */
     private static function partStream($request,int $max): array {
     if($max<1)throw new Error('upload_part_policy_invalid','Upload part policy is unavailable.',503);
-    $length=(int)self::header($request,'content-length');
-    if($length>$max)throw new Error('upload_part_size_invalid','Upload part exceeds policy.',413);
+    self::declaredLength($request,$max,'upload_part_size_invalid');
     $filtered=function_exists('apply_filters')?apply_filters('scm_rest_upload_stream',null,$request,$max):null;
     if(is_resource($filtered))return [$filtered,false];
     if(is_object($request)&&method_exists($request,'get_body_stream')){$candidate=$request->get_body_stream();if(is_resource($candidate))return [$candidate,false];}
@@ -93,7 +112,7 @@ final class Rest {
     public static function health(): mixed {return self::wrap(function(){$h=Observability::health();return ['status'=>$h['status']??'unavailable','runtime_enabled'=>(bool)($h['runtime_enabled']??false),'schema_ready'=>(bool)($h['schema_ready']??false)];});}
     public static function healthDetails(): mixed {return self::wrap(fn()=>Observability::health());}
     public static function createUpload($request): mixed {return self::wrap(function()use($request){self::assertContract($request);$i=self::input($request);$result=UploadService::create(Auth::currentUser(),(array)($i['metadata']??[]),(array)($i['policy']??[]),self::idempotencyKey($request));$credential=(string)($result['upload_credential']??'');$view=self::clean($result,['parts','policy','rights']);$view['upload_credential']=$credential;return $view;});}
-    public static function putPart($request): mixed {return self::wrap(function()use($request){self::assertContract($request);$id=self::route($request,'id');$part=(int)self::route($request,'part');$upload=RecordStore::get('upload',$id);if(!$upload||(int)($upload['actor_id']??0)!==Auth::currentUser())throw new Error('upload_not_found','Upload session not found.',404);$max=(int)($upload['policy']['max_part_size_bytes']??0);[$stream,$close]=self::partStream($request,$max);try{return self::clean(UploadService::putPart($id,Auth::currentUser(),$part,$stream,self::header($request,'x-content-sha256'),self::header($request,'x-upload-credential')));}finally{if($close&&is_resource($stream))fclose($stream);}});}
+    public static function putPart($request): mixed {return self::wrap(function()use($request){self::assertContract($request);$id=self::route($request,'id');$part=Utils::integer(self::route($request,'part'),'part_number_invalid',1);$upload=RecordStore::get('upload',$id);if(!$upload||(int)($upload['actor_id']??0)!==Auth::currentUser())throw new Error('upload_not_found','Upload session not found.',404);$max=(int)($upload['policy']['max_part_size_bytes']??0);[$stream,$close]=self::partStream($request,$max);try{return self::clean(UploadService::putPart($id,Auth::currentUser(),$part,$stream,self::header($request,'x-content-sha256'),self::header($request,'x-upload-credential')));}finally{if($close&&is_resource($stream))fclose($stream);}});}
     public static function completeUpload($request): mixed {return self::wrap(function()use($request){self::assertContract($request);return self::clean(UploadService::complete(self::route($request,'id'),Auth::currentUser(),self::header($request,'x-upload-credential'),self::idempotencyKey($request)),['scan_results','job_graph']);});}
     public static function uploadAction($request): mixed {return self::wrap(function()use($request){self::assertContract($request);$i=self::input($request);$id=self::route($request,'id');$actor=Auth::currentUser();$cred=self::header($request,'x-upload-credential');return self::clean(match(self::route($request,'action')){'pause'=>UploadService::pause($id,$actor,$cred),'resume'=>UploadService::resume($id,$actor,$cred),'abort'=>UploadService::abort($id,$actor,$cred,(string)($i['reason']??'user-abort')),default=>throw new Error('upload_action_invalid','Invalid upload action.',400)},['policy','parts']);});}
     public static function processAsset($request): mixed {return self::wrap(function()use($request){self::assertContract($request);$id=self::route($request,'id');$actor=Auth::currentUser();Auth::assertActor($actor);$asset=RecordStore::get('asset',$id);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);$decision=DomainRegistry::decision((string)$asset['owner_domain'],'authorize_processing',['asset'=>$asset,'actor_id'=>$actor,'operation'=>'start','channel'=>'rest']);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner version changed.',409);$jobs=ProcessingService::start($id);return ['asset_id'=>$id,'processing_status'=>'queued','jobs'=>array_keys($jobs)];});}
