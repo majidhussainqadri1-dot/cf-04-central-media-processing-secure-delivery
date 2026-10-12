@@ -404,24 +404,24 @@ $wts=time();$wid='event-1';$wbody='{}';$wsig=Utils::b64url(hash_hmac('sha256','p
 // R204: a signed webhook MUST use an exact canonical timestamp at REST ingress.
 $w204id='event-r204';$w204signature=Utils::b64url(hash_hmac('sha256','provider|'.$w204id.'|'.$wts.'|'.hash('sha256',$wbody),$secret,true));
 add_filter('scm_provider_webhook_secret',fn($value,string $provider)=>$secret);
-$w204req=new class($wts.'garbage',$w204id,$w204signature,$wbody) implements \\ArrayAccess {
+$w204req=new class($wts.'garbage',$w204id,$w204signature,$wbody) implements \ArrayAccess {
     public function __construct(public string $timestamp,public string $eventId,public string $signature,public string $body) {}
     public function offsetExists(mixed $offset): bool {return $offset==='provider';}
     public function offsetGet(mixed $offset): mixed {return $offset==='provider'?'provider':null;}
-    public function offsetSet(mixed $offset,mixed $value): void {throw new \\LogicException('Test route is immutable');}
-    public function offsetUnset(mixed $offset): void {throw new \\LogicException('Test route is immutable');}
+    public function offsetSet(mixed $offset,mixed $value): void {throw new \LogicException('Test route is immutable');}
+    public function offsetUnset(mixed $offset): void {throw new \LogicException('Test route is immutable');}
     public function get_header(string $name): string {return match($name){'x-event-id'=>$this->eventId,'x-event-timestamp'=>$this->timestamp,'x-event-signature'=>$this->signature,default=>''};}
     public function get_body(): string {return $this->body;}
 };
-$w204bad=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+$w204bad=\Sabri\CentralMedia\Rest::providerWebhook($w204req);
 ok(is_array($w204bad)&&($w204bad['code']??'')==='webhook_timestamp_invalid',
     'R204 malformed numeric webhook timestamp denied before signature verification and persistence');
 $w204req->timestamp='0'.$wts;
-$w204leading=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+$w204leading=\Sabri\CentralMedia\Rest::providerWebhook($w204req);
 ok(is_array($w204leading)&&($w204leading['code']??'')==='webhook_timestamp_invalid',
     'R204 leading-zero timestamp aliases cannot reuse a canonical signed event');
 $w204req->timestamp=(string)$wts;
-$w204good=\\Sabri\\CentralMedia\\Rest::providerWebhook($w204req);
+$w204good=\Sabri\CentralMedia\Rest::providerWebhook($w204req);
 ok(is_array($w204good)&&($w204good['replay']??null)===false,
     'R204 exact canonical timestamp preserves valid signed webhook acceptance');
 
