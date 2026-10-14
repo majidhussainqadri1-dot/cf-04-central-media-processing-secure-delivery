@@ -104,7 +104,36 @@ final class PartStore {
         try{return RecordStore::put('upload_part',$id,['actor_id'=>Auth::currentUser(),'upload_id'=>$uploadId,'part_number'=>$part,'provider_id'=>ProviderRegistry::activeId(),'object_key'=>$stored['object_key'],'size'=>$hash['size'],'sha256'=>$expectedHash,'status'=>'stored','created_at'=>Utils::now()],0);}
         catch(\Throwable $e){$authoritative=RecordStore::get('upload_part',$id);if($authoritative&&hash_equals((string)($authoritative['sha256']??''),$expectedHash)&&($authoritative['object_key']??'')===($stored['object_key']??''))return $authoritative;if(!$authoritative||($authoritative['object_key']??'')!==($stored['object_key']??''))$store->delete((string)$stored['object_key']);throw $e;}
     }
-    public static function list(string $uploadId): array {$rows=RecordStore::all('upload_part',0,null,100000);$rows=array_values(array_filter($rows,fn($r)=>(string)($r['upload_id']??'')===$uploadId));usort($rows,fn($a,$b)=>(int)$a['part_number']<=>(int)$b['part_number']);return $rows;}
+    /** Retrieve only hashes belonging to this upload, using the existing primary-key index. */
+    public static function list(string $uploadId): array {
+        if($uploadId===''||strlen($uploadId)>96||Utils::text($uploadId,96)!==$uploadId)
+            throw new Error('upload_part_identity_invalid','Upload identity is noncanonical.',500);
+        $upload=RecordStore::get('upload',$uploadId);
+        if($upload===null)throw new Error('upload_not_found','Upload session not found for part enumeration.',404);
+        // Existing policy bounds this session to <=20,000 possible part ordinals.
+        // Legacy synthetic/persisted sessions without a policy are checked within
+        // the maximum allowed policy envelope, never against the global part table.
+        $rawMax=$upload['policy']['max_upload_parts']??null;
+        $maximum=$rawMax===null?20000:Utils::integer($rawMax,'upload_part_policy_invalid',1,20000);
+        $rows=[];
+        for($first=1;$first<=$maximum;$first+=250){
+            $keys=[];$end=min($maximum,$first+249);
+            for($number=$first;$number<=$end;$number++)$keys[$number]=hash('sha256',$uploadId.'|'.$number);
+            $found=RecordStore::getMany('upload_part',array_values($keys));
+            foreach($keys as $number=>$key){
+                if(!isset($found[$key]))continue;
+                $row=$found[$key];
+                if(($row['record_type']??null)!=='upload_part'
+                    ||($row['id']??null)!==$key
+                    ||($row['upload_id']??null)!==$uploadId
+                    ||($row['part_number']??null)!==$number
+                    ||!is_int($row['version']??null)||$row['version']<1)
+                    throw new Error('upload_part_identity_invalid','Stored upload part does not match its scoped primary key.',500);
+                $rows[]=$row;
+            }
+        }
+        return $rows;
+    }
     public static function assemble(string $uploadId,int $expectedSize,string $expectedHash,int $maxParts){
         $parts=self::list($uploadId);if($parts===[]||count($parts)>$maxParts)throw new Error('upload_parts_incomplete','Upload parts incomplete.',409);$out=Utils::tempStream();$ctx=hash_init('sha256');$size=0;$expectedPart=1;
         try{foreach($parts as $part){if((int)$part['part_number']!==$expectedPart++)throw new Error('upload_part_gap','Upload part sequence has a gap.',409);$provider=ProviderRegistry::get((string)($part['provider_id']??ProviderRegistry::activeId()));$s=$provider->openStream((string)$part['object_key']);try{while(!feof($s)){$chunk=fread($s,1048576);if($chunk===false)throw new Error('stream_read_failed','Part read failed.',500);if($chunk==='')continue;$size+=strlen($chunk);if($size>$expectedSize)throw new Error('upload_size_exceeded','Assembled upload exceeds expected size.',422);hash_update($ctx,$chunk);Utils::writeAll($out,$chunk);}}finally{fclose($s);}}
