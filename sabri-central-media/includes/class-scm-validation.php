@@ -9,7 +9,15 @@ final class Validator {
         'application/zip'=>['504b0304','504b0506','504b0708'],
     ];
     public static function inspectStream($stream,string $filename,string $declaredMime,array $policy): array {
-        if(!is_resource($stream))throw new Error('stream_invalid','Invalid source stream.',500);$stats=Utils::streamHash($stream);
+        if(!is_resource($stream))throw new Error('stream_invalid','Invalid source stream.',500);try{
+            $stats=Utils::streamHash($stream,Utils::integer(
+                $policy['max_size_bytes']??null,'source_size_invalid',1,1073741824
+            ));
+        }catch(Error $sizeError){
+            if($sizeError->errorCode==='stream_size_exceeded')
+                throw new Error('source_size_invalid','Source size outside policy.',413);
+            throw $sizeError;
+        }
         if($stats['size']<1||(int)$stats['size']>(int)$policy['max_size_bytes'])throw new Error('source_size_invalid','Source size outside policy.',413);
         $temp=tempnam(sys_get_temp_dir(),'scm-inspect-');if($temp===false)throw new Error('temp_unavailable','Inspection workspace unavailable.',500);$out=fopen($temp,'wb');if($out===false){@unlink($temp);throw new Error('temp_unavailable','Inspection workspace unavailable.',500);}
         rewind($stream);try{Utils::copyStream($stream,$out,(int)$policy['max_size_bytes']);}finally{fclose($out);rewind($stream);}
