@@ -35,6 +35,44 @@ final class RecordStore {
         self::requirePersistent();global $wpdb;$raw=$wpdb->get_var($wpdb->prepare('SELECT payload FROM '.Db::table('records').' WHERE record_type=%s AND id=%s',$type,$id));Db::assertRead('record_get');
         if(!is_string($raw)||$raw==='')return null;try{$row=json_decode($raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent record payload is invalid.',500,['record_type'=>$type,'id'=>$id]);}if(!is_array($row)||($row['record_type']??'')!==$type||($row['id']??'')!==$id||(int)($row['version']??0)<1)throw new Error('record_payload_invalid','Persistent record identity is invalid.',500,['record_type'=>$type,'id'=>$id]);return $row;
     }
+    /** Bounded lookup by exact primary keys; used for per-upload parts without a global scan. */
+    public static function getMany(string $type,array $ids): array {
+        if($type!==Utils::key($type,48)||$type===''
+            ||count($ids)>250||!array_is_list($ids))
+            throw new Error('record_batch_invalid','Record batch must use a canonical type and at most 250 identifiers.',500);
+        $unique=[];
+        foreach($ids as $id){
+            if(!is_string($id)||$id===''||strlen($id)>96||Utils::text($id,96)!==$id)
+                throw new Error('record_batch_invalid','Record batch identifier is noncanonical.',500);
+            $unique[$id]=true;
+        }
+        if($unique===[])return [];
+        $keys=array_keys($unique);
+        if(self::test()){
+            $out=[];foreach($keys as $id){
+                if(isset(self::$memory[$type][$id]))$out[$id]=self::$memory[$type][$id];
+            }
+            return $out;
+        }
+        self::requirePersistent();
+        global $wpdb;
+        $placeholders=implode(',',array_fill(0,count($keys),'%s'));
+        $query=$wpdb->prepare('SELECT payload FROM '.Db::table('records')
+            .' WHERE record_type=%s AND id IN ('.$placeholders.')',$type,...$keys);
+        $raws=$wpdb->get_col($query);Db::assertRead('record_batch_lookup');
+        $out=[];
+        foreach((array)$raws as $raw){
+            try{$row=json_decode((string)$raw,true,64,JSON_THROW_ON_ERROR);}
+            catch(\JsonException){throw new Error('record_payload_invalid','Batched record payload is invalid JSON.',500);}
+            $id=$row['id']??null;
+            if(!is_array($row)||!is_string($id)||!isset($unique[$id])
+                ||($row['record_type']??null)!==$type
+                ||!is_int($row['version']??null)||$row['version']<1||isset($out[$id]))
+                throw new Error('record_payload_invalid','Batched record identity or version is invalid.',500);
+            $out[$id]=$row;
+        }
+        return $out;
+    }
     public static function put(string $type,string $id,array $row,?int $expectedVersion=null): array {
         $type=Utils::key($type,48);$id=Utils::text($id,96);if($type===''||$id==='')throw new Error('record_identity_invalid','Record identity required.',500);
         $current=self::get($type,$id);$version=(int)($current['version']??0);if($expectedVersion!==null&&$version!==$expectedVersion)throw new Error('record_version_conflict','Record changed concurrently.',409,['expected'=>$expectedVersion,'actual'=>$version]);
