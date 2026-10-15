@@ -54,12 +54,35 @@ final class Plugin {
         if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true&&ProviderRegistry::ids()===[])ProviderRegistry::register('local-private',new LocalObjectStore(),['test'=>true,'region'=>'test']);
     }
     public static function cronJobs(): void {
-        if(!RuntimeGuard::enabled())return;$token=self::acquire('cron-jobs',300);if($token===null)return;
+        if(!RuntimeGuard::enabled())return;
+        $token=self::acquire('cron-jobs',300);
+        if($token===null)return;
         try{
-            JobService::recoverOrphans();$candidates=[];$offset=0;$scanned=0;
-            while(count($candidates)<5&&$scanned<1000000){$page=RecordStore::list('asset',0,null,500,$offset);if($page===[])break;$offset+=count($page);$scanned+=count($page);foreach($page as $asset){if(($asset['processing_status']??'')==='queued'){$candidates[]=(string)$asset['id'];if(count($candidates)>=5)break;}}if(count($page)<500)break;}
-            foreach($candidates as $assetId)try{ProcessingService::execute($assetId,'wp-cron-'.substr($token,0,12));}catch(\Throwable $e){Observability::alert('critical','processing_job_failed',['asset_id'=>$assetId,'exception'=>get_class($e)]);}
-            if($scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[])Observability::alert('warning','processing_inventory_scan_truncated',['scanned'=>$scanned]);
+            JobService::recoverOrphans();
+            $cursor=self::maintenanceCursor('processing');
+            $after=(string)($cursor['last_id']??'');
+            $selected=[];$scanned=0;
+            // Progress is keyed by immutable record ID, never the mutable
+            // updated_at ordering. Work cannot starve past an offset ceiling.
+            while(count($selected)<5&&$scanned<2000){
+                $pageLimit=min(200,2000-$scanned);
+                $page=RecordStore::scan('asset',$pageLimit,$after);
+                if($page===[]){$after='';break;}
+                foreach($page as $asset){
+                    $after=(string)$asset['id'];$scanned++;
+                    if(($asset['processing_status']??'')==='queued'){
+                        $selected[]=$after;
+                        if(count($selected)>=5)break;
+                    }
+                }
+                if(count($page)<$pageLimit){$after='';break;}
+            }
+            foreach($selected as $assetId){
+                try{ProcessingService::execute($assetId,'wp-cron-'.substr($token,0,12));}
+                catch(\Throwable $e){Observability::alert('critical','processing_job_failed',
+                    ['asset_id'=>$assetId,'exception'=>get_class($e)]);}
+            }
+            self::saveMaintenanceCursor('processing',$cursor,$after,$scanned,count($selected));
         }finally{self::release('cron-jobs',$token);}
     }
     public static function cronRetention(): void {
@@ -82,13 +105,57 @@ final class Plugin {
     }
     public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();RevocationDispatchService::reconcile();DeliveryService::reconcilePublicPurges();KeyRotationService::reconcileDeferredCleanup();}catch(\Throwable $e){self::cronAlert('deletion_reconciliation_cron_failed',$e);throw $e;}finally{self::release('deletions',$token);}}
     public static function cronIntegrity(): void {
-        if(!RuntimeGuard::enabled())return;$token=self::acquire('integrity',7200);if($token===null)return;
+        if(!RuntimeGuard::enabled())return;
+        $token=self::acquire('integrity',7200);
+        if($token===null)return;
         try{
-            $cursor=RecordStore::get('cron_cursor','integrity');$offset=max(0,(int)($cursor['offset']??0));$selected=[];$scanned=0;$wrapped=false;$nextOffset=$offset;
-            while(count($selected)<20&&$scanned<5000){$page=RecordStore::list('asset',0,null,100,$nextOffset);if($page===[]){if($wrapped||$nextOffset===0)break;$wrapped=true;$nextOffset=0;continue;}$nextOffset+=count($page);$scanned+=count($page);foreach($page as $asset)if(($asset['status']??'')==='ready'){$selected[]=(string)$asset['id'];if(count($selected)>=20)break;}if(count($page)<100){if($wrapped)break;$wrapped=true;$nextOffset=0;}}
-            foreach($selected as $assetId)try{IntegrityService::sample($assetId);}catch(\Throwable $e){Observability::alert('critical','integrity_check_failed',['asset_id'=>$assetId,'exception'=>get_class($e)]);}
-            $cursorRow=['actor_id'=>0,'status'=>'active','name'=>'integrity','offset'=>$nextOffset,'last_scanned'=>$scanned,'last_sampled'=>count($selected),'updated_at'=>Utils::now()];RecordStore::put('cron_cursor','integrity',$cursorRow,$cursor?(int)$cursor['version']:0);
+            $cursor=self::maintenanceCursor('integrity');
+            // Legacy offset-only evidence restarts from the beginning once.
+            $after=(string)($cursor['last_id']??'');
+            $selected=[];$scanned=0;
+            while(count($selected)<20&&$scanned<2000){
+                $pageLimit=min(100,2000-$scanned);
+                $page=RecordStore::scan('asset',$pageLimit,$after);
+                if($page===[]){$after='';break;}
+                foreach($page as $asset){
+                    $after=(string)$asset['id'];$scanned++;
+                    if(($asset['status']??'')==='ready'){
+                        $selected[]=$after;
+                        if(count($selected)>=20)break;
+                    }
+                }
+                if(count($page)<$pageLimit){$after='';break;}
+            }
+            foreach($selected as $assetId){
+                try{IntegrityService::sample($assetId);}
+                catch(\Throwable $e){Observability::alert('critical','integrity_check_failed',
+                    ['asset_id'=>$assetId,'exception'=>get_class($e)]);}
+            }
+            self::saveMaintenanceCursor('integrity',$cursor,$after,$scanned,count($selected));
         }finally{self::release('integrity',$token);}
+    }
+    private static function maintenanceCursor(string $name): ?array {
+        $cursor=RecordStore::get('cron_cursor',$name);
+        if($cursor===null)return null;
+        $last=$cursor['last_id']??null;
+        $legacy=$name==='integrity'&&!array_key_exists('last_id',$cursor)
+            &&is_int($cursor['offset']??null)&&$cursor['offset']>=0;
+        if(($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!==$name
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||(!$legacy&&(!is_string($last)||strlen($last)>96
+                ||Utils::text($last,96)!==$last)))
+            throw new Error('maintenance_cursor_invalid','Stored maintenance cursor is invalid.',500,
+                ['name'=>$name]);
+        return $cursor;
+    }
+    private static function saveMaintenanceCursor(string $name,?array $prior,string $last,int $scanned,int $selected): void {
+        RecordStore::put('cron_cursor',$name,[
+            'actor_id'=>0,'status'=>'active','name'=>$name,'last_id'=>$last,
+            'last_scanned'=>$scanned,'last_selected'=>$selected,'updated_at'=>Utils::now()
+        ],$prior?(int)$prior['version']:0);
     }
     private static function acquire(string $name,int $ttl): ?string {$id=Utils::key($name,48);$now=Utils::now();$current=RecordStore::get('runtime_lock',$id);if($current&&(int)($current['expires_at']??0)>$now)return null;$token=Utils::id('lock');try{RecordStore::put('runtime_lock',$id,['actor_id'=>0,'status'=>'held','token_hash'=>hash('sha256',$token),'expires_at'=>$now+$ttl,'created_at'=>$now],$current?(int)$current['version']:0);return $token;}catch(Error $e){if($e->errorCode==='record_version_conflict')return null;self::cronAlert('runtime_lock_acquire_failed',$e);throw $e;}}
     private static function release(string $name,string $token): void {$id=Utils::key($name,48);$current=RecordStore::get('runtime_lock',$id);if(!$current||!hash_equals((string)($current['token_hash']??''),hash('sha256',$token)))return;try{$current['status']='released';$current['expires_at']=Utils::now();RecordStore::put('runtime_lock',$id,$current,(int)$current['version']);}catch(\Throwable $e){self::cronAlert('runtime_lock_release_failed',$e);}}
