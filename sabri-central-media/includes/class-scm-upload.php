@@ -99,8 +99,40 @@ final class PartStore {
         if($part<1||!is_resource($stream)||!preg_match('/^[a-f0-9]{64}$/',$expectedHash))throw new Error('upload_part_invalid','Upload part invalid.',400);
         $hash=Utils::streamHash($stream);if(!hash_equals($expectedHash,$hash['sha256']))throw new Error('part_checksum_mismatch','Part checksum mismatch.',422);
         $id=hash('sha256',$uploadId.'|'.$part);$existing=RecordStore::get('upload_part',$id);
-        if($existing&&hash_equals((string)$existing['sha256'],$expectedHash))return $existing;if($existing)throw new Error('part_conflict','Part number already contains different bytes.',409);
-        $key=hash('sha256','part|'.$uploadId.'|'.$part.'|'.$expectedHash);$store=ProviderRegistry::store();$stored=$store->putStream($key,$stream,['scope'=>'upload-part','upload_id'=>$uploadId,'part'=>$part]);
+        if($existing){
+            if(!hash_equals((string)($existing['sha256']??''),$expectedHash))
+                throw new Error('part_conflict','Part number already contains different bytes.',409);
+            if(($existing['record_type']??null)!=='upload_part'
+                ||($existing['id']??null)!==$id
+                ||($existing['upload_id']??null)!==$uploadId
+                ||($existing['part_number']??null)!==$part
+                ||($existing['actor_id']??null)!==Auth::currentUser()
+                ||($existing['status']??null)!=='stored'
+                ||!is_int($existing['size']??null)||$existing['size']!==$hash['size']
+                ||!is_string($existing['provider_id']??null)
+                ||!is_string($existing['object_key']??null)
+                ||($existing['object_key']??'')==='')
+                throw new Error('part_replay_identity_invalid','Stored upload part replay evidence is inconsistent.',409);
+            if(!ProviderRegistry::get($existing['provider_id'])->exists($existing['object_key']))
+                throw new Error('part_replay_object_missing','Replayed upload part object is unavailable.',503);
+            return $existing;
+        }
+        $key=hash('sha256','part|'.$uploadId.'|'.$part.'|'.$expectedHash);
+        $store=ProviderRegistry::store();
+        $stored=$store->putStream($key,$stream,['scope'=>'upload-part','upload_id'=>$uploadId,'part'=>$part]);
+        // The provider reads the input a second time. Its committed digest
+        // and byte count must agree with the authenticated first read.
+        if(!is_string($stored['object_key']??null)||($stored['object_key']??'')===''
+            ||!is_int($stored['size']??null)||$stored['size']!==$hash['size']
+            ||!is_string($stored['sha256']??null)
+            ||!hash_equals($expectedHash,$stored['sha256'])){
+            // Never delete an unrelated provider key or a reused object.
+            if(($stored['object_key']??null)===$key&&($stored['reused']??false)!==true){
+                try{$store->delete($key);}catch(\Throwable){}
+            }
+            throw new Error('part_storage_integrity_invalid',
+                'Stored upload part bytes differ from the verified input.',502);
+        }
         try{return RecordStore::put('upload_part',$id,['actor_id'=>Auth::currentUser(),'upload_id'=>$uploadId,'part_number'=>$part,'provider_id'=>ProviderRegistry::activeId(),'object_key'=>$stored['object_key'],'size'=>$hash['size'],'sha256'=>$expectedHash,'status'=>'stored','created_at'=>Utils::now()],0);}
         catch(\Throwable $e){$authoritative=RecordStore::get('upload_part',$id);if($authoritative&&hash_equals((string)($authoritative['sha256']??''),$expectedHash)&&($authoritative['object_key']??'')===($stored['object_key']??''))return $authoritative;if(!$authoritative||($authoritative['object_key']??'')!==($stored['object_key']??''))$store->delete((string)$stored['object_key']);throw $e;}
     }
