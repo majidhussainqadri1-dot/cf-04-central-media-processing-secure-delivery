@@ -103,7 +103,26 @@ final class Plugin {
             if($failure!==null)throw $failure;
         }finally{self::release('retention',$token);}
     }
-    public static function cronDeletions(): void {if(!RuntimeGuard::enabled())return;$token=self::acquire('deletions',1800);if($token===null)return;try{DeletionService::reconcile();RevocationDispatchService::reconcile();DeliveryService::reconcilePublicPurges();KeyRotationService::reconcileDeferredCleanup();}catch(\Throwable $e){self::cronAlert('deletion_reconciliation_cron_failed',$e);throw $e;}finally{self::release('deletions',$token);}}
+    public static function cronDeletions(): void {
+        if(!RuntimeGuard::enabled())return;
+        $token=self::acquire('deletions',1800);
+        if($token===null)return;
+        try{
+            $failure=null;
+            // Each independent security/lifecycle reconciler must run even if
+            // another record family has a corrupted cursor or a provider fault.
+            foreach([
+                'deletion_reconciliation_failed'=>static fn()=>DeletionService::reconcile(),
+                'revocation_dispatch_reconciliation_failed'=>static fn()=>RevocationDispatchService::reconcile(),
+                'cdn_purge_reconciliation_failed'=>static fn()=>DeliveryService::reconcilePublicPurges(),
+                'rotation_cleanup_reconciliation_failed'=>static fn()=>KeyRotationService::reconcileDeferredCleanup(),
+            ] as $code=>$operation){
+                try{$operation();}
+                catch(\Throwable $e){self::cronAlert($code,$e);$failure??=$e;}
+            }
+            if($failure!==null)throw $failure;
+        }finally{self::release('deletions',$token);}
+    }
     public static function cronIntegrity(): void {
         if(!RuntimeGuard::enabled())return;
         $token=self::acquire('integrity',7200);
