@@ -75,7 +75,7 @@ final class Plugin {
                         if(count($selected)>=5)break;
                     }
                 }
-                if(count($page)<$pageLimit){$after='';break;}
+                if(count($page)<$pageLimit&&count($selected)<5){$after='';break;}
             }
             foreach($selected as $assetId){
                 try{ProcessingService::execute($assetId,'wp-cron-'.substr($token,0,12));}
@@ -143,7 +143,7 @@ final class Plugin {
                         if(count($selected)>=20)break;
                     }
                 }
-                if(count($page)<$pageLimit){$after='';break;}
+                if(count($page)<$pageLimit&&count($selected)<20){$after='';break;}
             }
             foreach($selected as $assetId){
                 try{IntegrityService::sample($assetId);}
