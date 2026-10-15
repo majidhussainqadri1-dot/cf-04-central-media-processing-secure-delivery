@@ -414,32 +414,45 @@ final class RevocationDispatchService {
     }
     public static function reconcile(int $limit=500): array {
         $limit=max(1,min(2000,$limit));
-        $rows=RecordStore::all('revocation_dispatch',0,'pending',100000);
-        usort($rows,static fn(array $a,array $b): int=>strcmp((string)$a['id'],(string)$b['id']));
         $cursor=RecordStore::get('cron_cursor','revocation-dispatch');
         $after=CronCursorEvidence::last($cursor,'revocation-dispatch','last_id');
-        $ordered=array_merge(
-            array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)>0)),
-            array_values(array_filter($rows,static fn(array $r): bool=>strcmp((string)$r['id'],$after)<=0))
-        );
         $result=['checked'=>0,'dispatched'=>0,'superseded'=>0,'failed'=>0];
-        foreach(array_slice($ordered,0,$limit) as $row){
-            $result['checked']++;$after=(string)$row['id'];
-            try{
-                $out=self::dispatch($row);
-                if($out['status']==='dispatched')$result['dispatched']++;
-                elseif($out['status']==='superseded')$result['superseded']++;
-                else throw new Error('revocation_dispatch_invalid','Recovery did not reach a terminal local state.',500);
+        // Only load this invocation's bounded pending batch, never the global
+        // outbox (which can exceed 100,000 retained historical dispatches).
+        // A persistent ID cursor prevents a failing low-ID event from
+        // starving later pending events.
+        while($result['checked']<$limit){
+            $pageSize=min(250,$limit-$result['checked']);
+            $page=RecordStore::scan('revocation_dispatch',$pageSize,$after,0,'pending');
+            if($page===[]){
+                // The canonical cursor format requires a 64-hex-char value;
+                // all-zero is a valid *start-of-keyspace marker*, not a
+                // mutable offset or an unvalidated empty cursor.
+                if($after!=='')$after=str_repeat('0',64);
+                break;
             }
-            catch(\Throwable $e){
-                $result['failed']++;
-                try{DegradedStateService::record('revocation-dispatch',$e instanceof Error?$e->errorCode:'unexpected',
-                    ['event_ref'=>Utils::hashReference((string)($row['event_id']??''))]);}catch(\Throwable){}
+            foreach($page as $row){
+                $result['checked']++;$after=(string)$row['id'];
+                try{
+                    $out=self::dispatch($row);
+                    if($out['status']==='dispatched')$result['dispatched']++;
+                    elseif($out['status']==='superseded')$result['superseded']++;
+                    else throw new Error('revocation_dispatch_invalid',
+                        'Recovery did not reach a terminal local state.',500);
+                }catch(\Throwable $e){
+                    $result['failed']++;
+                    try{DegradedStateService::record('revocation-dispatch',
+                        $e instanceof Error?$e->errorCode:'unexpected',
+                        ['event_ref'=>Utils::hashReference((string)($row['event_id']??''))]);
+                    }catch(\Throwable){}
+                }
             }
+            if(count($page)<$pageSize)break;
         }
-        if($result['checked']>0){
+        if($result['checked']>0||($cursor!==null&&$after!==($cursor['last_id']??null))){
             RecordStore::put('cron_cursor','revocation-dispatch',[
-                'actor_id'=>0,'status'=>'active','last_id'=>$after,'updated_at'=>Utils::now(),
+                'actor_id'=>0,'status'=>'active','last_id'=>$after,
+                'updated_at'=>Utils::now(),
             ],$cursor?(int)$cursor['version']:0);
         }
         return $result;
