@@ -531,7 +531,7 @@ final class RightsRevocationService {
                 }
                 if($result['checked']>=$limit)break;
             }
-            if(count($page)<$pageSize){$after='';break;}
+            if(count($page)<$pageSize&&$result['checked']<$limit){$after='';break;}
         }
         if($result['scanned']>0||$cursor!==null){
             RecordStore::put('cron_cursor','rights-reconciliation',[
