@@ -507,10 +507,19 @@ final class RightsRevocationService {
             ||Utils::text($after,96)!==$after)
             throw new Error('rights_cursor_invalid','Stored rights scan cursor is invalid.',500);
         $scanBudget=min(20000,max(1000,$limit*4));
+        $wrapped=false;
         while($result['scanned']<$scanBudget&&$result['checked']<$limit){
             $pageSize=min(250,$scanBudget-$result['scanned']);
             $page=RecordStore::scan('asset',$pageSize,$after);
-            if($page===[]){$after='';break;}
+            if($page===[]){
+                // A legacy expiry-key cursor can point at the final asset.
+                // Wrap once within this invocation; do not require an idle
+                // cron before revisiting that still-actionable final record.
+                if(!$wrapped&&$result['scanned']===0&&$after!==''){
+                    $after='';$wrapped=true;continue;
+                }
+                $after='';break;
+            }
             foreach($page as $asset){
                 $after=(string)$asset['id'];$result['scanned']++;
                 if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)
