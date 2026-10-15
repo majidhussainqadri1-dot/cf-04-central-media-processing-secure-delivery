@@ -421,14 +421,18 @@ final class RevocationDispatchService {
         // outbox (which can exceed 100,000 retained historical dispatches).
         // A persistent ID cursor prevents a failing low-ID event from
         // starving later pending events.
+        $wrapped=false;
         while($result['checked']<$limit){
             $pageSize=min(250,$limit-$result['checked']);
             $page=RecordStore::scan('revocation_dispatch',$pageSize,$after,0,'pending');
             if($page===[]){
-                // The canonical cursor format requires a 64-hex-char value;
-                // all-zero is a valid *start-of-keyspace marker*, not a
-                // mutable offset or an unvalidated empty cursor.
-                if($after!=='')$after=str_repeat('0',64);
+                // The canonical cursor format requires a 64-hex-char value.
+                // Wrap at most once, and retry from the first pending key in
+                // the same invocation; otherwise one failed event would need
+                // an additional idle cron just to reset the cursor.
+                if(!$wrapped&&$after!==str_repeat('0',64)){
+                    $after=str_repeat('0',64);$wrapped=true;continue;
+                }
                 break;
             }
             foreach($page as $row){
