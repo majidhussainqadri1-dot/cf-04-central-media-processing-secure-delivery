@@ -19,10 +19,37 @@ final class Validator {
             throw $sizeError;
         }
         if($stats['size']<1||(int)$stats['size']>(int)$policy['max_size_bytes'])throw new Error('source_size_invalid','Source size outside policy.',413);
-        $temp=tempnam(sys_get_temp_dir(),'scm-inspect-');if($temp===false)throw new Error('temp_unavailable','Inspection workspace unavailable.',500);$out=fopen($temp,'wb');if($out===false){@unlink($temp);throw new Error('temp_unavailable','Inspection workspace unavailable.',500);}
-        rewind($stream);try{Utils::copyStream($stream,$out,(int)$policy['max_size_bytes']);}finally{fclose($out);rewind($stream);}
-        try{$mime=self::detectMime($temp);$declared=strtolower($declaredMime);if($mime!==$declared)throw new Error('declared_mime_mismatch','Declared MIME does not match source signature.',415,['declared'=>$declared,'detected'=>$mime]);if(!in_array($mime,$policy['allowed_mime_types'],true))throw new Error('mime_denied','Detected MIME denied by policy.',415);self::magicMatches($temp,$mime,true);self::assertFilename($filename,$mime,(array)$policy['allowed_extensions']);$structure=self::structuralProbe($temp,$mime,$policy);$fingerprint=hash('sha256',$stats['sha256'].'|'.$mime.'|'.Utils::canonicalJson($structure));return ['sha256'=>$stats['sha256'],'size'=>$stats['size'],'mime'=>$mime,'structure'=>$structure,'fingerprint'=>$fingerprint];}
-        finally{@unlink($temp);}
+        $temp=tempnam(sys_get_temp_dir(),'scm-inspect-');
+        if($temp===false)throw new Error('temp_unavailable','Inspection workspace unavailable.',500);
+        // The source may be a provider-backed stream: the second read must be
+        // identical to the first. Always delete a temporary inspection copy,
+        // including failures during the copy itself.
+        try{
+            $out=fopen($temp,'wb');
+            if($out===false)throw new Error('temp_unavailable','Inspection workspace unavailable.',500);
+            try{
+                rewind($stream);
+                $copied=Utils::copyStream($stream,$out,(int)$policy['max_size_bytes']);
+            }finally{fclose($out);rewind($stream);}
+            $copiedHash=hash_file('sha256',$temp);
+            if($copied!==$stats['size']||!is_string($copiedHash)
+                ||!hash_equals($stats['sha256'],$copiedHash))
+                throw new Error('source_changed_during_inspection',
+                    'Source changed between integrity validation and inspection.',422);
+            $mime=self::detectMime($temp);
+            $declared=strtolower($declaredMime);
+            if($mime!==$declared)throw new Error('declared_mime_mismatch',
+                'Declared MIME does not match source signature.',415,
+                ['declared'=>$declared,'detected'=>$mime]);
+            if(!in_array($mime,$policy['allowed_mime_types'],true))
+                throw new Error('mime_denied','Detected MIME denied by policy.',415);
+            self::magicMatches($temp,$mime,true);
+            self::assertFilename($filename,$mime,(array)$policy['allowed_extensions']);
+            $structure=self::structuralProbe($temp,$mime,$policy);
+            $fingerprint=hash('sha256',$stats['sha256'].'|'.$mime.'|'.Utils::canonicalJson($structure));
+            return ['sha256'=>$stats['sha256'],'size'=>$stats['size'],
+                'mime'=>$mime,'structure'=>$structure,'fingerprint'=>$fingerprint];
+        }finally{@unlink($temp);}
     }
     public static function detectMime(string $path): string {
         if(!is_file($path))throw new Error('source_missing','Source unavailable.',500);$finfo=function_exists('finfo_open')?finfo_open(FILEINFO_MIME_TYPE):false;$mime=$finfo?finfo_file($finfo,$path):false;if($finfo)finfo_close($finfo);$mime=is_string($mime)?strtolower($mime):'application/octet-stream';$head=file_get_contents($path,false,null,0,32);if(!is_string($head))throw new Error('source_read_failed','Cannot read source.',500);$hex=strtolower(bin2hex($head));
