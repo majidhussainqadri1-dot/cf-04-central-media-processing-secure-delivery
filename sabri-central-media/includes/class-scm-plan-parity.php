@@ -492,40 +492,49 @@ final class RightsRevocationService {
 
     public static function reconcileExpired(int $now=0,int $limit=500): array {
         $now=$now>0?$now:Utils::now();$limit=max(1,min(2000,$limit));
-        $result=['checked'=>0,'revoked'=>0,'failed'=>0];
-        // Only actionable assets enter the bounded batch; rotate a durable key
-        // so one repeatedly failing rights record cannot starve later records.
-        $eligible=[];
-        foreach(RecordStore::all('asset',0,null,1000000) as $asset){
-            if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)
-                ||self::alreadyReconciled($asset))continue;
-            $expires=self::expiry($asset);
-            if($expires===0||($expires!==null&&$expires>$now))continue;
-            $assetId=(string)($asset['id']??'');
-            $sortKey=sprintf('%019d',max(0,$expires??0)).':'.$assetId;
-            $eligible[]=['key'=>$sortKey,'asset'=>$asset,'reason'=>$expires===null?'rights_invalid':'rights_expired'];
-        }
-        usort($eligible,static fn(array $a,array $b): int=>strcmp($a['key'],$b['key']));
+        $result=['checked'=>0,'revoked'=>0,'failed'=>0,'scanned'=>0];
         $cursor=RecordStore::get('cron_cursor','rights-reconciliation');
-        $after=CronCursorEvidence::last($cursor,'rights-reconciliation','last_key');
-        $ordered=array_merge(
-            array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)>0)),
-            array_values(array_filter($eligible,static fn(array $r): bool=>strcmp($r['key'],$after)<=0))
-        );
-        foreach(array_slice($ordered,0,$limit) as $entry){
-            $asset=$entry['asset'];$result['checked']++;$after=$entry['key'];
-            try{self::invalidate((string)$asset['id'],$entry['reason'],$now);$result['revoked']++;}
-            catch(\Throwable $exception){
-                $result['failed']++;
-                try{DegradedStateService::record('rights-reconciliation',
-                    $exception instanceof Error?$exception->errorCode:'unexpected',
-                    ['asset_ref'=>Utils::hashReference((string)($asset['id']??''))]);}
-                catch(\Throwable){}
+        $lastKey=CronCursorEvidence::last($cursor,'rights-reconciliation','last_key');
+        // Existing cursor evidence used expiry:<asset-id>. Migrate that
+        // ID once, without treating the expiration timestamp as a DB offset.
+        $after=isset($cursor['last_id'])?$cursor['last_id']:
+            ($lastKey!==''?substr($lastKey,20):'');
+        if(!is_string($after)||strlen($after)>96
+            ||Utils::text($after,96)!==$after)
+            throw new Error('rights_cursor_invalid','Stored rights scan cursor is invalid.',500);
+        $scanBudget=min(20000,max(1000,$limit*4));
+        while($result['scanned']<$scanBudget&&$result['checked']<$limit){
+            $pageSize=min(250,$scanBudget-$result['scanned']);
+            $page=RecordStore::scan('asset',$pageSize,$after);
+            if($page===[]){$after='';break;}
+            foreach($page as $asset){
+                $after=(string)$asset['id'];$result['scanned']++;
+                if(in_array(($asset['status']??''),['deleted','deletion_pending','rejected'],true)
+                    ||self::alreadyReconciled($asset))continue;
+                $expires=self::expiry($asset);
+                if($expires===0||($expires!==null&&$expires>$now))continue;
+                $result['checked']++;
+                $lastKey=sprintf('%019d',max(0,$expires??0)).':'.$after;
+                try{
+                    self::invalidate($after,$expires===null?'rights_invalid':'rights_expired',$now);
+                    $result['revoked']++;
+                }catch(\Throwable $exception){
+                    $result['failed']++;
+                    try{DegradedStateService::record('rights-reconciliation',
+                        $exception instanceof Error?$exception->errorCode:'unexpected',
+                        ['asset_ref'=>Utils::hashReference($after)]);
+                    }catch(\Throwable){}
+                }
+                if($result['checked']>=$limit)break;
             }
+            if(count($page)<$pageSize){$after='';break;}
         }
-        if($result['checked']>0){
+        if($result['scanned']>0||$cursor!==null){
             RecordStore::put('cron_cursor','rights-reconciliation',[
-                'actor_id'=>0,'status'=>'active','last_key'=>$after,'updated_at'=>Utils::now(),
+                'actor_id'=>0,'status'=>'active',
+                'last_key'=>$lastKey!==''?$lastKey:'0000000000000000000:start',
+                'last_id'=>$after,'last_scanned'=>$result['scanned'],
+                'updated_at'=>Utils::now(),
             ],$cursor?(int)$cursor['version']:0);
         }
         return $result;
