@@ -11,7 +11,10 @@ for($i=1;$i<=8;$i++){
     $id=sprintf('r225-jobs-%02d',$i);
     RecordStore::put('asset',$id,[
         'actor_id'=>11,'status'=>'quarantined','processing_status'=>'queued',
-        'owner_domain'=>'file17','object_version'=>1
+        'owner_domain'=>'file17','object_version'=>1,
+        // Fail processing safely on an explicit missing job rather than
+        // letting an intentionally minimal asset emit PHP undefined-key warnings.
+        'job_graph'=>['probe'=>'r225-expected-missing-job']
     ]);
 }
 Plugin::cronJobs();
