@@ -33,8 +33,9 @@ ok($third['checked']===10&&$third['failed']===10
     'R223 third run reaches last ten pending entries');
 $wrap=RevocationDispatchService::reconcile(100);
 $c=RecordStore::get('cron_cursor','revocation-dispatch');
-ok($wrap['checked']===0&&($c['last_id']??null)===str_repeat('0',64),
-    'R223 end-of-keyspace wraps durable cursor using canonical 64-hex start sentinel');
+ok($wrap['checked']===100&&$wrap['failed']===100
+    &&($c['last_id']??null)===sprintf('%064x',100),
+    'R223 end-of-keyspace wraps once and immediately retries first 100 pending events');
 $retry=RevocationDispatchService::reconcile(1);
 ok($retry['checked']===1&&$retry['failed']===1,
     'R223 pending failures can be retried in a later full traversal');
