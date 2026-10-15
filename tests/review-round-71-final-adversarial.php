@@ -11,21 +11,21 @@ $expected=<<<'PATTERN'
 'expected'=>0
 PATTERN;
 $inventory=<<<'PATTERN'
-RecordStore::all('asset',0,null,1000000)
+RecordStore::scan('asset',$pageSize,$after)
 PATTERN;
 $priority=<<<'PATTERN'
 if($expires===0||($expires!==null&&$expires>$now))continue
 PATTERN;
 $bounded=<<<'PATTERN'
-foreach(array_slice($ordered,0,$limit) as $entry)
+if($result['checked']>=$limit)break
 PATTERN;
 r71(str_contains($p,$winner),'failed persistent create re-reads the authoritative record to distinguish contention from infrastructure failure');
 r71(str_contains($p,$expected),'concurrent create conflict retains expected-version-zero CAS evidence');
 r71(str_contains($p,"throw new Error('record_version_conflict','Concurrent record creation won before this insert.'"),'duplicate-key create races surface as record_version_conflict');
 r71(str_contains($p,"throw new Error('record_write_failed','Persistent insert failed.'"),'true infrastructure insert failure remains fail-closed as record_write_failed');
-r71(str_contains($r,$inventory),'rights reconciliation discovers the complete explicitly bounded inventory rather than repeatedly reading only the newest page');
+r71(str_contains($r,$inventory),'rights reconciliation uses durable bounded ID-keyset pages without a million-row full inventory');
 r71(str_contains($r,$priority),'non-actionable rights are excluded before selecting the bounded batch');
-r71(str_contains($r,$bounded),'actionable reconciliation mutation/check work remains bounded by the caller limit');
+r71(str_contains($r,$bounded),'actionable rights mutation work stops at the caller limit');
 r71(str_contains($r,"RecordStore::get('cron_cursor','rights-reconciliation')"),'durable reconciliation cursor is read for fair rotation');
 $legacy=<<<'PATTERN'
 foreach(RecordStore::list('asset',0,null,$limit) as $asset)
