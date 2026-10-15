@@ -58,7 +58,7 @@ foreach(['change'=>'source_changed_during_inspection',
 }
 $source=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-scm-validation.php');
 ok(str_contains($source,"source_changed_during_inspection")
-    &&str_contains($source,"$copiedHash=hash_file('sha256',$temp)")
-    &&str_contains($source,"finally{@unlink($temp);}"),
+    &&str_contains($source,'$copiedHash=hash_file(\'sha256\',$temp)')
+    &&str_contains($source,'finally{@unlink($temp);}'),
     'R216 current validator copies atomically under both digest and cleanup checks');
 echo "REVIEW ROUND 216 INSPECTION REPLAY INTEGRITY: PASS\n";
