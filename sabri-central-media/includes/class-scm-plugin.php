@@ -94,7 +94,7 @@ final class Plugin {
             // prevent expiry of unrelated abandoned and quota-reserving uploads.
             foreach([
                 'rights_reconciliation_failed'=>static fn()=>RightsRevocationService::reconcileExpired(),
-                'retention_reconciliation_failed'=>static fn()=>RetentionService::run(),
+                'retention_reconciliation_failed'=>static fn()=>RetentionService::run(0,false),
                 'upload_expiry_reconciliation_failed'=>static fn()=>UploadService::cleanupExpired(),
             ] as $code=>$operation){
                 try{$operation();}
