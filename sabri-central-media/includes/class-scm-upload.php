@@ -354,6 +354,24 @@ final class UploadService {
         return $result;
     }
 
-    private static function dedupe(array $upload): ?array {foreach(RecordStore::all('asset',0,null,100000) as $asset){if(($asset['sha256']??'')===$upload['expected_sha256']&&($asset['policy_hash']??'')===$upload['policy_hash']&&($asset['privacy_class']??'')===$upload['policy']['privacy_class']&&($asset['rights']['policy_hash']??'')===$upload['policy']['rights']['policy_hash']&&($asset['owner_domain']??'')===$upload['owner_domain']&&($asset['owner_object']??'')===$upload['owner_object']&&in_array(($asset['status']??''),['quarantined','ready'],true))return $asset;}return null;}
+    /** Look up an eligible owner/policy-bound duplicate without a global inventory ceiling. */
+    private static function dedupe(array $upload): ?array {
+        $after='';
+        do {
+            $page=RecordStore::scan('asset',250,$after);
+            foreach($page as $asset){
+                if(($asset['sha256']??'')===$upload['expected_sha256']
+                    &&($asset['policy_hash']??'')===$upload['policy_hash']
+                    &&($asset['privacy_class']??'')===$upload['policy']['privacy_class']
+                    &&($asset['rights']['policy_hash']??'')===$upload['policy']['rights']['policy_hash']
+                    &&($asset['owner_domain']??'')===$upload['owner_domain']
+                    &&($asset['owner_object']??'')===$upload['owner_object']
+                    &&in_array(($asset['status']??''),['quarantined','ready'],true))return $asset;
+            }
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+        return null;
+    }
     private static function emit(string $event,array $payload): void {if(function_exists('do_action'))do_action($event,Utils::redact($payload));}
 }
