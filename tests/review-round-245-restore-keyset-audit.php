@@ -48,6 +48,6 @@ $source=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-
 ok(str_contains((string)$source,'private static function restoreRecords(string $type)')
     &&str_contains((string)$source,'RecordStore::scan($type,250,$after)')
     &&!str_contains((string)$source,"RecordStore::all('tombstone',0,null,100000)")
-    &&!str_contains((string)$source,"RecordStore::all('asset',0,null,100000) as $a"),
+    &&!str_contains((string)$source,'RecordStore::all(\'asset\',0,null,100000) as $a'),
     'R245 no global 100k inventory cap remains in restore verification');
 echo "REVIEW ROUND 245 RESTORE KEYSET AUDIT: PASS\n";
