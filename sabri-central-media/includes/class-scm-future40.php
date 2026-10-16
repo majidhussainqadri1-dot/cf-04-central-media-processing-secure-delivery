@@ -260,17 +260,31 @@ final class PerceptualMediaService {
             'created_at'=>Utils::now()
         ]);
     }
+    /** Two-pass stable index traversal avoids globally capped fingerprint inventories. */
+    private static function fingerprintRows(): \Generator {
+        $after='';
+        do {
+            $page=RecordStore::scan('perceptual_fingerprint',250,$after,0,'active');
+            foreach($page as $row)yield $row;
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+    }
     public static function nearDuplicates(string $assetId,int $actor,float $threshold=0.9): array {
         RuntimeGuard::requireReady();Auth::assertActor($actor,'audit_sabri_media');
         $asset=Future40Registry::asset($assetId,true);self::authorize($asset,$actor);
         if(!is_finite($threshold)||$threshold<0.5||$threshold>1.0)
             throw new Error('perceptual_threshold_invalid','Near-duplicate threshold must be within 0.5..1.0.',400);
-        $all=RecordStore::all('perceptual_fingerprint',0,'active',100000);
-        $source=array_values(array_filter($all,fn($r)=>self::current($r,$asset)));
-        if($source===[])throw new Error('perceptual_fingerprint_missing','Current fingerprint is required first.',409);
-        usort($source,fn($a,$b)=>(($b['updated_at']??0)<=>($a['updated_at']??0))?:strcmp((string)$a['id'],(string)$b['id']));
-        $selected=$source[0];$matches=[];
-        foreach($all as $row){
+        $selected=null;
+        foreach(self::fingerprintRows() as $row){
+            if(!self::current($row,$asset))continue;
+            if($selected===null||(int)($row['updated_at']??0)>(int)($selected['updated_at']??0)
+                ||((int)($row['updated_at']??0)===(int)($selected['updated_at']??0)
+                    &&strcmp((string)$row['id'],(string)$selected['id'])<0))$selected=$row;
+        }
+        if($selected===null)throw new Error('perceptual_fingerprint_missing','Current fingerprint is required first.',409);
+        $matches=[];
+        foreach(self::fingerprintRows() as $row){
             if(($row['asset_id']??null)===$assetId
                 ||($row['algorithm']??null)!==$selected['algorithm']
                 ||($row['algorithm_version']??null)!==$selected['algorithm_version'])continue;
