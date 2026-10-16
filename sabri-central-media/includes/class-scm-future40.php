@@ -390,13 +390,23 @@ final class ContentSafetyUpgradeService {
         Auth::capability('media_reprocess');
         $reason=Utils::key($reason,96);
         if($reason==='')throw new Error('rescan_reason_required','Re-scan reason is required.',400);
-        $limit=max(1,min(5000,$limit));$queued=0;$scanned=0;$offset=0;$pageSize=500;
-        while($queued<$limit&&$scanned<1000000){
-            $page=RecordStore::list('asset',0,null,$pageSize,$offset);
+        if(array_diff(array_keys($filters),['mime','media_class'])!==[])
+            throw new Error('rescan_filters_invalid','Unrecognized re-scan filters.',400);
+        foreach($filters as $value)if(!is_string($value)||$value===''||strlen($value)>128)
+            throw new Error('rescan_filters_invalid','Re-scan filter values must be bounded strings.',400);
+        $limit=max(1,min(5000,$limit));
+        $cursorId=hash('sha256','future-rescan|'.$actor.'|'.$reason.'|'.Utils::canonicalJson($filters));
+        $prior=RecordStore::get('cron_cursor',$cursorId);
+        $after=$prior['last_id']??'';
+        if(!is_string($after)||($after!==''&&(strlen($after)>96||Utils::text($after,96)!==$after)))
+            throw new Error('rescan_cursor_invalid','Persisted re-scan cursor is invalid.',503);
+        $queued=0;$scanned=0;$budget=2000;
+        while($queued<$limit&&$scanned<$budget){
+            $pageSize=min(250,$budget-$scanned);
+            $page=RecordStore::scan('asset',$pageSize,$after);
             if($page===[])break;
-            $offset+=count($page);$scanned+=count($page);
             foreach($page as $asset){
-                if($queued>=$limit)break;
+                $after=(string)$asset['id'];$scanned++;
                 if(in_array(($asset['status']??''),['deleted','rejected'],true))continue;
                 if(isset($filters['mime'])&&($asset['mime']??null)!==$filters['mime'])continue;
                 if(isset($filters['media_class'])&&($asset['media_class']??null)!==$filters['media_class'])continue;
@@ -414,13 +424,22 @@ final class ContentSafetyUpgradeService {
                         'reason'=>$reason,'requested_at'=>Utils::now()
                     ],0);$queued++;
                 }catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}
+                if($queued>=$limit)break;
             }
             if(count($page)<$pageSize)break;
         }
-        $truncated=$scanned>=1000000&&RecordStore::list('asset',0,null,1,$offset)!==[];
+        $hasMore=RecordStore::scan('asset',1,$after)!==[];
+        $cursor=RecordStore::put('cron_cursor',$cursorId,[
+            'actor_id'=>$actor,'status'=>'active','last_id'=>$hasMore?$after:'',
+            'reason'=>$reason,'filters_hash'=>hash('sha256',Utils::canonicalJson($filters)),
+            'last_scanned'=>$scanned,'last_queued'=>$queued,'updated_at'=>Utils::now(),
+        ],$prior?(int)$prior['version']:0);
         Audit::record('future40_rescan_scheduled',[
-            'actor_id'=>$actor,'reason'=>$reason,'queued'=>$queued,'scanned'=>$scanned,'scan_truncated'=>$truncated]);
-        return ['queued'=>$queued,'reason'=>$reason,'scanned'=>$scanned,'scan_truncated'=>$truncated];
+            'actor_id'=>$actor,'reason'=>$reason,'queued'=>$queued,'scanned'=>$scanned,
+            'scan_truncated'=>$hasMore]);
+        return ['queued'=>$queued,'reason'=>$reason,'scanned'=>$scanned,
+            'scan_truncated'=>$hasMore,'scan_complete'=>!$hasMore,
+            'cursor_version'=>(int)$cursor['version']];
     }
     public static function killSwitch(string $format,int $actor,bool $enabled,string $reason): array {
         Auth::assertActor($actor,'media_manage_providers');Auth::capability('media_manage_providers');
