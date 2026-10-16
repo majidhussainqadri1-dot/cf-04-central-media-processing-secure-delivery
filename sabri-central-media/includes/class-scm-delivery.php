@@ -230,7 +230,7 @@ final class DeliveryService {
         &&($existing['derivative_id']??null)===$derivativeId
         &&($existing['status']??null)==='published'
         &&($existing['sha256']??null)===$derivative['sha256']
-        &&($existing['privacy_class']??null)===$asset['privacy_class']
+        &&($existing['privacy_class']??'')===$asset['privacy_class']
         &&hash_equals((string)($existing['policy_hash']??''),(string)$asset['policy_hash'])
         &&hash_equals((string)($existing['rights_hash']??''),(string)$asset['rights']['policy_hash']))
         return $existing;
