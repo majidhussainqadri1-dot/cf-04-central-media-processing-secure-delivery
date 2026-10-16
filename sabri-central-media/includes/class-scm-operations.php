@@ -436,10 +436,20 @@ final class RestoreService {
     return $restore;
 }
     private static function check(callable $f): bool {try{$f();return true;}catch(\Throwable){return false;}}
-    private static function tombstones(): bool {foreach(RecordStore::all('tombstone',0,null,100000) as $t){$a=RecordStore::get('asset',(string)$t['asset_id']);if($a&&($a['status']??'')!=='deleted')return false;}return true;}
-    private static function rights(): bool {foreach(RecordStore::all('asset',0,null,100000) as $a){if(($a['status']??'')==='deleted')continue;try{RightsPolicy::assert($a['rights'],'view',['territory'=>'GLOBAL','audience_type'=>'private']);}catch(Error $e){if($e->errorCode==='rights_operation_denied')continue;return false;}}return true;}
-    private static function manifests(): bool {foreach(RecordStore::all('asset',0,null,100000) as $a){if(($a['status']??'')!=='ready')continue;$manifestId=(string)($a['active_manifest_id']??'');if($manifestId==='')return false;$m=RecordStore::get('manifest',$manifestId);if(!$m||($m['status']??'')!=='active'||($m['asset_id']??'')!==$a['id'])return false;$items=(array)($m['derivatives']??[]);if($items===[])return false;foreach($items as $item){$id=(string)($item['derivative_id']??'');$d=$id!==''?RecordStore::get('derivative',$id):null;if(!$d||($d['asset_id']??'')!==$a['id']||($d['status']??'')!=='validated'||!empty($d['superseded_by']))return false;if(!hash_equals((string)($item['sha256']??''),(string)($d['sha256']??''))||(int)($item['size']??-1)!==(int)($d['size']??-2)||(string)($item['kind']??'')!==(string)($d['kind']??''))return false;}}return true;}
-    private static function integrity(): bool {foreach(RecordStore::all('asset',0,null,100000) as $a){if(($a['status']??'')==='deleted')continue;try{IntegrityService::sample((string)$a['id']);}catch(\Throwable){return false;}}return true;}
+    /** Restore verification must exhaust an immutable-ID inventory without materializing it. */
+    private static function restoreRecords(string $type): \Generator {
+        $after='';
+        do {
+            $page=RecordStore::scan($type,250,$after);
+            foreach($page as $row)yield $row;
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+    }
+    private static function tombstones(): bool {foreach(self::restoreRecords('tombstone') as $t){$a=RecordStore::get('asset',(string)$t['asset_id']);if($a&&($a['status']??'')!=='deleted')return false;}return true;}
+    private static function rights(): bool {foreach(self::restoreRecords('asset') as $a){if(($a['status']??'')==='deleted')continue;try{RightsPolicy::assert($a['rights'],'view',['territory'=>'GLOBAL','audience_type'=>'private']);}catch(Error $e){if($e->errorCode==='rights_operation_denied')continue;return false;}}return true;}
+    private static function manifests(): bool {foreach(self::restoreRecords('asset') as $a){if(($a['status']??'')!=='ready')continue;$manifestId=(string)($a['active_manifest_id']??'');if($manifestId==='')return false;$m=RecordStore::get('manifest',$manifestId);if(!$m||($m['status']??'')!=='active'||($m['asset_id']??'')!==$a['id'])return false;$items=(array)($m['derivatives']??[]);if($items===[])return false;foreach($items as $item){$id=(string)($item['derivative_id']??'');$d=$id!==''?RecordStore::get('derivative',$id):null;if(!$d||($d['asset_id']??'')!==$a['id']||($d['status']??'')!=='validated'||!empty($d['superseded_by']))return false;if(!hash_equals((string)($item['sha256']??''),(string)($d['sha256']??''))||(int)($item['size']??-1)!==(int)($d['size']??-2)||(string)($item['kind']??'')!==(string)($d['kind']??''))return false;}}return true;}
+    private static function integrity(): bool {foreach(self::restoreRecords('asset') as $a){if(($a['status']??'')==='deleted')continue;try{IntegrityService::sample((string)$a['id']);}catch(\Throwable){return false;}}return true;}
     public static function authorizeServe(string $restoreId): void {
     Auth::capability('media_manage_providers');
     $restore=RecordStore::get('restore',$restoreId);$gate=RecordStore::get('restore_gate','current');
