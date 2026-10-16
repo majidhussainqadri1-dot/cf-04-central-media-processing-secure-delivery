@@ -168,8 +168,24 @@ final class KeyRotationService {
             throw new Error('key_rotation_identity_invalid','Key-rotation content or storage identity is noncanonical.',409);
         return ['size'=>$size,'sha256'=>$sha,'object_key'=>$objectKey,'provider_id'=>$provider,'key_id'=>$keyId];
     }
+    /** Exhaust all asset-key references without the 100k global-inventory ceiling. */
     private static function reconcileCurrentEnvelopes(string $activeKeyId,string $runId): int {
-        $count=0;foreach(RecordStore::all('asset',0,null,100000) as $asset){if(($asset['status']??'')==='deleted'||empty($asset['storage']['key_id'])||(string)$asset['storage']['key_id']!==$activeKeyId)continue;$id=hash('sha256',(string)$asset['id']);$envelope=RecordStore::get('asset_key_envelope',$id);if(!$envelope)continue;$stale=!hash_equals((string)($envelope['key_id']??''),$activeKeyId)||!hash_equals((string)($envelope['asset_sha256']??''),(string)$asset['sha256'])||(string)($envelope['algorithm']??'')!=='aes-256-gcm';if(!$stale)continue;self::syncAssetEnvelope($asset,$activeKeyId,$runId);$count++;}
+        $count=0;$after='';
+        do {
+            $page=RecordStore::scan('asset',250,$after);
+            foreach($page as $asset){
+                if(($asset['status']??'')==='deleted'||empty($asset['storage']['key_id'])||(string)$asset['storage']['key_id']!==$activeKeyId)continue;
+                $id=hash('sha256',(string)$asset['id']);$envelope=RecordStore::get('asset_key_envelope',$id);
+                if(!$envelope)continue;
+                $stale=!hash_equals((string)($envelope['key_id']??''),$activeKeyId)
+                    ||!hash_equals((string)($envelope['asset_sha256']??''),(string)$asset['sha256'])
+                    ||(string)($envelope['algorithm']??'')!=='aes-256-gcm';
+                if(!$stale)continue;
+                self::syncAssetEnvelope($asset,$activeKeyId,$runId);$count++;
+            }
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
         return $count;
     }
     private static function deferCleanup(string $runId,string $providerId,string $oldKey,array $group): void {
