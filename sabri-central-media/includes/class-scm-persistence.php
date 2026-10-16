@@ -107,7 +107,33 @@ final class RecordStore {
     private static function scanPage(string $type,int $actor,?string $status,int $limit,string $afterId=''): array {
         $type=Utils::key($type,48);$limit=max(1,min(2000,$limit));$afterId=Utils::text($afterId,96);if($type==='')throw new Error('record_identity_invalid','Record type is required.',500);
         if(self::test()){$rows=array_values(array_filter(self::$memory[$type]??[],fn(array $row)=>($actor<1||(int)($row['actor_id']??0)===$actor)&&($status===null||($row['status']??'')===$status)&&($afterId===''||strcmp((string)($row['id']??''),$afterId)>0)));usort($rows,fn($a,$b)=>strcmp((string)$a['id'],(string)$b['id']));return array_slice($rows,0,$limit);}
-        self::requirePersistent();global $wpdb;$sql='SELECT payload FROM '.Db::table('records').' WHERE record_type=%s';$args=[$type];if($actor>0){$sql.=' AND actor_id=%d';$args[]=$actor;}if($status!==null){$sql.=' AND status=%s';$args[]=$status;}if($afterId!==''){$sql.=' AND id>%s';$args[]=$afterId;}$sql.=' ORDER BY id ASC LIMIT '.$limit;$rows=$wpdb->get_col($wpdb->prepare($sql,...$args));Db::assertRead('record_scan');$out=[];foreach((array)$rows as $raw){try{$value=json_decode((string)$raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent record scan contains invalid JSON.',500,['record_type'=>$type]);}if(!is_array($value)||($value['record_type']??'')!==$type||(int)($value['version']??0)<1)throw new Error('record_payload_invalid','Persistent record scan contains invalid identity.',500,['record_type'=>$type]);$out[]=$value;}return $out;
+        self::requirePersistent();global $wpdb;
+        $sql='SELECT id,actor_id,status,version,payload FROM '.Db::table('records').' WHERE record_type=%s';$args=[$type];
+        if($actor>0){$sql.=' AND actor_id=%d';$args[]=$actor;}
+        if($status!==null){$sql.=' AND status=%s';$args[]=$status;}
+        if($afterId!==''){$sql.=' AND id>%s';$args[]=$afterId;}
+        $sql.=' ORDER BY id ASC LIMIT '.$limit;
+        $rows=$wpdb->get_results($wpdb->prepare($sql,...$args),defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+        Db::assertRead('record_scan');
+        if(!is_array($rows))throw new Error('persistence_read_failed','Indexed record scan did not return a valid result set.',503,['record_type'=>$type]);
+        $out=[];$last=$afterId;
+        foreach($rows as $sqlRow){
+            if(!is_array($sqlRow))throw new Error('record_payload_invalid','Persistent record scan row is malformed.',500,['record_type'=>$type]);
+            try{$value=json_decode((string)($sqlRow['payload']??''),true,64,JSON_THROW_ON_ERROR);}
+            catch(\JsonException){throw new Error('record_payload_invalid','Persistent record scan contains invalid JSON.',500,['record_type'=>$type]);}
+            $dbId=$sqlRow['id']??null;
+            if(!is_string($dbId)||$dbId===''||strlen($dbId)>96||strcmp($dbId,$last)<=0
+                ||!is_array($value)||($value['record_type']??null)!==$type
+                ||($value['id']??null)!==$dbId
+                ||!is_int($value['version']??null)||$value['version']<1
+                ||(int)($sqlRow['version']??0)!==$value['version']
+                ||!is_int($value['actor_id']??null)
+                ||(int)($sqlRow['actor_id']??-1)!==$value['actor_id']
+                ||($sqlRow['status']??null)!==($value['status']??null))
+                throw new Error('record_payload_invalid','Indexed record identity differs from its authoritative payload.',500,['record_type'=>$type]);
+            $out[]=$value;$last=$dbId;
+        }
+        return $out;
     }
     /** Stable keyset page for bounded maintenance jobs: no full-table materialization. */
     public static function scan(string $type,int $limit=500,string $afterId='',int $actor=0,?string $status=null): array {
