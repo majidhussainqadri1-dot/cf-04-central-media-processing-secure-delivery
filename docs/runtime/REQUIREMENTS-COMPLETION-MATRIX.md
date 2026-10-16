@@ -38,7 +38,7 @@ This matrix records repository source-code completion and automated source-level
 | CF04-FR-024 | Retention policy | `RetentionService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-025 | Deletion propagation | `DeletionService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-026 | Legal/security hold | `LegalHoldService` | `tests/run-all.php` | Complete in source |
-| CF04-FR-027 | Provider exit | `ProviderExitService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-027 | Provider exit | `ProviderExitService` | `tests/run-all.php`; `tests/review-round-253-provider-exit-purge-live-reference.php`; `tests/review-round-254-credential-exit-late-reference.php` | R253/R254 live-reference checks fixed in source, tested; segmented provider inventory, durable migration/rollback and real host/provider acceptance still OPEN |
 | CF04-FR-028 | Queue priorities/fairness | `JobService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-029 | Provider abstraction/webhooks | `ObjectStore, ProviderRegistry, WebhookService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php`; `tests/review-round-241-cost-keyset-ledger.php` | Coded; R241 removes global 500k ledger cap; real MySQL-scale acceptance pending |
