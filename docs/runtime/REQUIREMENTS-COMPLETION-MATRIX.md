@@ -8,7 +8,7 @@
 
 This matrix records repository source-code completion and automated source-level acceptance only. Hostinger staging, real providers, migration/backup/restore/rollback rehearsal, browser/device/accessibility/load/penetration acceptance, Founder release approval, live deployment and operational acceptance remain separate evidence gates.
 
-## Base CF-04 functional requirements
+> 2026-10-17 code-audit addendum: R246 changes `KeyRotationService::reconcileCurrentEnvelopes()` from globally capped asset enumeration to complete 250-row keyset pages, with `tests/review-round-246-envelope-reconciliation-keyset.php`. This does **not** complete `KeyRotationService::rotateAll()`'s globally materialized grouping or provider-exit plan redesign. No real KMS, database or staging acceptance has been performed.\n\n## Base CF-04 functional requirements
 
 | Requirement | Mandatory capability | Source ownership | Acceptance evidence | Source status |
 |---|---|---|---|---|
@@ -43,7 +43,7 @@ This matrix records repository source-code completion and automated source-level
 | CF04-FR-029 | Provider abstraction/webhooks | `ObjectStore, ProviderRegistry, WebhookService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php`; `tests/review-round-241-cost-keyset-ledger.php` | Coded; R241 removes global 500k ledger cap; real MySQL-scale acceptance pending |
 | CF04-FR-031 | Safe repair/reprocess | `RepairService` | `tests/run-all.php` | Complete in source |
-| CF04-FR-032 | Restore/rebuild | `RestoreService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-032 | Restore/rebuild | `RestoreService` | `tests/run-all.php`; `tests/review-round-245-restore-keyset-audit.php` | R245: source-level full-keyset restore checks fixed; durable real staging restore/snapshot consistency acceptance pending |
 | CF04-FR-033 | Observability/audit | `Observability, Audit` | `tests/run-all.php` | Complete in source |
 
 ## Cross-plan directives
