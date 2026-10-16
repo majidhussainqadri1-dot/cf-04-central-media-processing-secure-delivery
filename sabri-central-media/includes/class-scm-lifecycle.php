@@ -551,7 +551,22 @@ final class DeletionService {
     private static function save(array $d): array {return RecordStore::put('deletion',(string)$d['id'],$d,(int)$d['version']);}
     public static function reconcile(): array {
         $result=['completed'=>0,'pending'=>0,'failed'=>0];
-        foreach(RecordStore::all('deletion',0,null,100000) as $raw){
+        $cursor=RecordStore::get('cron_cursor','deletion-reconciliation');
+        $after=$cursor['last_id']??'';
+        if($cursor!==null&&(
+            ($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!=='deletion-reconciliation'
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||!is_string($after)||strlen($after)>96
+            ||Utils::text($after,96)!==$after
+        ))throw new Error('deletion_cursor_invalid','Deletion cursor evidence is invalid.',500);
+        // Keyset traversal avoids the legacy 100,000-row global materialization.
+        // Each run advances through at most 1,000 immutable deletion IDs.
+        $page=RecordStore::scan('deletion',1000,$after);
+        foreach($page as $raw){
+            $after=(string)$raw['id'];
             try{
                 $d=self::stored($raw);
                 if($d['status']==='completed'){self::completedEvidence($d);self::auditCompleted($d);self::notifyCompleted($d,RecordStore::get('asset',$d['asset_id']));$result['completed']++;continue;}
@@ -562,6 +577,11 @@ final class DeletionService {
                 self::completedEvidence($processed);$result['completed']++;
             }catch(\Throwable){$result['failed']++;}
         }
+        if(count($page)<1000)$after='';
+        if($page!==[]||$cursor!==null)RecordStore::put('cron_cursor','deletion-reconciliation',[
+            'actor_id'=>0,'status'=>'active','last_id'=>$after,
+            'updated_at'=>Utils::now(),
+        ],$cursor?(int)$cursor['version']:0);
         return $result;
     }
 }
