@@ -176,7 +176,29 @@ final class RecordStore {
     public static function oldestByStatuses(string $type,array $statuses): ?array {
         $type=Utils::key($type,48);$statuses=array_values(array_filter(array_unique(array_map(fn($v)=>Utils::key((string)$v,40),$statuses))));if($type===''||$statuses===[])throw new Error('record_status_query_invalid','Record status query is invalid.',500);
         if(self::test()){$rows=array_values(array_filter(self::$memory[$type]??[],fn(array $row)=>in_array((string)($row['status']??''),$statuses,true)));usort($rows,fn($a,$b)=>((int)($a['updated_at']??0)<=>(int)($b['updated_at']??0)) ?: strcmp((string)($a['id']??''),(string)($b['id']??'')));return $rows[0]??null;}
-        self::requirePersistent();global $wpdb;$placeholders=implode(',',array_fill(0,count($statuses),'%s'));$raw=$wpdb->get_var($wpdb->prepare('SELECT payload FROM '.Db::table('records').' WHERE record_type=%s AND status IN ('.$placeholders.') ORDER BY updated_at ASC,id ASC LIMIT 1',$type,...$statuses));Db::assertRead('record_oldest_status');if(!is_string($raw)||$raw==='')return null;try{$row=json_decode($raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent status query contains invalid JSON.',500,['record_type'=>$type]);}return is_array($row)?$row:null;
+        self::requirePersistent();global $wpdb;
+        $placeholders=implode(',',array_fill(0,count($statuses),'%s'));
+        $sql=$wpdb->prepare('SELECT id,actor_id,status,version,payload FROM '.Db::table('records')
+            .' WHERE record_type=%s AND status IN ('.$placeholders.') ORDER BY updated_at ASC,id ASC LIMIT 1',
+            $type,...$statuses);
+        $rows=$wpdb->get_results($sql,defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+        Db::assertRead('record_oldest_status');
+        if(!is_array($rows))throw new Error('persistence_read_failed','Oldest-status DB result unavailable.',503,['record_type'=>$type]);
+        if($rows===[])return null;
+        if(count($rows)!==1||!is_array($rows[0]))
+            throw new Error('record_payload_invalid','Oldest-status indexed record malformed.',500,['record_type'=>$type]);
+        $stored=$rows[0];
+        try{$row=json_decode((string)($stored['payload']??''),true,64,JSON_THROW_ON_ERROR);}
+        catch(\JsonException){throw new Error('record_payload_invalid','Persistent status query contains invalid JSON.',500,['record_type'=>$type]);}
+        if(!is_array($row)||($row['record_type']??null)!==$type
+            ||!is_string($stored['id']??null)||($row['id']??null)!==$stored['id']
+            ||!is_int($row['version']??null)||$row['version']<1
+            ||$row['version']!==(int)($stored['version']??0)
+            ||!is_int($row['actor_id']??null)||$row['actor_id']!==(int)($stored['actor_id']??-1)
+            ||($row['status']??null)!==($stored['status']??null)
+            ||!in_array($row['status'],$statuses,true))
+            throw new Error('record_payload_invalid','Oldest-status DB identity or filter differs from payload.',500,['record_type'=>$type]);
+        return $row;
     }
 
 }
