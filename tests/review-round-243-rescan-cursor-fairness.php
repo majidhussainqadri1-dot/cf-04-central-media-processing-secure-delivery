@@ -35,12 +35,14 @@ ok(RecordStore::get('future_rescan',$last)!==null,
     'R243 late asset is scheduled under exact bound source hash/rights/owner-version');
 ok(count(RecordStore::all('future_rescan'))===2600,
     'R243 exactly-once logical rescan idempotency across pages');
-$again=ContentSafetyUpgradeService::scheduleRescan($reason,$filters,5000,11);
-ok($again['queued']===0,'R243 completed rescan repeat does not duplicate queue records');
 $cursorId=hash('sha256','future-rescan|11|'.$reason.'|'.Utils::canonicalJson($filters));
 $cursor=RecordStore::get('cron_cursor',$cursorId);
 ok(($cursor['last_id']??null)===''&&($cursor['status']??null)==='active',
     'R243 durable cursor wraps only after completed source traversal');
+$again=ContentSafetyUpgradeService::scheduleRescan($reason,$filters,5000,11);
+ok($again['queued']===0&&$again['scan_truncated']===true,
+    'R243 completed-scan replay resumes from start without duplicate enqueues');
+$cursor=RecordStore::get('cron_cursor',$cursorId);
 $cursor['last_id']="forged\ncursor";
 RecordStore::put('cron_cursor',$cursorId,$cursor,(int)$cursor['version']);
 err(fn()=>ContentSafetyUpgradeService::scheduleRescan($reason,$filters,5000,11),
