@@ -167,17 +167,51 @@ final class DeliveryService {
     }
     public static function purgePublicForAsset(string $assetId,string $reason): array {
         $reason=Utils::key($reason,64);if($assetId===''||$reason==='')throw new Error('cdn_purge_context_invalid','Asset and purge reason are required.',400);$result=['asset_id'=>$assetId,'purged'=>0,'pending'=>0,'checked'=>0];
-        foreach(RecordStore::all('cdn_mapping',0,null,100000) as $snapshot){
+        $after='';
+        do{
+            $page=RecordStore::scan('cdn_mapping',250,$after);
+            foreach($page as $snapshot){
+                $after=(string)$snapshot['id'];
             if(($snapshot['asset_id']??'')!==$assetId||!in_array(($snapshot['status']??''),['published','publication_unknown','publishing','purge_pending'],true))continue;$result['checked']++;$id=(string)$snapshot['id'];$map=RecordStore::get('cdn_mapping',$id)??$snapshot;if(($map['status']??'')==='purged')continue;$versionKey=Utils::text((string)($map['version_key']??''),191);
             if($versionKey===''){$map['status']='purge_pending';$map['purge_reason']=$reason;$map['last_purge_error']='cdn_version_key_missing';$map['purge_requested_at']=$map['purge_requested_at']??Utils::now();try{RecordStore::put('cdn_mapping',$id,$map,(int)$map['version']);}catch(Error $race){if($race->errorCode!=='record_version_conflict')throw $race;}$result['pending']++;continue;}
             try{$purge=CdnRegistry::adapter()->purge([$versionKey]);if(($purge['purged']??false)!==true)throw new Error('cdn_purge_pending','CDN purge was not confirmed.',503);$fresh=RecordStore::get('cdn_mapping',$id)??$map;if(($fresh['status']??'')!=='purged'){$fresh['status']='purged';$fresh['purged_at']=Utils::now();$fresh['purge_reason']=$reason;$fresh['purge_evidence']=Utils::redact($purge);RecordStore::put('cdn_mapping',$id,$fresh,(int)$fresh['version']);}$result['purged']++;}
             catch(\Throwable $failure){$fresh=RecordStore::get('cdn_mapping',$id)??$map;if(($fresh['status']??'')!=='purged'){$fresh['status']='purge_pending';$fresh['purge_reason']=$reason;$fresh['last_purge_error']=$failure instanceof Error?$failure->errorCode:'unexpected';$fresh['purge_requested_at']=$fresh['purge_requested_at']??Utils::now();try{RecordStore::put('cdn_mapping',$id,$fresh,(int)$fresh['version']);}catch(\Throwable){}}$result['pending']++;}
         }
+        }while(count($page)===250);
         if($result['pending']>0){try{DegradedStateService::record('cdn-purge','cdn_purge_pending',['asset_ref'=>Utils::hashReference($assetId),'pending'=>$result['pending'],'reason'=>$reason]);}catch(\Throwable){}}
         Audit::record('cdn_asset_purge_reconciled',['asset_id'=>$assetId,'reason'=>$reason,'purged'=>$result['purged'],'pending'=>$result['pending']]);return $result;
     }
     public static function reconcilePublicPurges(int $limit=200): array {
-        $limit=max(1,min(2000,$limit));$assets=[];foreach(RecordStore::all('cdn_mapping',0,'purge_pending',100000) as $map){$assetId=(string)($map['asset_id']??'');if($assetId!=='')$assets[$assetId]=(string)($map['purge_reason']??'reconcile');if(count($assets)>=$limit)break;}$out=['assets'=>0,'purged'=>0,'pending'=>0];foreach($assets as $assetId=>$reason){$r=self::purgePublicForAsset($assetId,$reason);$out['assets']++;$out['purged']+=(int)$r['purged'];$out['pending']+=(int)$r['pending'];}return $out;
+        $limit=max(1,min(2000,$limit));$assets=[];
+        $cursor=RecordStore::get('cron_cursor','cdn-purge-reconciliation');
+        $after=$cursor['last_id']??'';
+        if($cursor!==null&&(
+            ($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!=='cdn-purge-reconciliation'
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||!is_string($after)||strlen($after)>96
+            ||Utils::text($after,96)!==$after
+        ))throw new Error('cdn_purge_cursor_invalid','CDN purge cursor is invalid.',500);
+        $page=RecordStore::scan('cdn_mapping',2000,$after,0,'purge_pending');
+        foreach($page as $map){
+            if(count($assets)>=$limit)break;
+            $after=(string)$map['id'];
+            $assetId=(string)($map['asset_id']??'');
+            if($assetId!=='')$assets[$assetId]=(string)($map['purge_reason']??'reconcile');
+        }
+        if(count($page)<2000&&count($assets)<$limit)$after='';
+        $out=['assets'=>0,'purged'=>0,'pending'=>0];
+        foreach($assets as $assetId=>$reason){
+            $r=self::purgePublicForAsset($assetId,$reason);
+            $out['assets']++;$out['purged']+=(int)$r['purged'];$out['pending']+=(int)$r['pending'];
+        }
+        if($page!==[]||$cursor!==null)RecordStore::put('cron_cursor','cdn-purge-reconciliation',[
+            'actor_id'=>0,'status'=>'active','last_id'=>$after,
+            'updated_at'=>Utils::now(),
+        ],$cursor?(int)$cursor['version']:0);
+        return $out;
     }
     public static function publishPublic(string $assetId,string $derivativeId): array {
     RuntimeGuard::requireReady(['streaming']);RestoreService::assertServeAllowed();$asset=self::asset($assetId);$derivative=self::target($asset,$derivativeId);
