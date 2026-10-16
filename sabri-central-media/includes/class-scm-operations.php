@@ -2,6 +2,31 @@
 declare(strict_types=1);
 namespace Sabri\CentralMedia;
 
+/** Fail-closed streaming witness for provider cutover and ciphertext deletion. */
+final class StorageReferenceWitness {
+    public static function first(string $providerId,?string $objectKey=null): ?array {
+        if($providerId===''||Utils::key($providerId,64)!==$providerId
+            ||($objectKey!==null&&!preg_match('/^[a-f0-9]{64}$/D',$objectKey)))
+            throw new Error('storage_reference_query_invalid','Storage reference query is noncanonical.',500);
+        foreach(['asset','derivative'] as $type){
+            $after='';
+            do{
+                $page=RecordStore::scan($type,250,$after);
+                if($page===[])break;
+                foreach($page as $record){
+                    $after=(string)$record['id'];
+                    if(($record['status']??'')==='deleted'
+                        ||($record['storage']['provider_id']??null)!==$providerId
+                        ||($objectKey!==null&&($record['object_key']??null)!==$objectKey))
+                        continue;
+                    return ['type'=>$type,'id'=>$after];
+                }
+            }while(count($page)===250);
+        }
+        return null;
+    }
+}
+
 final class ProviderExitService {
     public static function plan(string $sourceProvider,string $targetProvider,int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
@@ -58,10 +83,12 @@ final class ProviderExitService {
         $fresh=RecordStore::get('provider_exit',(string)$plan['id'])??$plan;$fresh['credentials_revocation_required']=false;$fresh['credentials_revocation_evidence']=Utils::redact($evidence);$fresh['credentials_revoked_at']=Utils::now();$fresh['status']='completed';$fresh['completed_at']=Utils::now();return self::save(self::counted($fresh));
     }
     private static function assertSourceDrained(array $plan): void {
-        $source=(string)$plan['source_provider'];$remaining=[];
-        foreach(RecordStore::all('asset',0,null,100000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$source)$remaining[]=['type'=>'asset','id'=>$record['id']??''];
-        foreach(RecordStore::all('derivative',0,null,200000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$source)$remaining[]=['type'=>'derivative','id'=>$record['id']??''];
-        if($remaining!==[])throw new Error('provider_exit_inventory_drift','Source-provider inventory changed during provider exit; re-plan before activation.',409,['remaining_count'=>count($remaining),'sample'=>array_slice($remaining,0,10)]);
+        // One live reference prevents cutover; a bounded-page proof of absence
+        // is required before activation, regardless of global inventory size.
+        $witness=StorageReferenceWitness::first((string)$plan['source_provider']);
+        if($witness!==null)throw new Error('provider_exit_inventory_drift',
+            'Source-provider inventory changed during provider exit; re-plan before activation.',
+            409,['remaining_count_at_least'=>1,'sample'=>[$witness]]);
     }
     private static function identity(array $record): array {
         $size=Utils::integer($record['size']??null,'provider_exit_identity_invalid',0,1073741824);
@@ -113,7 +140,7 @@ final class KeyRotationService {
             }
             if($updated!==count($group))throw new Error('key_rotation_partial_mapping','Not all mappings were rotated.',500);
             $remaining=self::liveReferences($providerId,$oldKey);
-            if($remaining!==[])throw new Error('key_rotation_reference_drift','A live reference still points to the old encrypted object.',409,['remaining_count'=>count($remaining)]);
+            if($remaining!==[])throw new Error('key_rotation_reference_drift','A live reference still points to the old encrypted object.',409,['remaining_count_at_least'=>count($remaining)]);
             $locked=false;foreach($group as $entry){$assetId=$entry['type']==='asset'?(string)$entry['record']['id']:(string)($entry['record']['asset_id']??'');if($assetId!==''&&ResidencyCryptoService::isLocked($assetId)){$locked=true;break;}}
             if($locked){$result['locked_old_objects_retained']++;self::deferCleanup($runId,$providerId,$oldKey,$group);}elseif($provider->exists($oldKey)&&!$provider->delete($oldKey)&&$provider->exists($oldKey))throw new Error('key_rotation_cleanup_failed','Old encrypted object could not be deleted.',503);
             $result['groups']++;
@@ -233,9 +260,10 @@ final class KeyRotationService {
         return $out;
     }
     private static function liveReferences(string $providerId,string $objectKey): array {
-        $refs=[];foreach(RecordStore::all('asset',0,null,100000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$providerId&&($record['object_key']??'')===$objectKey)$refs[]=['type'=>'asset','id'=>$record['id']??''];
-        foreach(RecordStore::all('derivative',0,null,200000) as $record)if(($record['status']??'')!=='deleted'&&($record['storage']['provider_id']??'')===$providerId&&($record['object_key']??'')===$objectKey)$refs[]=['type'=>'derivative','id'=>$record['id']??''];
-        return $refs;
+        // All callers need an existence proof, not a complete reference list.
+        // Never remove old ciphertext if even one live alias still uses it.
+        $witness=StorageReferenceWitness::first($providerId,$objectKey);
+        return $witness===null?[]:[$witness];
     }
     private static function syncAssetEnvelope(array $asset,string $activeKeyId,string $rotationId): void {
         $id=hash('sha256',(string)$asset['id']);$envelope=RecordStore::get('asset_key_envelope',$id);if(!$envelope)return;
