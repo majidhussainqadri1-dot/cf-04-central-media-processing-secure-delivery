@@ -57,18 +57,25 @@ final class RecordStore {
         self::requirePersistent();
         global $wpdb;
         $placeholders=implode(',',array_fill(0,count($keys),'%s'));
-        $query=$wpdb->prepare('SELECT payload FROM '.Db::table('records')
+        $query=$wpdb->prepare('SELECT id,actor_id,status,version,payload FROM '.Db::table('records')
             .' WHERE record_type=%s AND id IN ('.$placeholders.')',$type,...$keys);
-        $raws=$wpdb->get_col($query);Db::assertRead('record_batch_lookup');
+        $raws=$wpdb->get_results($query,defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+        Db::assertRead('record_batch_lookup');
+        if(!is_array($raws))throw new Error('persistence_read_failed','Indexed batch lookup did not return a valid result set.',503,['record_type'=>$type]);
         $out=[];
-        foreach((array)$raws as $raw){
-            try{$row=json_decode((string)$raw,true,64,JSON_THROW_ON_ERROR);}
+        foreach($raws as $stored){
+            if(!is_array($stored))throw new Error('record_payload_invalid','Batched indexed record row is malformed.',500);
+            try{$row=json_decode((string)($stored['payload']??''),true,64,JSON_THROW_ON_ERROR);}
             catch(\JsonException){throw new Error('record_payload_invalid','Batched record payload is invalid JSON.',500);}
-            $id=$row['id']??null;
+            $id=$stored['id']??null;
             if(!is_array($row)||!is_string($id)||!isset($unique[$id])
-                ||($row['record_type']??null)!==$type
-                ||!is_int($row['version']??null)||$row['version']<1||isset($out[$id]))
-                throw new Error('record_payload_invalid','Batched record identity or version is invalid.',500);
+                ||($row['id']??null)!==$id||($row['record_type']??null)!==$type
+                ||!is_int($row['version']??null)||$row['version']<1
+                ||$row['version']!==(int)($stored['version']??0)
+                ||!is_int($row['actor_id']??null)||(int)($stored['actor_id']??-1)!==$row['actor_id']
+                ||($stored['status']??null)!==($row['status']??null)
+                ||isset($out[$id]))
+                throw new Error('record_payload_invalid','Batched SQL identity or version differs from its payload.',500);
             $out[$id]=$row;
         }
         return $out;
