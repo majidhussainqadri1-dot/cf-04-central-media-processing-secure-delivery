@@ -894,8 +894,16 @@ final class RichMediaMetadataService {
         $collect=[];
         foreach(['accessibility_metadata','rich_caption','audio_description','sign_language_track','ocr_coordinate_map','chapter_manifest'] as $type){
             $status=$type==='accessibility_metadata'?'approved':'active';
-            $collect[$type]=array_values(array_filter(RecordStore::all($type,0,null,100000),
-                fn($row)=>self::currentTrack($row,$asset,$status)));
+            $rows=[];$after='';
+            do{
+                $page=RecordStore::scan($type,250,$after);
+                foreach($page as $row){
+                    if(self::currentTrack($row,$asset,$status))$rows[]=$row;
+                }
+                if(count($page)<250)break;
+                $after=(string)$page[count($page)-1]['id'];
+            }while(true);
+            $collect[$type]=$rows;
         }
         $latest=Future40Registry::asset($assetId,true);
         if(self::identity($latest)!==self::identity($asset))
