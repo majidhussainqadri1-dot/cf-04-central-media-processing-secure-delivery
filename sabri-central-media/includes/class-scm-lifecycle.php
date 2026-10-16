@@ -90,17 +90,24 @@ final class LegalHoldService {
                 throw new Error('hold_operation_invalid','Unknown legal-hold operation.',400);
             $scope=self::OPERATIONS[$normalized];
         }
-        $holds=[];
-        foreach(RecordStore::all('hold',0,null,100000) as $raw){
-            if(!is_string($raw['asset_id']??null)||$raw['asset_id']==='')
-                throw new Error('hold_record_invalid','Persisted legal-hold asset identity is invalid.',500);
-            if($raw['asset_id']!==$assetId)continue;
+        $holds=[];$after='';
+        // Evaluate the complete hold inventory in bounded ID-keyset pages.
+        // A legal hold beyond the old 100k global scan ceiling must still
+        // prevent delivery, deletion and provider cutover.
+        do{
+            $page=RecordStore::scan('hold',250,$after);
+            foreach($page as $raw){
+                $after=(string)$raw['id'];
+                if(!is_string($raw['asset_id']??null)||$raw['asset_id']==='')
+                    throw new Error('hold_record_invalid','Persisted legal-hold asset identity is invalid.',500);
+                if($raw['asset_id']!==$assetId)continue;
             $hold=self::stored($raw);
             if($hold['status']==='released')continue;
             if($hold['expires_at']>0&&$hold['expires_at']<=Utils::now())continue;
             if($scope!==null&&!in_array('all',$hold['scope'],true)&&!in_array($scope,$hold['scope'],true))continue;
             $holds[]=$hold;
         }
+        }while(count($page)===250);
         return $holds;
     }
     public static function assertNoHold(string $assetId,string $operation): void {
