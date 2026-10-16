@@ -79,10 +79,14 @@ final class ProviderExitService {
         $plan['status']='credentials_pending';$plan['credentials_revocation_required']=true;$plan['source_purge_completed_at']=$plan['source_purge_completed_at']??Utils::now();$plan=self::save(self::counted($plan));return self::finalizeCredentials($plan);
     }
     private static function finalizeCredentials(array $plan): array {
+        // A late source alias must not lose its provider credentials. This
+        // check is independent of the earlier purge-phase safety witnesses.
+        self::assertSourceDrained($plan);
         $source=ProviderRegistry::get((string)$plan['source_provider']);
         if(!($source instanceof CredentialRevocableObjectStore)){throw new Error('provider_credentials_revocation_unavailable','Source provider cannot prove credential revocation; provider exit remains pending.',503,['provider'=>$plan['source_provider']]);}
         $evidence=$source->revokeExitCredentials(['exit_id'=>$plan['id'],'source_provider'=>$plan['source_provider'],'target_provider'=>$plan['target_provider'],'purged'=>(int)($plan['purged']??0)]);
         if(($evidence['revoked']??false)!==true){throw new Error('provider_credentials_revocation_unconfirmed','Source-provider credential revocation was not confirmed.',503);}
+        self::assertSourceDrained($plan);
         $fresh=RecordStore::get('provider_exit',(string)$plan['id'])??$plan;$fresh['credentials_revocation_required']=false;$fresh['credentials_revocation_evidence']=Utils::redact($evidence);$fresh['credentials_revoked_at']=Utils::now();$fresh['status']='completed';$fresh['completed_at']=Utils::now();return self::save(self::counted($fresh));
     }
     private static function assertSourceDrained(array $plan): void {
