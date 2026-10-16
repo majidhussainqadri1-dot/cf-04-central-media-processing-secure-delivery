@@ -218,7 +218,20 @@ final class RetentionService {
         $out=['temporary_cleaned'=>(int)$cleanup['parts_purged'],'uploads_expired'=>(int)$cleanup['expired'],
             'cleanup_failed'=>(int)$cleanup['failed'],'derivatives_expired'=>0,'deletion_requested'=>0,
             'holds_skipped'=>0,'records_failed'=>0];
-        foreach(RecordStore::all('retention',0,null,100000) as $snapshot){
+        $cursor=RecordStore::get('cron_cursor','retention-reconciliation');
+        $after=$cursor['last_id']??'';
+        if($cursor!==null&&(
+            ($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!=='retention-reconciliation'
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||!is_string($after)||strlen($after)>96
+            ||Utils::text($after,96)!==$after
+        ))throw new Error('retention_cursor_invalid','Retention cursor is invalid.',500);
+        $page=RecordStore::scan('retention',1000,$after);
+        foreach($page as $snapshot){
+            $after=(string)$snapshot['id'];
             $assetId=is_string($snapshot['asset_id']??null)?$snapshot['asset_id']:'';
             try{
                 $retention=self::stored($snapshot);
@@ -263,6 +276,11 @@ final class RetentionService {
                 continue;
             }
         }
+        if(count($page)<1000)$after='';
+        if($page!==[]||$cursor!==null)RecordStore::put('cron_cursor','retention-reconciliation',[
+            'actor_id'=>0,'status'=>'active','last_id'=>$after,
+            'last_scanned'=>count($page),'updated_at'=>Utils::now(),
+        ],$cursor?(int)$cursor['version']:0);
         return $out;
     }
 }
