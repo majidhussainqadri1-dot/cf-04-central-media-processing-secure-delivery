@@ -312,11 +312,21 @@ final class CostService {
         $id=hash('sha256',$domain.'|'.$period);$existing=RecordStore::get('budget',$id);
         return RecordStore::put('budget',$id,['actor_id'=>$actor,'domain'=>$domain,'period'=>$period,'limit'=>$limit,'status'=>'active','created_at'=>$existing['created_at']??Utils::now(),'updated_at'=>Utils::now()],$existing?(int)$existing['version']:0);
     }
+    /** Traverse the complete immutable-ID ledger in bounded DB pages without a 500k-row cap. */
+    private static function ledgerRows(): \Generator {
+        $after='';
+        do {
+            $page=RecordStore::scan('cost',250,$after);
+            foreach($page as $row)yield $row;
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+    }
     private static function checkBudget(string $domain,float $pending): ?array {
         $period=gmdate('Y-m');$budget=RecordStore::get('budget',hash('sha256',$domain.'|'.$period));
         if(!$budget||($budget['status']??'')!=='active')return null;
         $limit=self::amount($budget['limit']??null,'budget_ledger_invalid',true);$spent=$pending;
-        foreach(RecordStore::all('cost',0,null,500000) as $row){
+        foreach(self::ledgerRows() as $row){
             if(($row['owner_domain']??null)!==$domain)continue;
             $time=self::ledgerTime($row['created_at']??null,'budget_ledger_invalid');
             $amount=self::amount($row['cost']??null,'budget_ledger_invalid');
@@ -331,7 +341,7 @@ final class CostService {
         if($provider===''||!is_string($period))throw new Error('invoice_invalid','Invoice provider or period invalid.',400);
         if($period!==''){$date=\DateTimeImmutable::createFromFormat('!Y-m',$period,new \DateTimeZone('UTC'));if($date===false||$date->format('Y-m')!==$period)throw new Error('invoice_period_invalid','Invoice month invalid.',400);}
         $calculated=0.0;
-        foreach(RecordStore::all('cost',0,null,500000) as $row){
+        foreach(self::ledgerRows() as $row){
             if(($row['provider']??null)!==$provider)continue;
             $time=self::ledgerTime($row['created_at']??null,'invoice_ledger_invalid');
             $amount=self::amount($row['cost']??null,'invoice_ledger_invalid');
