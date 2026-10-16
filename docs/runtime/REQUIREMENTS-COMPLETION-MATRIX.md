@@ -28,7 +28,7 @@ This matrix records repository source-code completion and automated source-level
 | CF04-FR-014 | Audio/video pipeline | `AvPipeline` | `tests/run-all.php` | Complete in source |
 | CF04-FR-015 | Document pipeline | `DocumentPipeline` | `tests/run-all.php` | Complete in source |
 | CF04-FR-016 | Derivative lineage | `DerivativeService` | `tests/run-all.php` | Complete in source |
-| CF04-FR-017 | Encrypted object storage | `Keyring, Crypto, ObjectStore, KeyRotationService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-017 | Encrypted object storage | `Keyring, Crypto, ObjectStore, KeyRotationService` | `tests/run-all.php`; `tests/review-round-257-key-rotation-bounded-inventory.php` | R257 global rotation inventory memory/cap defect corrected with fail-closed bounded keyset; durable large-fleet rotation, real KMS recovery and staging acceptance still OPEN |
 | CF04-FR-018 | Delivery grant | `DeliveryService, Crypto` | `tests/run-all.php` | Complete in source |
 | CF04-FR-019 | Public CDN policy | `CdnRegistry, DeliveryService::publishPublic` | `tests/run-all.php` | Complete in source |
 | CF04-FR-020 | Private/restricted delivery | `DeliveryService::serve` | `tests/run-all.php` | Complete in source |
@@ -38,7 +38,7 @@ This matrix records repository source-code completion and automated source-level
 | CF04-FR-024 | Retention policy | `RetentionService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-025 | Deletion propagation | `DeletionService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-026 | Legal/security hold | `LegalHoldService` | `tests/run-all.php` | Complete in source |
-| CF04-FR-027 | Provider exit | `ProviderExitService` | `tests/run-all.php`; `tests/review-round-253-provider-exit-purge-live-reference.php`; `tests/review-round-254-credential-exit-late-reference.php` | R253/R254 live-reference checks fixed in source, tested; segmented provider inventory, durable migration/rollback and real host/provider acceptance still OPEN |
+| CF04-FR-027 | Provider exit | `ProviderExitService` | `tests/run-all.php`; `tests/review-round-253-provider-exit-purge-live-reference.php`; `tests/review-round-254-credential-exit-late-reference.php`; `tests/review-round-256-provider-exit-keyset-planning.php` | R256 global inventory memory/cap defect corrected via full keyset pages + bounded single-plan capacity; large-fleet segmented state, owner write fence, resume/rollback and host/provider acceptance still OPEN |
 | CF04-FR-028 | Queue priorities/fairness | `JobService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-029 | Provider abstraction/webhooks | `ObjectStore, ProviderRegistry, WebhookService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php`; `tests/review-round-241-cost-keyset-ledger.php` | Coded; R241 removes global 500k ledger cap; real MySQL-scale acceptance pending |
