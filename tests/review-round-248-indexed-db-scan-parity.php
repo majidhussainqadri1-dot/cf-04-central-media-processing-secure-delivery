@@ -10,7 +10,7 @@ final class R248FakeWpdb {
     public string $prefix='wp_';
     public string $last_error='';
     public ?array $scanRows=[];
-    public function prepare(string $sql,mixed ...$args): string { return $sql; }
+    public function prepare(string $sql,mixed ...$args): string { return str_contains($sql,'SHOW TABLES LIKE')?$sql.' '.(string)($args[0]??''):$sql; }
     public function get_var(string $sql): ?string {
         if(str_contains($sql,'SHOW TABLES'))return
             str_contains($sql,'scm_audit')?'wp_scm_audit':'wp_scm_records';
