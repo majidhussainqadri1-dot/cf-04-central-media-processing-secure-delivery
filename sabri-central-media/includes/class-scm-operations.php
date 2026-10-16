@@ -161,8 +161,21 @@ final class KeyRotationService {
     }
     public static function reconcileDeferredCleanup(int $limit=200): array {
         $limit=max(1,min(2000,$limit));$out=['checked'=>0,'completed'=>0,'pending'=>0,'failed'=>0];
-        foreach(RecordStore::all('key_rotation_cleanup',0,null,100000) as $snapshot){
+        $cursor=RecordStore::get('cron_cursor','rotation-cleanup');
+        $after=$cursor['last_id']??'';
+        if($cursor!==null&&(
+            ($cursor['record_type']??null)!=='cron_cursor'
+            ||($cursor['id']??null)!=='rotation-cleanup'
+            ||($cursor['actor_id']??null)!==0
+            ||($cursor['status']??null)!=='active'
+            ||!is_int($cursor['version']??null)||$cursor['version']<1
+            ||!is_string($after)||strlen($after)>96
+            ||Utils::text($after,96)!==$after
+        ))throw new Error('rotation_cleanup_cursor_invalid','Deferred cleanup cursor is invalid.',500);
+        $page=RecordStore::scan('key_rotation_cleanup',2000,$after);
+        foreach($page as $snapshot){
             if($out['checked']>=$limit)break;
+            $after=(string)$snapshot['id'];
             if(in_array(($snapshot['status']??null),['completed','cancelled'],true))continue;
             $out['checked']++;$id=(string)$snapshot['id'];$row=RecordStore::get('key_rotation_cleanup',$id)??$snapshot;
             try{
@@ -212,6 +225,11 @@ final class KeyRotationService {
                 $out['failed']++;
             }
         }
+        if(count($page)<2000&&$out['checked']<$limit)$after='';
+        if($page!==[]||$cursor!==null)RecordStore::put('cron_cursor','rotation-cleanup',[
+            'actor_id'=>0,'status'=>'active','last_id'=>$after,
+            'updated_at'=>Utils::now(),
+        ],$cursor?(int)$cursor['version']:0);
         return $out;
     }
     private static function liveReferences(string $providerId,string $objectKey): array {
