@@ -152,8 +152,16 @@ final class DeliveryService {
     public static function revoke(string $grantId,int $actor,string $reason='owner-revoke'): array {Auth::assertActor($actor,'manage_options');$reason=Utils::key($reason,64);if($reason==='')throw new Error('revoke_reason_required','Grant revoke reason required.',400);$grant=RecordStore::get('grant',$grantId);if(!$grant)throw new Error('grant_not_found','Grant not found.',404);if($actor!==(int)$grant['actor_id'])Auth::capability('media_reprocess');if(($grant['status']??'')==='revoked')return $grant;$asset=self::asset((string)$grant['asset_id']);$decision=DomainRegistry::decision($asset['owner_domain'],'authorize_grant_revoke',['asset'=>$asset,'grant'=>$grant,'actor_id'=>$actor,'reason'=>$reason]);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner authorization is stale.',409);$grant['status']='revoked';$grant['revoked_at']=Utils::now();$grant['revoked_by']=$actor;$grant['revoke_reason']=$reason;$grant=RecordStore::put('grant',$grantId,$grant,(int)$grant['version']);Audit::record('delivery_grant_revoked',['grant_id'=>$grantId,'asset_id'=>$asset['asset_id'],'actor_id'=>$actor,'reason'=>$reason]);return $grant;}
     public static function revokeForAsset(string $assetId,string $reason): int {
         $reason=Utils::key($reason,64);if($assetId===''||$reason==='')throw new Error('revoke_context_invalid','Asset and revoke reason are required.',400);$count=0;
-        foreach(RecordStore::all('grant',0,null,100000) as $snapshot){
-            if(($snapshot['asset_id']??'')!==$assetId||($snapshot['status']??'')!=='active')continue;$grantId=(string)$snapshot['id'];$settled=false;
+        $after='';
+        do{
+            // Reading only active grants still uses a stable immutable ID
+            // cursor: revoked grants remain permanently outside the pending
+            // set, even when the global inventory exceeds 100,000 rows.
+            $page=RecordStore::scan('grant',250,$after,0,'active');
+            foreach($page as $snapshot){
+                $after=(string)$snapshot['id'];
+                if(($snapshot['asset_id']??'')!==$assetId||($snapshot['status']??'')!=='active')continue;
+                $grantId=(string)$snapshot['id'];$settled=false;
             for($attempt=0;$attempt<4;$attempt++){
                 $g=RecordStore::get('grant',$grantId);if(!$g||($g['asset_id']??'')!==$assetId||($g['status']??'')!=='active'){$settled=true;break;}
                 $g['status']='revoked';$g['revoked_at']=Utils::now();$g['revoke_reason']=$reason;
@@ -162,6 +170,7 @@ final class DeliveryService {
             }
             if(!$settled){$latest=RecordStore::get('grant',$grantId);if($latest&&($latest['asset_id']??'')===$assetId&&($latest['status']??'')==='active')throw new Error('grant_revoke_conflict','Grant remained active after bounded revocation retries.',409,['grant_id'=>$grantId]);}
         }
+        }while(count($page)===250);
         self::purgePublicForAsset($assetId,$reason);
         return $count;
     }
