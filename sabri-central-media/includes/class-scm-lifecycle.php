@@ -213,8 +213,12 @@ final class RetentionService {
         ];
         return RecordStore::put('retention',$id,$record,$existing?$old['version']:0);
     }
-    public static function run(int $now=0): array {
-        $now=$now>0?$now:Utils::now();$cleanup=UploadService::cleanupExpired($now);
+    public static function run(int $now=0,bool $cleanupUploads=true): array {
+        $now=$now>0?$now:Utils::now();
+        // Cron coordinates upload expiry independently so a janitor failure
+        // cannot prevent retention work or cause duplicate janitor sweeps.
+        $cleanup=$cleanupUploads?UploadService::cleanupExpired($now):
+            ['parts_purged'=>0,'expired'=>0,'failed'=>0];
         $out=['temporary_cleaned'=>(int)$cleanup['parts_purged'],'uploads_expired'=>(int)$cleanup['expired'],
             'cleanup_failed'=>(int)$cleanup['failed'],'derivatives_expired'=>0,'deletion_requested'=>0,
             'holds_skipped'=>0,'records_failed'=>0];
