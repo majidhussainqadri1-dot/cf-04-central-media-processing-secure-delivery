@@ -41,7 +41,7 @@ This matrix records repository source-code completion and automated source-level
 | CF04-FR-027 | Provider exit | `ProviderExitService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-028 | Queue priorities/fairness | `JobService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-029 | Provider abstraction/webhooks | `ObjectStore, ProviderRegistry, WebhookService` | `tests/run-all.php` | Complete in source |
-| CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php`; `tests/review-round-241-cost-keyset-ledger.php` | Coded; R241 removes global 500k ledger cap; real MySQL-scale acceptance pending |
 | CF04-FR-031 | Safe repair/reprocess | `RepairService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-032 | Restore/rebuild | `RestoreService` | `tests/run-all.php` | Complete in source |
 | CF04-FR-033 | Observability/audit | `Observability, Audit` | `tests/run-all.php` | Complete in source |
@@ -88,10 +88,10 @@ The Future-40 layer is fail-closed. Capabilities that require specialist engines
 | CF04-FUT-001 | C2PA/content-credential provenance envelope | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
 | CF04-FUT-002 | Synthetic-media declaration | same | Complete in source |
 | CF04-FUT-003 | Perceptual fingerprint registry | same | Complete in source |
-| CF04-FUT-004 | Privacy-safe near-duplicate detection | same | Complete in source |
+| CF04-FUT-004 | Privacy-safe near-duplicate detection | `PerceptualMediaService` | `tests/future40.php`; `tests/review-round-242-perceptual-keyset-duplicates.php` | Coded; R242 removes 100k fingerprint inventory cap; provider and large-scale acceptance pending |
 | CF04-FUT-005 | Storage-level safe deduplication | same | Complete in source |
 | CF04-FUT-006 | CDR safe reconstruction | same | Complete in source |
-| CF04-FUT-007 | Threat intelligence re-scan | same | Complete in source |
+| CF04-FUT-007 | Threat intelligence re-scan | `ContentSafetyUpgradeService` | `tests/future40.php`; `tests/review-round-243-rescan-cursor-fairness.php` | Coded; R243 provides bounded persistent keyset progress; live cron/provider acceptance pending |
 | CF04-FUT-008 | Emergency format/codec kill switch | same | Complete in source |
 | CF04-FUT-009 | Content-aware encoding plan | same | Complete in source |
 | CF04-FUT-010 | Objective quality scoring gate | same | Complete in source |
