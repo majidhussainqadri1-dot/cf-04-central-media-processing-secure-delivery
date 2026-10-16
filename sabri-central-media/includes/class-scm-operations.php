@@ -127,9 +127,9 @@ final class KeyRotationService {
     public static function rotateAll(int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
     $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0,'locked_old_objects_retained'=>0,'envelopes_reconciled'=>0,'deferred_cleanup_reconciled'=>0];
-    $groups=[];
-    foreach(RecordStore::all('asset',0,null,100000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'asset','record'=>$record];}
-    foreach(RecordStore::all('derivative',0,null,200000) as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'derivative','record'=>$record];}
+    $groups=[];$selected=0;
+    foreach(self::rotationRows('asset') as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;if($selected>=2000)throw new Error('key_rotation_capacity_exceeded','Key rotation exceeds the safe in-memory reference capacity; schedule a durable staged rotation.',503);$selected++;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'asset','record'=>$record];}
+    foreach(self::rotationRows('derivative') as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;if($selected>=2000)throw new Error('key_rotation_capacity_exceeded','Key rotation exceeds the safe in-memory reference capacity; schedule a durable staged rotation.',503);$selected++;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'derivative','record'=>$record];}
     $groups=array_filter($groups,static function(array $group)use($active): bool {foreach($group as $entry){if(($entry['record']['storage']['key_id']??'')!==$active)return true;try{self::rotationIdentity($entry['record']);}catch(\Throwable){return true;}}return false;});
     RecordStore::put('key_rotation',$runId,['actor_id'=>$actor,'rotation_id'=>$runId,'active_key_id'=>$active,'status'=>'running','groups_total'=>count($groups),'result'=>$result,'created_at'=>Utils::now()]);
     $result['envelopes_reconciled']=self::reconcileCurrentEnvelopes($active,$runId);$result['deferred_cleanup_reconciled']=self::reconcileDeferredCleanup(200)['completed'];
@@ -176,6 +176,18 @@ final class KeyRotationService {
     $run=RecordStore::get('key_rotation',$runId);if($run){$run['status']=$result['failed']===0?'completed':'completed_with_failures';$run['result']=$result;$run['completed_at']=Utils::now();RecordStore::put('key_rotation',$runId,$run,(int)$run['version']);}
     Audit::record('key_rotation_completed',$result+['actor_id'=>$actor]);return $result;
 }
+    /** Complete keyset inventory; group work remains bounded pending durable staging. */
+    private static function rotationRows(string $type): \Generator {
+        if(!in_array($type,['asset','derivative'],true))
+            throw new Error('key_rotation_inventory_type_invalid','Key-rotation inventory type invalid.',500);
+        $after='';
+        do {
+            $page=RecordStore::scan($type,250,$after);
+            foreach($page as $row)yield $row;
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+    }
     private static function rotationIdentity(array $record): array {
         $storage=$record['storage']??null;
         if(!is_array($storage))throw new Error('key_rotation_identity_invalid','Key-rotation storage identity is missing.',409);
