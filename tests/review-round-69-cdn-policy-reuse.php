@@ -3,13 +3,13 @@ declare(strict_types=1);
 $root=dirname(__DIR__);$s=file_get_contents($root.'/sabri-central-media/includes/class-scm-delivery.php');
 function r69($ok,$m){if(!$ok){fwrite(STDERR,"ROUND 69 FAIL: $m\n");exit(1);}echo "ROUND 69 PASS: $m\n";}
 $privacy=<<<'PATTERN'
-($mapping['privacy_class']??'')===$asset['privacy_class']
+($existing['privacy_class']??'')===$asset['privacy_class']
 PATTERN;
 $policy=<<<'PATTERN'
-hash_equals((string)($mapping['policy_hash']??''),(string)$asset['policy_hash'])
+hash_equals((string)($existing['policy_hash']??''),(string)$asset['policy_hash'])
 PATTERN;
 $rights=<<<'PATTERN'
-hash_equals((string)($mapping['rights_hash']??''),(string)$asset['rights']['policy_hash'])
+hash_equals((string)($existing['rights_hash']??''),(string)$asset['rights']['policy_hash'])
 PATTERN;
 $cache=<<<'PATTERN'
 $asset['rights']['policy_hash']).'/'.$derivative['sha256']
