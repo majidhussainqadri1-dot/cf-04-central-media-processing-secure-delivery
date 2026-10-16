@@ -45,7 +45,7 @@ round_ok(27,str_contains($files['persistence'],'verifyChain')&&str_contains($fil
 round_ok(28,str_contains($files['upload'],'Idempotency::claim')&&str_contains($files['upload'],'credential_hash'),'actor-bound upload idempotency and credential rotation');
 round_ok(29,str_contains($files['upload'],'quota_settlement_invalid')&&str_contains($files['upload'],'effectiveLimits'),'quota settlement and client-limit bounding');
 round_ok(30,str_contains($files['upload'],'cleanupExpired')&&str_contains($files['upload'],'parts_purged'),'expired multipart cleanup and reservation release');
-round_ok(31,str_contains($files['upload'],'provider_id')&&str_contains($files['upload'],'RecordStore::all'),'provider-stable multipart assembly and complete scans');
+round_ok(31,str_contains($files['upload'],'provider_id')&&str_contains($files['upload'],"RecordStore::scan('asset',250,\$after)")&&str_contains($files['upload'],'PartStore::list'),'provider-stable multipart assembly and paged deduplication');
 round_ok(32,str_contains($files['validation'],'declared_mime_mismatch')&&str_contains($files['validation'],'polyglot'),'server MIME/magic and polyglot defense');
 round_ok(33,str_contains($files['validation'],'decompression')&&str_contains($files['validation'],'archive'),'archive-depth and decompression-bomb defense');
 round_ok(34,str_contains($files['validation'],'worker_id')&&str_contains($files['validation'],'network_isolated'),'sandbox worker attestation');
