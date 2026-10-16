@@ -35,7 +35,7 @@ err(fn()=>DeliveryService::reconcilePublicPurges(1),'cdn_purge_cursor_invalid',
 
 $source=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-scm-delivery.php');
 ok(!str_contains($source,"RecordStore::all('cdn_mapping',0,'purge_pending',100000)")
-    &&!str_contains($source,"RecordStore::all('cdn_mapping',0,null,100000) as $snapshot")
+    &&!str_contains($source,"RecordStore::all('cdn_mapping',0,null,100000)")
     &&str_contains($source,"RecordStore::scan('cdn_mapping',250"),
     'R229 CDN purge processing never needs a 100k global in-memory mapping list');
 echo "REVIEW ROUND 229 CDN PURGE KEYSET: PASS\n";
