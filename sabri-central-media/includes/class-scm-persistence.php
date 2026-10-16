@@ -99,14 +99,28 @@ final class RecordStore {
         usort($rows,fn($a,$b)=>((int)($b['updated_at']??0)<=>(int)($a['updated_at']??0)) ?: strcmp((string)($a['id']??''),(string)($b['id']??'')));
         return array_slice($rows,$offset,$limit);
     }
-    self::requirePersistent();global $wpdb;$sql='SELECT payload FROM '.Db::table('records').' WHERE record_type=%s';$args=[$type];
+    self::requirePersistent();global $wpdb;
+    $sql='SELECT id,actor_id,status,version,payload FROM '.Db::table('records').' WHERE record_type=%s';$args=[$type];
     if($actor>0){$sql.=' AND actor_id=%d';$args[]=$actor;}
     if($status!==null){$sql.=' AND status=%s';$args[]=$status;}
     $sql.=' ORDER BY updated_at DESC,id ASC LIMIT '.$offset.','.$limit;
-    $rows=$wpdb->get_col($wpdb->prepare($sql,...$args));Db::assertRead('record_list');$out=[];
-    foreach((array)$rows as $raw){
-        try{$value=json_decode((string)$raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent record list contains invalid JSON.',500,['record_type'=>$type]);}
-        if(!is_array($value)||($value['record_type']??'')!==$type||(int)($value['version']??0)<1)throw new Error('record_payload_invalid','Persistent record list contains invalid identity.',500,['record_type'=>$type]);
+    $rows=$wpdb->get_results($wpdb->prepare($sql,...$args),defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+    Db::assertRead('record_list');
+    if(!is_array($rows))throw new Error('persistence_read_failed','Indexed record list did not return a valid result set.',503,['record_type'=>$type]);
+    $out=[];
+    foreach($rows as $stored){
+        if(!is_array($stored))throw new Error('record_payload_invalid','Indexed record list row is malformed.',500,['record_type'=>$type]);
+        try{$value=json_decode((string)($stored['payload']??''),true,64,JSON_THROW_ON_ERROR);}
+        catch(\JsonException){throw new Error('record_payload_invalid','Persistent record list contains invalid JSON.',500,['record_type'=>$type]);}
+        if(!is_array($value)||($value['record_type']??null)!==$type
+            ||!is_string($stored['id']??null)||($value['id']??null)!==$stored['id']
+            ||!is_int($value['version']??null)||$value['version']<1
+            ||$value['version']!==(int)($stored['version']??0)
+            ||!is_int($value['actor_id']??null)||$value['actor_id']!==(int)($stored['actor_id']??-1)
+            ||($value['status']??null)!==($stored['status']??null)
+            ||($actor>0&&$value['actor_id']!==$actor)
+            ||($status!==null&&$value['status']!==$status))
+            throw new Error('record_payload_invalid','Indexed record list filter/identity differs from its payload.',500,['record_type'=>$type]);
         $out[]=$value;
     }
     return $out;
