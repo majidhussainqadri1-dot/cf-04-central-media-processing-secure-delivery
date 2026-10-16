@@ -8,7 +8,15 @@ for($i=0;$i<2100;$i++){
     $id=sprintf('r227-%05d',$i);
     RecordStore::put('deletion',$id,[
         'actor_id'=>11,'deletion_id'=>$id,'asset_id'=>'r227-asset',
-        'reason'=>'user-request','status'=>'cancelled'
+        'reason'=>'user-request','status'=>'cancelled',
+        'steps'=>[
+            'revoke_grants'=>'pending','purge_cdn'=>'pending',
+            'delete_derivatives'=>'pending','delete_source'=>'pending',
+            'delete_mappings'=>'pending','backup_ledger'=>'pending',
+            'tombstone'=>'pending',
+        ],
+        'attempts'=>0,'next_attempt_at'=>0,
+        'backup_expiry_at'=>time()+86400,'created_at'=>time()-30,
     ]);
 }
 $first=DeletionService::reconcile();
