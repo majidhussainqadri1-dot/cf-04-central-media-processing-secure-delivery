@@ -67,7 +67,7 @@ err(fn()=>StorageReferenceWitness::first($source,'bad-key'),'storage_reference_q
     'R231 ciphertext identity fails canonical validation');
 
 $script=file_get_contents(dirname(__DIR__).'/sabri-central-media/includes/class-scm-operations.php');
-ok(str_contains($script,"RecordStore::scan($type,250,$after)")
+ok(str_contains($script,'RecordStore::scan($type,250,$after)')
     &&!str_contains($script,"RecordStore::all('asset',0,null,100000) as $record)if((")
     &&!str_contains($script,"RecordStore::all('derivative',0,null,200000) as $record)if(("),
     'R231 safety witness uses bounded DB pages rather than whole-inventory array materialization');
