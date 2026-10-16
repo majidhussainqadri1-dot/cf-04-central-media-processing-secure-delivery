@@ -14,7 +14,7 @@ This matrix records repository source-code completion and automated source-level
 |---|---|---|---|---|
 | CF04-FR-001 | Asset policy envelope | `Policy, RightsPolicy` | `tests/run-all.php` | Complete in source |
 | CF04-FR-002 | Resumable upload session | `UploadService, PartStore, Idempotency` | `tests/run-all.php` | Complete in source |
-| CF04-FR-003 | Source identity and dedupe | `UploadService::complete/dedupe, Validator` | `tests/run-all.php` | Complete in source |
+| CF04-FR-003 | Source identity and dedupe | `UploadService::complete/dedupe, Validator` | `tests/run-all.php`, `tests/review-round-238-dedupe-keyset.php` | Complete in source; R238 removes 100k inventory cap (real DB-scale acceptance pending) |
 | CF04-FR-004 | Client metadata distrust | `Validator::inspectStream` | `tests/run-all.php` | Complete in source |
 | CF04-FR-005 | Quota and purpose controls | `QuotaService, RateLimiter` | `tests/run-all.php` | Complete in source |
 | CF04-FR-006 | Private quarantine | `UploadService, ObjectStore` | `tests/run-all.php` | Complete in source |
@@ -104,7 +104,7 @@ The Future-40 layer is fail-closed. Capabilities that require specialist engines
 | CF04-FUT-017 | Audio-description tracks | same | Complete in source |
 | CF04-FUT-018 | Sign-language media track | same | Complete in source |
 | CF04-FUT-019 | OCR confidence/coordinate map | same | Complete in source |
-| CF04-FUT-020 | Accessibility manifest | same | Complete in source |
+| CF04-FUT-020 | Accessibility manifest | `RichMediaMetadataService::accessibilityManifest` | `tests/future40.php`, `tests/review-round-239-accessibility-manifest-keyset.php` | Complete in source; R239 removes cross-type 100k inventory cap (real DB-scale acceptance pending) |
 | CF04-FUT-021 | Sensitive-data technical detection | same | Complete in source |
 | CF04-FUT-022 | Governed redaction derivatives | same | Complete in source |
 | CF04-FUT-023 | Multi-CDN failover | same | Complete in source |
