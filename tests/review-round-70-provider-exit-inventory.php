@@ -14,7 +14,7 @@ PATTERN;
 $holdGuard=<<<'PATTERN'
 LegalHoldService::assertNoHold($assetId,'provider_exit')
 PATTERN;
-r70(str_contains($s,$derivativeScan)&&str_contains($s,"RecordStore::scan($type,250,$after)"),'provider exit streams full derivative inventory independently of source-object provider placement');
+r70(str_contains($s,$derivativeScan)&&str_contains($s,'RecordStore::scan($type,250,$after)'),'provider exit streams full derivative inventory independently of source-object provider placement');
 r70(str_contains($s,$providerFilter),'provider exit filters derivative inventory by its own storage provider');
 r70(str_contains($s,$parentGuard),'orphaned source-provider derivatives fail the exit plan closed');
 r70(str_contains($s,$holdGuard),'provider-exit legal holds are enforced for independently discovered derivatives');
