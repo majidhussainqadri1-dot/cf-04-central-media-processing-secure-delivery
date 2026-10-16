@@ -35,22 +35,36 @@ final class ProviderExitService {
     $source=ProviderRegistry::get($sourceProvider);$target=ProviderRegistry::get($targetProvider);
     foreach(['copy','delete','streaming'] as $capability)if(($source->capabilities()[$capability]??false)!==true||($target->capabilities()[$capability]??false)!==true)throw new Error('provider_exit_capability_missing','Provider exit capability missing.',503,['capability'=>$capability]);
     $id=Utils::id('pex');$items=[];
-    foreach(RecordStore::all('asset',0,null,100000) as $asset){
+    foreach(self::inventoryRows('asset') as $asset){
         if(($asset['status']??'')==='deleted'||($asset['storage']['provider_id']??'')!==$sourceProvider)continue;
         LegalHoldService::assertNoHold((string)$asset['id'],'provider_exit');ResidencyCryptoService::assertProviderRegion((string)$asset['id'],$targetProvider);self::identity($asset);
+        if(count($items)>=2000)throw new Error('provider_exit_plan_capacity_exceeded','Provider-exit inventory exceeds the safe single-plan capacity; use an approved staged migration.',503);
         $items[]=['type'=>'asset','id'=>$asset['id'],'object_key'=>$asset['object_key'],'sha256'=>$asset['sha256'],'size'=>$asset['size'],'status'=>'pending'];
     }
-    foreach(RecordStore::all('derivative',0,null,200000) as $derivative){
+    foreach(self::inventoryRows('derivative') as $derivative){
         if(($derivative['status']??'')==='deleted'||($derivative['storage']['provider_id']??'')!==$sourceProvider)continue;
         $assetId=Utils::text((string)($derivative['asset_id']??''),96);$parent=$assetId!==''?RecordStore::get('asset',$assetId):null;
         if(!$parent||($parent['status']??'')==='deleted')throw new Error('provider_exit_derivative_orphaned','Source-provider derivative has no active parent asset.',409,['derivative_id'=>$derivative['id']??'']);
         LegalHoldService::assertNoHold($assetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($assetId,$targetProvider);self::identity($derivative);
+        if(count($items)>=2000)throw new Error('provider_exit_plan_capacity_exceeded','Provider-exit inventory exceeds the safe single-plan capacity; use an approved staged migration.',503);
         $items[]=['type'=>'derivative','id'=>$derivative['id'],'asset_id'=>$assetId,'object_key'=>$derivative['object_key'],'sha256'=>$derivative['sha256'],'size'=>$derivative['size'],'status'=>'pending'];
     }
     if($items===[])throw new Error('provider_exit_inventory_empty','No eligible source-provider objects were found.',409);
     $record=['actor_id'=>$actor,'exit_id'=>$id,'source_provider'=>$sourceProvider,'target_provider'=>$targetProvider,'status'=>'planned','items'=>$items,'copied'=>0,'verified'=>0,'switched'=>0,'purged'=>0,'created_at'=>Utils::now()];
     return RecordStore::put('provider_exit',$id,$record);
 }
+    /** Plan inventory is streamed; no globally capped asset/derivative materialization. */
+    private static function inventoryRows(string $type): \Generator {
+        if(!in_array($type,['asset','derivative'],true))
+            throw new Error('provider_exit_inventory_type_invalid','Provider-exit record family is invalid.',500);
+        $after='';
+        do {
+            $page=RecordStore::scan($type,250,$after);
+            foreach($page as $row)yield $row;
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+    }
     public static function copy(string $exitId): array {
         $plan=self::load($exitId,['planned','copying','copy_failed','verified']);if(($plan['status']??'')==='verified')return $plan;$source=ProviderRegistry::get((string)$plan['source_provider']);$target=ProviderRegistry::get((string)$plan['target_provider']);$plan['status']='copying';$plan=self::save($plan);
         try{foreach($plan['items'] as $index=>$item){if(in_array(($item['status']??''),['verified','switched','purged'],true))continue;$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$identity=self::identity($item);$targetKey=hash('sha256','migration|'.$plan['target_provider'].'|'.$identity['object_key'].'|'.$identity['sha256']);$stored=$source->copyTo($identity['object_key'],$target,$targetKey);$stream=$target->openStream($targetKey);try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}if(!hash_equals($identity['sha256'],$stats['sha256'])||$identity['size']!==$stats['size'])throw new Error('provider_exit_integrity_failed','Copied object integrity failed.',500,['id'=>$item['id']]);$plan['items'][$index]['target_key']=$targetKey;$plan['items'][$index]['target_storage']=$stored+['provider_id'=>$plan['target_provider']];$plan['items'][$index]['status']='verified';$plan=self::counted(self::save($plan));$plan=self::save($plan);} $plan['status']='verified';$plan['verified_at']=Utils::now();return self::save(self::counted($plan));}
