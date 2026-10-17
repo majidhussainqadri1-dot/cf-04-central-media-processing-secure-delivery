@@ -163,9 +163,35 @@ final class KeyRotationService {
     public static function rotateAll(int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
     $active=Keyring::activeId();$runId=Utils::id('krot');$result=['rotation_id'=>$runId,'active_key_id'=>$active,'rotated'=>0,'failed'=>0,'groups'=>0,'orphan_cleanup_pending'=>0,'locked_old_objects_retained'=>0,'envelopes_reconciled'=>0,'deferred_cleanup_reconciled'=>0];
+    // Select only physical objects with stale/malformed key envelopes; a site
+    // can have millions of already-current references without consuming the
+    // 2,000-reference safety budget of an actual rotation run.
+    $pending=[];
+    foreach(['asset','derivative'] as $type){
+        foreach(self::rotationRows($type) as $record){
+            if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;
+            $needs=(($record['storage']['key_id']??'')!==$active);
+            if(!$needs){try{self::rotationIdentity($record);}catch(\Throwable){$needs=true;}}
+            if(!$needs)continue;
+            $groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));
+            if(!isset($pending[$groupKey])){
+                if(count($pending)>=2000)throw new Error('key_rotation_capacity_exceeded','More than 2,000 physical groups need a durable staged rotation.',503);
+                $pending[$groupKey]=true;
+            }
+        }
+    }
+    // Collect every alias, including aliases claiming to be on the current
+    // key, for each stale physical object. Do not split a shared ciphertext.
     $groups=[];$selected=0;
-    foreach(self::rotationRows('asset') as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;if($selected>=2000)throw new Error('key_rotation_capacity_exceeded','Key rotation exceeds the safe in-memory reference capacity; schedule a durable staged rotation.',503);$selected++;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'asset','record'=>$record];}
-    foreach(self::rotationRows('derivative') as $record){if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;if($selected>=2000)throw new Error('key_rotation_capacity_exceeded','Key rotation exceeds the safe in-memory reference capacity; schedule a durable staged rotation.',503);$selected++;$groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));$groups[$groupKey][]=['type'=>'derivative','record'=>$record];}
+    foreach(['asset','derivative'] as $type){
+        foreach(self::rotationRows($type) as $record){
+            if(($record['status']??'')==='deleted'||empty($record['object_key']))continue;
+            $groupKey=hash('sha256',Utils::canonicalJson(['provider'=>$record['storage']['provider_id']??null,'object_key'=>$record['object_key']]));
+            if(!isset($pending[$groupKey]))continue;
+            if($selected>=2000)throw new Error('key_rotation_capacity_exceeded','Selected shared ciphertext aliases exceed the safe in-memory capacity.',503);
+            $groups[$groupKey][]=['type'=>$type,'record'=>$record];$selected++;
+        }
+    }
     $groups=array_filter($groups,static function(array $group)use($active): bool {foreach($group as $entry){if(($entry['record']['storage']['key_id']??'')!==$active)return true;try{self::rotationIdentity($entry['record']);}catch(\Throwable){return true;}}return false;});
     RecordStore::put('key_rotation',$runId,['actor_id'=>$actor,'rotation_id'=>$runId,'active_key_id'=>$active,'status'=>'running','groups_total'=>count($groups),'result'=>$result,'created_at'=>Utils::now()]);
     $result['envelopes_reconciled']=self::reconcileCurrentEnvelopes($active,$runId);$result['deferred_cleanup_reconciled']=self::reconcileDeferredCleanup(200)['completed'];
