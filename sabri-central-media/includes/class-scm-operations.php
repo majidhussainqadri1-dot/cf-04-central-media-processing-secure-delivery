@@ -514,13 +514,43 @@ final class RestoreService {
     public static function reconcile(string $restoreId): array {
     $restore=RecordStore::get('restore',$restoreId);if(!$restore)throw new Error('restore_not_found','Restore not found.',404);
     $gate=RecordStore::get('restore_gate','current');if(!$gate||($gate['restore_id']??'')!==$restoreId)throw new Error('restore_gate_mismatch','Restore is not the active reconciliation gate.',409);
-    $checks=['schema'=>Schema::ready(),'keyring'=>self::check(fn()=>Keyring::assertReady()),'provider'=>self::check(fn()=>ProviderRegistry::store()),'tombstones'=>self::tombstones(),'rights'=>self::rights(),'manifests'=>self::manifests(),'integrity'=>self::integrity()];
-    $restore['checks']=$checks;$restore['status']=in_array(false,$checks,true)?'blocked':'reconciled';$restore['reconciled_at']=Utils::now();
+    // A prior serve authorization cannot remain open while a new verification
+    // runs. CAS the persistent gate to a blocking state before reading assets.
+    $gate['status']='rebuilding';$gate['updated_at']=Utils::now();
+    $gate=RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);
+    $before=self::sourceFingerprint();
+    $checks=['schema'=>self::checkedRestore(fn()=>Schema::ready()),
+        'keyring'=>self::checkedRestore(fn()=>Keyring::assertReady()),
+        'provider'=>self::checkedRestore(fn()=>ProviderRegistry::store()),
+        'tombstones'=>self::checkedRestore(fn()=>self::tombstones()),
+        'rights'=>self::checkedRestore(fn()=>self::rights()),
+        'manifests'=>self::checkedRestore(fn()=>self::manifests()),
+        'integrity'=>self::checkedRestore(fn()=>self::integrity())];
+    $after=self::sourceFingerprint();
+    $checks['inventory_stable']=hash_equals($before,$after);
+    $restore['checks']=$checks;$restore['status']=in_array(false,$checks,true)?'blocked':'reconciled';$restore['reconciled_at']=Utils::now();$restore['source_fingerprint']=$after;
     $restore=RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);
-    $gate['status']=$restore['status'];$gate['checks']=$checks;$gate['updated_at']=Utils::now();RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);
+    $gate['status']=$restore['status'];$gate['checks']=$checks;$gate['source_fingerprint']=$after;$gate['updated_at']=Utils::now();RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);
     return $restore;
 }
     private static function check(callable $f): bool {try{$f();return true;}catch(\Throwable){return false;}}
+    /** Safe boolean probes: malformed or missing restoration records block serving. */
+    private static function checkedRestore(callable $probe): bool {
+        try{return $probe()!==false;}catch(\Throwable){return false;}
+    }
+    /** Versioned source inventory witness. This is not a DB/object snapshot. */
+    private static function sourceFingerprint(): string {
+        $hash=hash_init('sha256');
+        foreach(['asset','derivative','manifest','tombstone','asset_key_envelope',
+            'residency_policy','legal_hold','deletion','provider_mapping'] as $type){
+            hash_update($hash,$type."\0");
+            foreach(self::restoreRecords($type) as $row){
+                $encoded=Utils::canonicalJson($row);
+                hash_update($hash,strlen($encoded).':'.$encoded);
+            }
+        }
+        return hash_final($hash);
+    }
     /** Restore verification must exhaust an immutable-ID inventory without materializing it. */
     private static function restoreRecords(string $type): \Generator {
         $after='';
