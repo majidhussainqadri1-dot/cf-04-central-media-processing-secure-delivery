@@ -32,8 +32,25 @@ final class RecordStore {
     public static function get(string $type,string $id): ?array {
         $type=Utils::key($type,48);$id=Utils::text($id,96);if($type===''||$id==='')return null;
         if(self::test())return self::$memory[$type][$id]??null;
-        self::requirePersistent();global $wpdb;$raw=$wpdb->get_var($wpdb->prepare('SELECT payload FROM '.Db::table('records').' WHERE record_type=%s AND id=%s',$type,$id));Db::assertRead('record_get');
-        if(!is_string($raw)||$raw==='')return null;try{$row=json_decode($raw,true,64,JSON_THROW_ON_ERROR);}catch(\JsonException){throw new Error('record_payload_invalid','Persistent record payload is invalid.',500,['record_type'=>$type,'id'=>$id]);}if(!is_array($row)||($row['record_type']??'')!==$type||($row['id']??'')!==$id||(int)($row['version']??0)<1)throw new Error('record_payload_invalid','Persistent record identity is invalid.',500,['record_type'=>$type,'id'=>$id]);return $row;
+        self::requirePersistent();global $wpdb;
+        $sql=$wpdb->prepare('SELECT id,actor_id,status,version,payload FROM '.Db::table('records').' WHERE record_type=%s AND id=%s LIMIT 1',$type,$id);
+        $results=$wpdb->get_results($sql,defined('ARRAY_A')?ARRAY_A:'ARRAY_A');
+        Db::assertRead('record_get');
+        if(!is_array($results))throw new Error('persistence_read_failed','Indexed record lookup did not return a valid result set.',503,['record_type'=>$type,'id'=>$id]);
+        if($results===[])return null;
+        if(count($results)!==1||!is_array($results[0]))
+            throw new Error('record_payload_invalid','Indexed record lookup returned malformed rows.',500,['record_type'=>$type,'id'=>$id]);
+        $stored=$results[0];
+        try{$row=json_decode((string)($stored['payload']??''),true,64,JSON_THROW_ON_ERROR);}
+        catch(\JsonException){throw new Error('record_payload_invalid','Persistent record payload is invalid.',500,['record_type'=>$type,'id'=>$id]);}
+        if(!is_array($row)||($row['record_type']??null)!==$type
+            ||($stored['id']??null)!==$id||($row['id']??null)!==$id
+            ||!is_int($row['version']??null)||$row['version']<1
+            ||$row['version']!==(int)($stored['version']??0)
+            ||!is_int($row['actor_id']??null)||$row['actor_id']!==(int)($stored['actor_id']??-1)
+            ||($row['status']??null)!==($stored['status']??null))
+            throw new Error('record_payload_invalid','Indexed record identity differs from its payload.',500,['record_type'=>$type,'id'=>$id]);
+        return $row;
     }
     /** Bounded lookup by exact primary keys; used for per-upload parts without a global scan. */
     public static function getMany(string $type,array $ids): array {
@@ -171,7 +188,13 @@ final class RecordStore {
     public static function countStatuses(string $type,array $statuses,bool $exclude=false): int {
         $type=Utils::key($type,48);$statuses=array_values(array_filter(array_unique(array_map(fn($v)=>Utils::key((string)$v,40),$statuses))));if($type===''||$statuses===[])throw new Error('record_status_query_invalid','Record status query is invalid.',500);
         if(self::test())return count(array_filter(self::$memory[$type]??[],fn(array $row)=>$exclude?!in_array((string)($row['status']??''),$statuses,true):in_array((string)($row['status']??''),$statuses,true)));
-        self::requirePersistent();global $wpdb;$placeholders=implode(',',array_fill(0,count($statuses),'%s'));$sql='SELECT COUNT(*) FROM '.Db::table('records').' WHERE record_type=%s AND status '.($exclude?'NOT IN':'IN').' ('.$placeholders.')';$value=$wpdb->get_var($wpdb->prepare($sql,$type,...$statuses));Db::assertRead('record_count_status');return max(0,(int)$value);
+        self::requirePersistent();global $wpdb;$placeholders=implode(',',array_fill(0,count($statuses),'%s'));$sql='SELECT COUNT(*) FROM '.Db::table('records').' WHERE record_type=%s AND status '.($exclude?'NOT IN':'IN').' ('.$placeholders.')';$value=$wpdb->get_var($wpdb->prepare($sql,$type,...$statuses));Db::assertRead('record_count_status');
+        if((!is_string($value)&&!is_int($value))
+            ||!preg_match('/^(0|[1-9][0-9]*)$/D',(string)$value)
+            ||strlen((string)$value)>strlen((string)PHP_INT_MAX)
+            ||(strlen((string)$value)===strlen((string)PHP_INT_MAX)&&strcmp((string)$value,(string)PHP_INT_MAX)>0))
+            throw new Error('persistence_read_failed','Persistent status count is missing or invalid.',503,['record_type'=>$type]);
+        return (int)$value;
     }
     public static function oldestByStatuses(string $type,array $statuses): ?array {
         $type=Utils::key($type,48);$statuses=array_values(array_filter(array_unique(array_map(fn($v)=>Utils::key((string)$v,40),$statuses))));if($type===''||$statuses===[])throw new Error('record_status_query_invalid','Record status query is invalid.',500);
