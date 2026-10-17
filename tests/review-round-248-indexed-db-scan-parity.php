@@ -10,8 +10,10 @@ final class R248FakeWpdb {
     public string $prefix='wp_';
     public string $last_error='';
     public ?array $scanRows=[];
+    public ?string $statusCount=null;
     public function prepare(string $sql,mixed ...$args): string { return str_contains($sql,'SHOW TABLES LIKE')?$sql.' '.(string)($args[0]??''):$sql; }
     public function get_var(string $sql): ?string {
+        if(str_contains($sql,'SELECT COUNT(*)'))return $this->statusCount;
         if(str_contains($sql,'SHOW TABLES'))return
             str_contains($sql,'scm_audit')?'wp_scm_audit':'wp_scm_records';
         return null;
