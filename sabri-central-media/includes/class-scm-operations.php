@@ -339,6 +339,96 @@ final class ProviderExitInventoryStage {
     }
 }
 
+/**
+ * Durable, bounded, read-only discovery for large key-rotation workloads.
+ * Candidate records are NOT safe atomic ciphertext groups; an executable
+ * worker must gather every current/stale alias and acquire owner fencing.
+ */
+final class KeyRotationInventoryStage {
+    public static function begin(int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        Keyring::assertReady();
+        $id=Utils::id('kstage');
+        return RecordStore::put('key_rotation_inventory',$id,[
+            'actor_id'=>$actor,'active_key_id'=>Keyring::activeId(),
+            'status'=>'planning','record_family'=>'asset','after_id'=>'',
+            'segments'=>0,'visited_rows'=>0,'stale_references'=>0,
+            'chain_hash'=>str_repeat('0',64),'page_size'=>250,
+            'created_at'=>Utils::now()
+        ],0);
+    }
+    public static function advance(string $id,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $stage=RecordStore::get('key_rotation_inventory',$id);
+        if(!$stage)throw new Error('key_rotation_inventory_not_found','Key inventory stage unavailable.',404);
+        if(($stage['status']??null)==='inventory_complete_unfenced')return $stage;
+        if(($stage['status']??null)!=='planning'||
+            !in_array(($stage['record_family']??null),['asset','derivative'],true)||
+            !is_string($stage['after_id']??null)||
+            strlen($stage['after_id'])>96||
+            Utils::text($stage['after_id'],96)!==$stage['after_id']||
+            ($stage['page_size']??null)!==250)
+            throw new Error('key_rotation_inventory_cursor_invalid','Rotation stage cursor invalid.',409);
+        Keyring::assertReady();
+        if(($stage['active_key_id']??null)!==Keyring::activeId())
+            throw new Error('key_rotation_inventory_key_changed','Active encryption key changed during discovery.',409);
+        $family=$stage['record_family'];$after=$stage['after_id'];
+        $page=RecordStore::scan($family,250,$after);
+        $pageHash=hash('sha256',Utils::canonicalJson($page));
+        $items=[];
+        foreach($page as $record){
+            if(($record['status']??null)==='deleted'||empty($record['object_key']))continue;
+            if(($record['storage']['key_id']??null)===$stage['active_key_id'])continue;
+            $objectKey=$record['object_key']??null;
+            $sha=$record['sha256']??null;
+            $provider=$record['storage']['provider_id']??null;
+            $oldKey=$record['storage']['key_id']??null;
+            $size=Utils::integer($record['size']??null,'key_rotation_identity_invalid',0,1073741824);
+            if(!is_string($objectKey)||!preg_match('/^[a-f0-9]{64}$/D',$objectKey)||
+               !is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha)||
+               !is_string($provider)||$provider===''||Utils::key($provider,64)!==$provider||
+               !is_string($oldKey)||$oldKey===''||Utils::key($oldKey,64)!==$oldKey)
+                throw new Error('key_rotation_identity_invalid','Stale key reference is noncanonical.',409);
+            $items[]=['type'=>$family,'id'=>$record['id'],'provider_id'=>$provider,
+                'object_key'=>$objectKey,'sha256'=>$sha,'size'=>$size,
+                'old_key_id'=>$oldKey,'status'=>'candidate_unfenced'];
+        }
+        $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+        $segId=hash('sha256',$id.'|'.$family.'|'.$after);
+        $seg=RecordStore::get('key_rotation_inventory_segment',$segId);
+        if($seg){
+            if(($seg['inventory_id']??null)!==$id||
+               ($seg['record_family']??null)!==$family||
+               ($seg['after_id']??null)!==$after||
+               ($seg['last_id']??null)!==$last||
+               ($seg['status']??null)!=='candidate_unfenced'||
+               ($seg['raw_rows']??null)!==count($page)||
+               ($seg['page_hash']??null)!==$pageHash||
+               !is_array($seg['items']??null)||
+               Utils::canonicalJson($seg['items'])!==Utils::canonicalJson($items))
+                throw new Error('key_rotation_inventory_drift','Staged key candidate page or segment changed.',409);
+        }else{
+            RecordStore::put('key_rotation_inventory_segment',$segId,[
+                'actor_id'=>$actor,'inventory_id'=>$id,'record_family'=>$family,
+                'after_id'=>$after,'last_id'=>$last,'page_hash'=>$pageHash,
+                'raw_rows'=>count($page),'items'=>$items,
+                'status'=>'candidate_unfenced','created_at'=>Utils::now()
+            ],0);
+        }
+        $stage['visited_rows']+=count($page);
+        $stage['stale_references']+=count($items);
+        $stage['segments']++;
+        $stage['chain_hash']=hash('sha256',(string)$stage['chain_hash'].'|'.$segId.'|'.$pageHash);
+        if(count($page)<250){
+            $stage['after_id']='';
+            if($family==='asset')$stage['record_family']='derivative';
+            else{$stage['record_family']='complete';$stage['status']='inventory_complete_unfenced';}
+        }else{$stage['after_id']=$last;}
+        $stage['updated_at']=Utils::now();
+        return RecordStore::put('key_rotation_inventory',$id,$stage,(int)$stage['version']);
+    }
+}
+
 final class KeyRotationService {
     public static function rotateAll(int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
