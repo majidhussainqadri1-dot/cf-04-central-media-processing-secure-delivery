@@ -794,6 +794,118 @@ final class RepairService {
 }
 }
 
+/**
+ * Incremental, non-destructive restore inventory checkpoint preparation.
+ * This does NOT restore objects, freeze writes or open the serve gate.
+ */
+final class RestoreCheckpointStage {
+    private const TYPES=['asset','derivative','manifest','tombstone',
+        'asset_key_envelope','residency_policy','legal_hold','deletion','provider_mapping'];
+
+    public static function begin(int $actor,array $inventory): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        Utils::requireFields($inventory,
+            ['database_snapshot','object_inventory','keyring_version','policy_snapshot',
+             'manifest_snapshot','tombstone_snapshot'],'restore_inventory_incomplete');
+        $id=Utils::id('rststage');
+        return RecordStore::put('restore_checkpoint',$id,[
+            'actor_id'=>$actor,'status'=>'planning_unfenced',
+            'inventory_hash'=>hash('sha256',Utils::canonicalJson($inventory)),
+            'family_index'=>0,'after_id'=>'','page_size'=>250,
+            'segments'=>0,'visited_rows'=>0,'chain_hash'=>str_repeat('0',64),
+            'created_at'=>Utils::now()
+        ],0);
+    }
+
+    public static function advance(string $id,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $state=RecordStore::get('restore_checkpoint',$id);
+        if(!$state)throw new Error('restore_checkpoint_not_found','Restore checkpoint missing.',404);
+        if(($state['status']??null)==='inventory_complete_unfenced')return $state;
+        $index=$state['family_index']??null;
+        $after=$state['after_id']??null;
+        if(($state['status']??null)!=='planning_unfenced'||
+           !is_int($index)||$index<0||$index>=count(self::TYPES)||
+           !is_string($after)||strlen($after)>96||
+           Utils::text($after,96)!==$after||($state['page_size']??null)!==250)
+            throw new Error('restore_checkpoint_cursor_invalid','Restore checkpoint cursor invalid.',409);
+        $family=self::TYPES[$index];
+        $page=RecordStore::scan($family,250,$after);
+        $pageHash=hash('sha256',Utils::canonicalJson($page));
+        $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+        $segmentId=hash('sha256',$id.'|'.$family.'|'.$after);
+        $existing=RecordStore::get('restore_checkpoint_segment',$segmentId);
+        if($existing){
+            if(($existing['checkpoint_id']??null)!==$id||
+               ($existing['record_family']??null)!==$family||
+               ($existing['after_id']??null)!==$after||
+               ($existing['last_id']??null)!==$last||
+               ($existing['page_hash']??null)!==$pageHash||
+               ($existing['raw_rows']??null)!==count($page)||
+               ($existing['status']??null)!=='snapshot_unfenced')
+                throw new Error('restore_checkpoint_drift','Checkpointed source page has changed.',409);
+        }else{
+            RecordStore::put('restore_checkpoint_segment',$segmentId,[
+                'actor_id'=>$actor,'checkpoint_id'=>$id,'record_family'=>$family,
+                'after_id'=>$after,'last_id'=>$last,'raw_rows'=>count($page),
+                'page_hash'=>$pageHash,'status'=>'snapshot_unfenced',
+                'created_at'=>Utils::now()
+            ],0);
+        }
+        $state['chain_hash']=hash('sha256',$state['chain_hash'].'|'.$segmentId.'|'.$pageHash);
+        $state['segments']++;
+        $state['visited_rows']+=count($page);
+        if(count($page)<250){
+            $index++;
+            $state['family_index']=$index;
+            $state['after_id']='';
+            if($index===count(self::TYPES))$state['status']='inventory_complete_unfenced';
+        }else{$state['after_id']=$last;}
+        $state['updated_at']=Utils::now();
+        return RecordStore::put('restore_checkpoint',$id,$state,(int)$state['version']);
+    }
+
+    /** Recheck all pages, counters and chained source hashes before accepting a dry run. */
+    public static function verifyComplete(string $id,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $state=RecordStore::get('restore_checkpoint',$id);
+        if(!$state||($state['status']??null)!=='inventory_complete_unfenced'||
+            ($state['family_index']??null)!==count(self::TYPES)||
+            ($state['after_id']??null)!=='')
+            throw new Error('restore_checkpoint_not_complete','Restore inventory dry run incomplete.',409);
+        $chain=str_repeat('0',64);$segments=0;$rows=0;
+        foreach(self::TYPES as $family){
+            $after='';
+            do {
+                $page=RecordStore::scan($family,250,$after);
+                $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+                $segmentId=hash('sha256',$id.'|'.$family.'|'.$after);
+                $saved=RecordStore::get('restore_checkpoint_segment',$segmentId);
+                $pageHash=hash('sha256',Utils::canonicalJson($page));
+                if(!$saved||($saved['checkpoint_id']??null)!==$id||
+                   ($saved['record_family']??null)!==$family||
+                   ($saved['status']??null)!=='snapshot_unfenced'||
+                   ($saved['after_id']??null)!==$after||
+                   ($saved['last_id']??null)!==$last||
+                   ($saved['page_hash']??null)!==$pageHash||
+                   ($saved['raw_rows']??null)!==count($page))
+                    throw new Error('restore_checkpoint_drift','Restore source differs from persisted checkpoint.',409);
+                $chain=hash('sha256',$chain.'|'.$segmentId.'|'.$pageHash);
+                $rows+=count($page);$segments++;
+                if(count($page)<250)break;
+                $after=$last;
+            }while(true);
+        }
+        if(($state['chain_hash']??null)!==$chain||
+           ($state['segments']??null)!==$segments||
+           ($state['visited_rows']??null)!==$rows)
+            throw new Error('restore_checkpoint_drift','Restore checkpoint summary differs from source.',409);
+        return ['checkpoint_id'=>$id,'status'=>'verified_unfenced',
+            'inventory_hash'=>$state['inventory_hash'],
+            'chain_hash'=>$chain,'segments'=>$segments,'visited_rows'=>$rows];
+    }
+}
+
 final class RestoreService {
     public static function start(int $actor,array $inventory): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
