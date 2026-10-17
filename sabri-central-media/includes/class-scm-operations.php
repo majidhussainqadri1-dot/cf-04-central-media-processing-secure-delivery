@@ -159,6 +159,106 @@ final class ProviderExitService {
     private static function counted(array $plan): array {$statuses=array_column((array)$plan['items'],'status');$plan['copied']=count(array_filter($statuses,fn($s)=>in_array($s,['verified','switched','purged'],true)));$plan['verified']=$plan['copied'];$plan['switched']=count(array_filter($statuses,fn($s)=>in_array($s,['switched','purged'],true)));$plan['purged']=count(array_filter($statuses,fn($s)=>$s==='purged'));return $plan;}
 }
 
+/**
+ * Durable, non-destructive inventory staging for large provider exits.
+ * This is deliberately NOT an executable cutover plan: source writes have
+ * not been fenced and no provider copy, source deletion or credential
+ * retirement may be driven by these provisional inventory segments.
+ */
+final class ProviderExitInventoryStage {
+    public static function begin(string $sourceProvider,string $targetProvider,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $sourceProvider=Utils::key($sourceProvider,64);
+        $targetProvider=Utils::key($targetProvider,64);
+        if($sourceProvider===''||$targetProvider===''||$sourceProvider===$targetProvider)
+            throw new Error('provider_exit_identity_invalid','Distinct source and target providers required.',400);
+        $source=ProviderRegistry::get($sourceProvider);$target=ProviderRegistry::get($targetProvider);
+        foreach(['copy','delete','streaming'] as $capability){
+            if(($source->capabilities()[$capability]??false)!==true||
+                ($target->capabilities()[$capability]??false)!==true)
+                throw new Error('provider_exit_capability_missing','Provider capability unavailable.',503);
+        }
+        $id=Utils::id('pexinv');
+        return RecordStore::put('provider_exit_inventory',$id,[
+            'actor_id'=>$actor,'source_provider'=>$sourceProvider,
+            'target_provider'=>$targetProvider,'status'=>'planning',
+            'record_family'=>'asset','after_id'=>'','page_size'=>250,
+            'segments'=>0,'eligible_items'=>0,'visited_rows'=>0,
+            'chain_hash'=>str_repeat('0',64),'created_at'=>Utils::now()
+        ],0);
+    }
+
+    /** Advance exactly one small, idempotently journaled source page. */
+    public static function advance(string $inventoryId,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $stage=RecordStore::get('provider_exit_inventory',$inventoryId);
+        if(!$stage)throw new Error('provider_exit_inventory_not_found','Provider inventory stage missing.',404);
+        if(($stage['status']??null)==='inventory_complete_unfenced')return $stage;
+        if(($stage['status']??null)!=='planning')
+            throw new Error('provider_exit_inventory_state_invalid','Provider inventory stage cannot advance.',409);
+        $family=$stage['record_family']??null;$after=$stage['after_id']??null;
+        if(!in_array($family,['asset','derivative'],true)||!is_string($after)||
+            strlen($after)>96||Utils::text($after,96)!==$after||
+            ($stage['page_size']??null)!==250)
+            throw new Error('provider_exit_inventory_cursor_invalid','Inventory cursor is invalid.',409);
+        $source=(string)$stage['source_provider'];
+        $target=(string)$stage['target_provider'];
+        ProviderRegistry::get($source);ProviderRegistry::get($target);
+        $page=RecordStore::scan($family,250,$after);
+        $pageHash=hash('sha256',Utils::canonicalJson($page));
+        $segmentId=hash('sha256',$inventoryId.'|'.$family.'|'.$after);
+        $items=[];
+        foreach($page as $record){
+            if(($record['status']??null)==='deleted'||
+                ($record['storage']['provider_id']??null)!==$source)continue;
+            $parentId=$family==='asset'?(string)$record['id']:
+                (string)($record['asset_id']??'');
+            if($parentId==='')throw new Error('provider_exit_derivative_orphaned','Media policy parent missing.',409);
+            if($family==='derivative'){
+                $parent=RecordStore::get('asset',$parentId);
+                if(!$parent||($parent['status']??'')==='deleted')
+                    throw new Error('provider_exit_derivative_orphaned','Media derivative has no active parent.',409);
+            }
+            LegalHoldService::assertNoHold($parentId,'provider_exit');
+            ResidencyCryptoService::assertProviderRegion($parentId,$target);
+            $sha=$record['sha256']??null;$key=$record['object_key']??null;
+            $size=Utils::integer($record['size']??null,'provider_exit_identity_invalid',0,1073741824);
+            if(!is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha)||
+                !is_string($key)||!preg_match('/^[a-f0-9]{64}$/D',$key))
+                throw new Error('provider_exit_identity_invalid','Noncanonical staged object identity.',409);
+            $items[]=['type'=>$family,'id'=>$record['id'],'asset_id'=>$parentId,
+                'object_key'=>$key,'sha256'=>$sha,'size'=>$size,'status'=>'planned_unfenced'];
+        }
+        $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+        $existing=RecordStore::get('provider_exit_inventory_segment',$segmentId);
+        if($existing!==null){
+            if(($existing['page_hash']??null)!==$pageHash||
+               ($existing['after_id']??null)!==$after||
+               ($existing['last_id']??null)!==$last||
+               ($existing['record_family']??null)!==$family)
+                throw new Error('provider_exit_inventory_drift','Uncommitted inventory page changed after its durable journal.',409);
+        }else{
+            RecordStore::put('provider_exit_inventory_segment',$segmentId,[
+                'actor_id'=>$actor,'inventory_id'=>$inventoryId,'record_family'=>$family,
+                'after_id'=>$after,'last_id'=>$last,'page_hash'=>$pageHash,
+                'raw_rows'=>count($page),'items'=>$items,
+                'status'=>'planned_unfenced','created_at'=>Utils::now()
+            ],0);
+        }
+        $stage['visited_rows']+=(int)count($page);
+        $stage['eligible_items']+=count($items);
+        $stage['segments']++;
+        $stage['chain_hash']=hash('sha256',(string)$stage['chain_hash'].'|'.$segmentId.'|'.$pageHash);
+        if(count($page)<250){
+            $stage['after_id']='';
+            if($family==='asset')$stage['record_family']='derivative';
+            else{$stage['record_family']='complete';$stage['status']='inventory_complete_unfenced';}
+        }else{$stage['after_id']=$last;}
+        $stage['updated_at']=Utils::now();
+        return RecordStore::put('provider_exit_inventory',$inventoryId,$stage,(int)$stage['version']);
+    }
+}
+
 final class KeyRotationService {
     public static function rotateAll(int $actor): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');Keyring::assertReady();
