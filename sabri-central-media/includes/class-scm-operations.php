@@ -516,6 +516,13 @@ final class RestoreService {
     if(!$restore||!$gate||($gate['restore_id']??'')!==$restoreId)throw new Error('restore_gate_blocked','Restore reconciliation has not passed.',503);
     $restoreStatus=(string)($restore['status']??'');$gateStatus=(string)($gate['status']??'');
     if(!in_array($restoreStatus,['reconciled','serve_authorized'],true)||!in_array($gateStatus,['reconciled','serve_authorized'],true))throw new Error('restore_gate_blocked','Restore reconciliation has not passed.',503);
+    // The inventory may have changed after the preceding reconciliation. Refresh
+    // every authoritative restore check before reopening any media serving.
+    $restore=self::reconcile($restoreId);
+    $gate=RecordStore::get('restore_gate','current');
+    if(($restore['status']??null)!=='reconciled'||!$gate||($gate['restore_id']??null)!==$restoreId||($gate['status']??null)!=='reconciled')
+        throw new Error('restore_gate_blocked','Restore inventory changed or failed revalidation before serving.',503);
+    $restoreStatus=(string)$restore['status'];
     if($restoreStatus!=='serve_authorized'){$restore['status']='serve_authorized';$restore['serve_authorized_at']=Utils::now();$restore=RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);}
     $gate=RecordStore::get('restore_gate','current')??$gate;if(($gate['restore_id']??'')!==$restoreId||!in_array(($gate['status']??''),['reconciled','serve_authorized'],true))throw new Error('restore_gate_mismatch','Restore gate changed during serve authorization.',409);
     if(($gate['status']??'')!=='serve_authorized'){$gate['status']='serve_authorized';$gate['serve_authorized_at']=Utils::now();$gate['updated_at']=Utils::now();RecordStore::put('restore_gate','current',$gate,(int)$gate['version']);}
