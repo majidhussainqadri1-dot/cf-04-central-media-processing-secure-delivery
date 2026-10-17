@@ -21,7 +21,7 @@ for($i=0;$i<2600;$i++){
         'actor_id'=>11,'status'=>'deleted']);
 }
 $late='r265-late-active-asset';
-RecordStore::put('asset',$late,['actor_id'=>11,'status'=>'ready']);
+RecordStore::put('asset',$late,['actor_id'=>11,'status'=>'ready','rights'=>rights(['view'],false)]);
 RecordStore::put('tombstone','r265-late-tombstone',[
     'actor_id'=>11,'status'=>'deleted','asset_id'=>$late
 ]);
