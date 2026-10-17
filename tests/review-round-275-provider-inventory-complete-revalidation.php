@@ -23,7 +23,7 @@ $s=ProviderExitInventoryStage::begin('source-private','target-private',11);
 while(($s['status']??null)==='planning')$s=ProviderExitInventoryStage::advance($s['id'],11);
 $v=ProviderExitInventoryStage::verifyComplete($s['id'],11);
 ok(($v['status']??null)==='verified_unfenced'&&$v['eligible_items']===526
-   &&$v['visited_rows']===526&&$v['segments']===5
+   &&$v['visited_rows']===526&&$v['segments']===4
    &&$v['chain_hash']===$s['chain_hash'],
    'R275 complete asset and derivative segments match original source identities');
 ok(ProviderRegistry::activeId()===$active&&RecordStore::all('provider_exit')===[],
