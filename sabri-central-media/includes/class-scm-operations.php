@@ -188,6 +188,79 @@ final class ProviderExitInventoryStage {
         ],0);
     }
 
+    /**
+     * Audit a completed unfenced inventory against current canonical rows.
+     * This does not authorize copy, cutover, source purge or key revocation.
+     * It is a best-effort sequential read, not an atomic owner-write fence.
+     */
+    public static function verifyComplete(string $inventoryId,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $stage=RecordStore::get('provider_exit_inventory',$inventoryId);
+        if(!$stage)throw new Error('provider_exit_inventory_not_found','Provider inventory stage missing.',404);
+        if(($stage['status']??null)!=='inventory_complete_unfenced'||
+           ($stage['record_family']??null)!=='complete'||
+           ($stage['after_id']??null)!==''||
+           ($stage['page_size']??null)!==250)
+            throw new Error('provider_exit_inventory_not_complete','Provider inventory must be complete before verification.',409);
+        $source=(string)($stage['source_provider']??'');
+        $target=(string)($stage['target_provider']??'');
+        ProviderRegistry::get($source);ProviderRegistry::get($target);
+        $chain=str_repeat('0',64);$segments=0;$eligible=0;$visited=0;
+        foreach(['asset','derivative'] as $family){
+            $after='';
+            do {
+                $page=RecordStore::scan($family,250,$after);
+                $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+                $id=hash('sha256',$inventoryId.'|'.$family.'|'.$after);
+                $saved=RecordStore::get('provider_exit_inventory_segment',$id);
+                $pageHash=hash('sha256',Utils::canonicalJson($page));
+                if(!$saved||($saved['inventory_id']??null)!==$inventoryId||
+                   ($saved['record_family']??null)!==$family||
+                   ($saved['status']??null)!=='planned_unfenced'||
+                   ($saved['after_id']??null)!==$after||
+                   ($saved['last_id']??null)!==$last||
+                   ($saved['page_hash']??null)!==$pageHash||
+                   ($saved['raw_rows']??null)!==count($page)||
+                   !is_array($saved['items']??null))
+                    throw new Error('provider_exit_inventory_drift','Completed inventory page changed or segment journal is missing.',409);
+                $expected=[];
+                foreach($page as $row){
+                    if(($row['status']??null)==='deleted'||
+                       ($row['storage']['provider_id']??null)!==$source)continue;
+                    $parent=$family==='asset'?(string)$row['id']:
+                        (string)($row['asset_id']??'');
+                    if($parent==='')throw new Error('provider_exit_inventory_drift','Staged object has no policy parent.',409);
+                    if($family==='derivative'){
+                        $asset=RecordStore::get('asset',$parent);
+                        if(!$asset||($asset['status']??null)==='deleted')
+                            throw new Error('provider_exit_inventory_drift','Staged derivative lost its parent.',409);
+                    }
+                    LegalHoldService::assertNoHold($parent,'provider_exit');
+                    ResidencyCryptoService::assertProviderRegion($parent,$target);
+                    $expected[]=['type'=>$family,'id'=>$row['id'],'asset_id'=>$parent,
+                        'object_key'=>$row['object_key']??null,
+                        'sha256'=>$row['sha256']??null,'size'=>$row['size']??null,
+                        'status'=>'planned_unfenced'];
+                }
+                if(Utils::canonicalJson($expected)!==Utils::canonicalJson($saved['items']))
+                    throw new Error('provider_exit_inventory_drift','Saved source manifest entries no longer match authoritative media rows.',409);
+                $chain=hash('sha256',$chain.'|'.$id.'|'.$pageHash);
+                $segments++;$visited+=count($page);$eligible+=count($expected);
+                if(count($page)<250)break;
+                $after=$last;
+            }while(true);
+        }
+        if(($stage['chain_hash']??null)!==$chain||
+           ($stage['segments']??null)!==$segments||
+           ($stage['visited_rows']??null)!==$visited||
+           ($stage['eligible_items']??null)!==$eligible)
+            throw new Error('provider_exit_inventory_drift','Inventory stage counters or journal hash do not match source pages.',409);
+        return ['inventory_id'=>$inventoryId,'status'=>'verified_unfenced',
+            'segments'=>$segments,'visited_rows'=>$visited,
+            'eligible_items'=>$eligible,'chain_hash'=>$chain,
+            'verified_at'=>Utils::now()];
+    }
+
     /** Advance exactly one small, idempotently journaled source page. */
     public static function advance(string $inventoryId,int $actor): array {
         Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
@@ -232,11 +305,18 @@ final class ProviderExitInventoryStage {
         $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
         $existing=RecordStore::get('provider_exit_inventory_segment',$segmentId);
         if($existing!==null){
-            if(($existing['page_hash']??null)!==$pageHash||
+            // The page hash alone does not protect a saved manifest whose
+            // selected item keys, sizes or digests were changed separately.
+            if(($existing['inventory_id']??null)!==$inventoryId||
+               ($existing['status']??null)!=='planned_unfenced'||
+               ($existing['page_hash']??null)!==$pageHash||
                ($existing['after_id']??null)!==$after||
                ($existing['last_id']??null)!==$last||
-               ($existing['record_family']??null)!==$family)
-                throw new Error('provider_exit_inventory_drift','Uncommitted inventory page changed after its durable journal.',409);
+               ($existing['record_family']??null)!==$family||
+               ($existing['raw_rows']??null)!==count($page)||
+               !is_array($existing['items']??null)||
+               Utils::canonicalJson($existing['items'])!==Utils::canonicalJson($items))
+                throw new Error('provider_exit_inventory_drift','Uncommitted inventory segment or selected media identities changed after journaling.',409);
         }else{
             RecordStore::put('provider_exit_inventory_segment',$segmentId,[
                 'actor_id'=>$actor,'inventory_id'=>$inventoryId,'record_family'=>$family,
