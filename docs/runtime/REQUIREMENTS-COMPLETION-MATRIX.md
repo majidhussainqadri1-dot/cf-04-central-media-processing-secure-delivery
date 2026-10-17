@@ -1,0 +1,141 @@
+# CF-04 Requirements Completion Matrix
+
+**Governing plans:** Definitive Master Plan 2026 v3.0; Consolidated All-Chats Directive Register; CF-04 Conditional Complete Master Plan v1.1 — Future-40 Amended (2026-09-16).
+
+**Candidate:** `1.3.0-rc.1`  
+**Schema / contract:** `1.5.0 / 1.5.0`  
+**Runtime default:** disabled and fail-closed.
+
+This matrix records repository source-code completion and automated source-level acceptance only. Hostinger staging, real providers, migration/backup/restore/rollback rehearsal, browser/device/accessibility/load/penetration acceptance, Founder release approval, live deployment and operational acceptance remain separate evidence gates.
+
+> 2026-10-17 code-audit addendum: R246 changes `KeyRotationService::reconcileCurrentEnvelopes()` from globally capped asset enumeration to complete 250-row keyset pages, with `tests/review-round-246-envelope-reconciliation-keyset.php`. Follow-up R256/R257 subsequently replaced global materialization with full keyset scanning and explicit 2,000-live-reference safety caps. Those guards **do not** complete durable staged provider exit or large-fleet key rotation; real provider/KMS and staging acceptance remain open. No real KMS, database or staging acceptance has been performed.
+
+> **2026-10-17 production-persistence parity correction (R248–R251).** `RecordStore::scanPage()`, `getMany()`, `list()`, and `oldestByStatuses()` now compare actual indexed SQL row ID/actor/status/version with the decoded canonical payload, and reject null DB results rather than silently reporting an empty inventory. Regression tests `tests/review-round-248-indexed-db-scan-parity.php`, `...249-indexed-db-batch-parity.php`, `...250-owner-scoped-db-list-parity.php` and `...251-indexed-oldest-status-parity.php` exercise the **non-SCM_TEST_MODE production DB branches** with a fake WordPress DB; they are part of the mandatory quality gate. This is **source/test proof only**, not real MySQL, staging, production, or cross-owner plugin acceptance. Provider-exit/rotation and independent amended CF-04 plan gaps remain open.
+
+> **2026-10-17 indexed-persistence correction (R262–R263).** `RecordStore::get()` now reads the actual SQL ID/actor/status/version and rejects any mismatch with decoded canonical payload rather than treating null or corrupt payload as absent; `RecordStore::countStatuses()` now refuses a missing, invalid or overflowed SQL COUNT(*) result instead of silently returning zero. Mandatory PHP regressions `tests/review-round-262-record-get-indexed-parity.php` and `tests/review-round-263-status-count-failclosed.php` exercise actual production code branches with an isolated fake `$wpdb` (without `SCM_TEST_MODE`). Exact source+test SHA `48657a9a8048339dcd58c8e3d83948f01b3171c0` passed PHP 8.1/8.3/8.4 in push and PR CI, 6/6 jobs; this is not live DB/staging/plugin parity proof.
+
+> **2026-10-17 scale and restore addendum (R270–R273).** The new segmented inventory stage is a durable, read-only planning ledger and is not yet an executable large-scale migration. Provider exit still fails closed above 2,000 eligible objects. Key rotation now excludes unrelated already-current references but still has a 2,000 affected-alias budget. Restore fingerprints and blocks concurrent mutations observed during verification, but has no immutable cross-resource DB+object snapshot. Primary amended CF-04 v1.1 plan and all live/staging owner acceptance remain unverified.
+
+> **2026-10-17 read-only durability addendum (R275–R277):** CF-04 now includes source-rechecked non-destructive provider inventory journals, non-destructive key-rotation candidate staging and nine-family resumable restore inventory checkpoints. These are repository implementation prerequisites, not production-ready migration, key rotation or restored database execution. >2,000 affected object cutover/rekey, immutable DB/object snapshots, owner write fencing, KMS/provider integration and staging/live acceptance remain open. The amended CF-04 v1.1 Future-40 primary Word plan is still unavailable for exact clause-level comparison.
+
+## Base CF-04 functional requirements
+
+| Requirement | Mandatory capability | Source ownership | Acceptance evidence | Source status |
+|---|---|---|---|---|
+| CF04-FR-001 | Asset policy envelope | `Policy, RightsPolicy` | `tests/run-all.php` | Complete in source |
+| CF04-FR-002 | Resumable upload session | `UploadService, PartStore, Idempotency` | `tests/run-all.php` | Complete in source |
+| CF04-FR-003 | Source identity and dedupe | `UploadService::complete/dedupe, Validator` | `tests/run-all.php`, `tests/review-round-238-dedupe-keyset.php` | Complete in source; R238 removes 100k inventory cap (real DB-scale acceptance pending) |
+| CF04-FR-004 | Client metadata distrust | `Validator::inspectStream` | `tests/run-all.php` | Complete in source |
+| CF04-FR-005 | Quota and purpose controls | `QuotaService, RateLimiter` | `tests/run-all.php` | Complete in source |
+| CF04-FR-006 | Private quarantine | `UploadService, ObjectStore` | `tests/run-all.php` | Complete in source |
+| CF04-FR-007 | Magic/MIME/container validation | `Validator, ArchiveInspector, ToolRunner` | `tests/run-all.php` | Complete in source |
+| CF04-FR-008 | Malware/archive/polyglot/bomb defense | `ScannerRegistry, ArchiveInspector` | `tests/run-all.php` | Complete in source |
+| CF04-FR-009 | Metadata stripping/preservation | `MetadataPolicy, ToolRunner` | `tests/run-all.php` | Complete in source |
+| CF04-FR-010 | Technical/content-safety signals | `SafetySignalService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-011 | Sandboxed workers | `ToolRunner` | `tests/run-all.php` | Complete in source |
+| CF04-FR-012 | Idempotent job graph | `JobService, ProcessingService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-013 | Image pipeline | `ImagePipeline` | `tests/run-all.php` | Complete in source |
+| CF04-FR-014 | Audio/video pipeline | `AvPipeline` | `tests/run-all.php` | Complete in source |
+| CF04-FR-015 | Document pipeline | `DocumentPipeline` | `tests/run-all.php` | Complete in source |
+| CF04-FR-016 | Derivative lineage | `DerivativeService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-017 | Encrypted object storage | `Keyring, Crypto, ObjectStore, KeyRotationService, KeyRotationInventoryStage` | `tests/run-all.php`; `tests/review-round-272-selective-key-rotation-capacity.php`; `tests/review-round-276-key-rotation-staged-candidates.php` | R276: durable non-destructive 250-row candidate journals for 2,302 stale key references, crash replay and active-key epoch refusal. No actual large-scale re-encryption through this stage: >2,000 affected aliases, durable safe grouped executor, leases, real KMS recovery and staging acceptance OPEN |
+| CF04-FR-018 | Delivery grant | `DeliveryService, Crypto` | `tests/run-all.php` | Complete in source |
+| CF04-FR-019 | Public CDN policy | `CdnRegistry, DeliveryService::publishPublic` | `tests/run-all.php` | Complete in source |
+| CF04-FR-020 | Private/restricted delivery | `DeliveryService::serve` | `tests/run-all.php` | Complete in source |
+| CF04-FR-021 | Download/disposition | `DownloadManagerService, DeliveryService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-022 | Integrity checks | `IntegrityService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-023 | Rights/consent binding | `RightsPolicy, DeliveryService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-024 | Retention policy | `RetentionService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-025 | Deletion propagation | `DeletionService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-026 | Legal/security hold | `LegalHoldService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-027 | Provider exit | `ProviderExitService, ProviderExitInventoryStage` | `tests/run-all.php`; `tests/review-round-270-provider-purge-live-target-integrity.php`; `tests/review-round-273-provider-exit-durable-segmented-inventory.php`; `tests/review-round-275-provider-inventory-complete-revalidation.php` | R275: exhaustive current source/segment item revalidation and tampered crash-replay protection after 2,301-item non-destructive staging. Actual single-plan cutover remains 2,000 eligible object limit; segmented copy/verify/switch/purge/rollback, owner fencing, provider staging and live verification OPEN |
+| CF04-FR-028 | Queue priorities/fairness | `JobService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-029 | Provider abstraction/webhooks | `ObjectStore, ProviderRegistry, WebhookService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-030 | Cost attribution/budgets | `CostService` | `tests/run-all.php`; `tests/review-round-241-cost-keyset-ledger.php` | Coded; R241 removes global 500k ledger cap; real MySQL-scale acceptance pending |
+| CF04-FR-031 | Safe repair/reprocess | `RepairService` | `tests/run-all.php` | Complete in source |
+| CF04-FR-032 | Restore/rebuild | `RestoreService, RestoreCheckpointStage` | `tests/run-all.php`; `tests/review-round-271-restore-inventory-fingerprint-fence.php`; `tests/review-round-277-restore-resumable-checkpoint-dryrun.php` | R277: durable, resumable, per-250-row read-only checkpoint pages for nine record families, 2,601 assets, replay and source drift detection. Does NOT execute DB/object restoration or unlock serving; immutable cross-resource snapshot, restore executor, KMS/owner integration, MySQL and staging restore acceptance OPEN |
+| CF04-FR-033 | Observability/audit | `Observability, Audit` | `tests/run-all.php` | Complete in source |
+
+## Cross-plan directives
+
+| Directive | Source | Evidence | Status |
+|---|---|---|---|
+| CHAT-XFER-001 | `TransferService`, `Auth::transferParties`, upload/delivery services | `tests/run-all.php` | Complete in source |
+| CHAT-QA-001 | quality gate, sequential review evidence, deterministic double build | exact-head CI | Complete in source |
+
+## Current rewritten-plan parity
+
+| Requirement | CF-04 source responsibility | Evidence | Source status |
+|---|---|---|---|
+| CF04-CEN-01 | Typed owner reference + C0-C5 class + rights/purpose/lawful-basis/retention/revocation envelope | `tests/new-plan-parity.php` | Complete in source |
+| CF04-CEN-02 | Quarantine + required scans + fail-closed processing | base suites + new-plan suite | Complete in source |
+| CF04-CEN-03 | Versioned/checksum lineage + stale-state blocking | base/adversarial suites | Complete in source |
+| CF04-CEN-04 | Purpose/privacy-bound grants + rights-aware CDN identity | `tests/new-plan-parity.php` | Complete in source |
+| CF04-CEN-05 | C0-only public CDN; restricted classes denied public delivery | `tests/new-plan-parity.php` | Complete in source |
+| CF04-CEN-06 | Accessibility provenance + qualified high-risk review | `AccessibilityMetadataService` + tests | Complete in source |
+| CF04-CEN-07 | Low-bandwidth/audio/text alternatives + resumable transfer | `RenditionSelector`, transfer suites | Complete in source |
+| CF04-CEN-08 | Rights/delete propagation through grants/CDN/derivatives/consumer projection | `RightsRevocationService`, `DeletionService` | Complete in source |
+| CF04-CEN-09 | Explicit degraded state; no silent widening/substitution | `DegradedStateService`, rendition/provider tests | Complete in source |
+| CF04-CEN-10 | Privacy-minimal allowlisted operational media telemetry | `PrivacyTelemetry` | Complete in source |
+
+### Native journeys
+
+| Journey | Source evidence | Status |
+|---|---|---|
+| CF04-NJ-01 | upload → quarantine → scan/type/rights → derivatives → owner review/publish-ready | Covered in source |
+| CF04-NJ-02 | AV transcode → accessibility metadata → low-bandwidth/playback fallback | Covered in source |
+| CF04-NJ-03 | private 1 GiB chunk/resume → scan → scoped delivery → revoke/purge | Covered in source |
+| CF04-NJ-04 | rights expiry/source deletion → revoke delivery/cache/derivatives → evidence | Covered in source |
+| CF04-NJ-05 | provider/queue outage → retry/dead-letter → repair without duplicate derivative | Covered in source |
+| CF04-NJ-06 | malware/polyglot/archive-bomb containment without preview/index leakage | Covered in source |
+
+## Approved Future-40 source capabilities
+
+The Future-40 layer is fail-closed. Capabilities that require specialist engines/providers require an approved adapter and do not simulate real-provider success when that adapter is absent.
+
+| Requirement | Capability | Evidence | Source status |
+|---|---|---|---|
+| CF04-FUT-001 | C2PA/content-credential provenance envelope | `class-scm-future40.php`, `tests/future40.php` | Complete in source |
+| CF04-FUT-002 | Synthetic-media declaration | same | Complete in source |
+| CF04-FUT-003 | Perceptual fingerprint registry | same | Complete in source |
+| CF04-FUT-004 | Privacy-safe near-duplicate detection | `PerceptualMediaService` | `tests/future40.php`; `tests/review-round-242-perceptual-keyset-duplicates.php` | Coded; R242 removes 100k fingerprint inventory cap; provider and large-scale acceptance pending |
+| CF04-FUT-005 | Storage-level safe deduplication | same | Complete in source |
+| CF04-FUT-006 | CDR safe reconstruction | same | Complete in source |
+| CF04-FUT-007 | Threat intelligence re-scan | `ContentSafetyUpgradeService` | `tests/future40.php`; `tests/review-round-243-rescan-cursor-fairness.php` | Coded; R243 provides bounded persistent keyset progress; live cron/provider acceptance pending |
+| CF04-FUT-008 | Emergency format/codec kill switch | same | Complete in source |
+| CF04-FUT-009 | Content-aware encoding plan | same | Complete in source |
+| CF04-FUT-010 | Objective quality scoring gate | same | Complete in source |
+| CF04-FUT-011 | Codec capability negotiation | same | Complete in source |
+| CF04-FUT-012 | Color/HDR/ICC lineage | same | Complete in source |
+| CF04-FUT-013 | Audio quality control | same | Complete in source |
+| CF04-FUT-014 | Smart poster/storyboard | same | Complete in source |
+| CF04-FUT-015 | Chapter/timecode infrastructure | same | Complete in source |
+| CF04-FUT-016 | Rich caption tracks | same | Complete in source |
+| CF04-FUT-017 | Audio-description tracks | same | Complete in source |
+| CF04-FUT-018 | Sign-language media track | same | Complete in source |
+| CF04-FUT-019 | OCR confidence/coordinate map | same | Complete in source |
+| CF04-FUT-020 | Accessibility manifest | `RichMediaMetadataService::accessibilityManifest` | `tests/future40.php`, `tests/review-round-239-accessibility-manifest-keyset.php` | Complete in source; R239 removes cross-type 100k inventory cap (real DB-scale acceptance pending) |
+| CF04-FUT-021 | Sensitive-data technical detection | same | Complete in source |
+| CF04-FUT-022 | Governed redaction derivatives | same | Complete in source |
+| CF04-FUT-023 | Multi-CDN failover | same | Complete in source |
+| CF04-FUT-024 | Origin shield/cache protection | same | Complete in source |
+| CF04-FUT-025 | Edge authorization profile | same | Complete in source |
+| CF04-FUT-026 | Network-adaptive upload | same | Complete in source |
+| CF04-FUT-027 | Encrypted offline package/grant | same | Complete in source |
+| CF04-FUT-028 | Cross-session/device resumable download | same | Complete in source |
+| CF04-FUT-029 | Regional residency pinning | same | Complete in source |
+| CF04-FUT-030 | WORM/object lock | same | Complete in source |
+| CF04-FUT-031 | Per-asset envelope encryption metadata | same | Complete in source |
+| CF04-FUT-032 | Crypto-agility policy | same | Complete in source |
+| CF04-FUT-033 | Multi-region disaster-recovery plan | same | Complete in source |
+| CF04-FUT-034 | Storage-tier optimization | same | Complete in source |
+| CF04-FUT-035 | Pre-processing cost estimate | same | Complete in source |
+| CF04-FUT-036 | Approved-provider auto-routing | same | Complete in source |
+| CF04-FUT-037 | Privacy-minimal QoE telemetry | same | Complete in source |
+| CF04-FUT-038 | Staging-only chaos/fault injection | same | Complete in source |
+| CF04-FUT-039 | Signed migration/export bundle | same | Complete in source |
+| CF04-FUT-040 | Versioned media SDK/contract kit | same | Complete in source |
+
+## Release boundary
+
+`Specified`, `Coded`, `Packaged`, `Automated-QA Green`, `Staging-Accepted`, `Live-Deployed` and `Operational` are distinct statuses. This matrix can support only repository/source claims. No staging, live or operational claim is made here.

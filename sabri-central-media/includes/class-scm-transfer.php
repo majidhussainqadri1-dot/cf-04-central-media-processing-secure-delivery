@@ -1,0 +1,182 @@
+<?php
+declare(strict_types=1);
+namespace Sabri\CentralMedia;
+
+final class TransferService {
+    public const MAX_FILE_BYTES=1073741824;
+    public static function normalize(array $input): array {
+        Utils::requireFields($input,[
+            'native_transfer_id','native_transfer_version','sender_user_id','recipient_type',
+            'expected_size','media_class','declared_name','relationship','consent_status',
+            'copyright_basis','confidentiality_class','abuse_policy_version'
+        ],'transfer_envelope_incomplete');
+        // Native identities are authorization inputs. Never coerce malformed values into valid IDs.
+        $sender=Utils::integer($input['sender_user_id'],'transfer_party_invalid',1);
+        $nativeVersion=Utils::integer($input['native_transfer_version'],'transfer_native_version_invalid',1);
+        $size=Utils::integer($input['expected_size'],'transfer_bounds_invalid',1,self::MAX_FILE_BYTES);
+        $type=$input['recipient_type'];
+        if(!is_string($type)||!in_array($type,['user','group'],true))
+            throw new Error('transfer_recipient_type_invalid','Recipient type must be canonical.',400);
+        $recipient=$type==='user'
+            ?Utils::integer($input['recipient_user_id']??null,'transfer_recipient_invalid',1)
+            :0;
+        if(array_key_exists('clinical_confidentiality',$input)&&!is_bool($input['clinical_confidentiality']))
+            throw new Error('transfer_confidentiality_boolean_invalid','Clinical confidentiality must be an explicit boolean.',400);
+        $groupRaw=$input['recipient_group_id']??'';
+        if(!is_string($groupRaw)||strlen($groupRaw)>96||$groupRaw!==Utils::text($groupRaw,96))
+            throw new Error('transfer_group_identity_invalid','Recipient group identity must not be changed during normalization.',400);
+        $group=$groupRaw;
+        if($type==='user'&&$group!=='')
+            throw new Error('transfer_recipient_ambiguous','User transfer cannot also carry group identity.',400);
+        if($type==='group'&&array_key_exists('recipient_user_id',$input)
+            &&$input['recipient_user_id']!==0&&$input['recipient_user_id']!==null)
+            throw new Error('transfer_recipient_ambiguous','Group transfer cannot also carry a user recipient.',400);
+        if($type==='user'&&$recipient===$sender)
+            throw new Error('transfer_recipient_invalid','Sender cannot be the recipient.',400);
+        if($type==='group'&&$group==='')
+            throw new Error('transfer_recipient_invalid','Recipient group is invalid.',400);
+        if(!is_string($input['consent_status'])||
+            !in_array($input['consent_status'],['granted','not_required'],true))
+            throw new Error('transfer_consent_denied','Transfer consent is not valid.',403);
+        $nativeRaw=$input['native_transfer_id'];
+        if(!is_string($nativeRaw)||strlen($nativeRaw)>191||$nativeRaw!==Utils::text($nativeRaw,191)||$nativeRaw==='')
+            throw new Error('transfer_native_identity_invalid','Native transfer identity must not be truncated or coerced.',400);
+        $nativeId=$nativeRaw;
+        $relationship=Utils::key((string)$input['relationship'],48);
+        $copyright=Utils::key((string)$input['copyright_basis'],48);
+        $confidentiality=$input['confidentiality_class'];
+        if(!is_string($confidentiality)||!in_array($confidentiality,['C3','C4','C5'],true))
+            throw new Error('transfer_confidentiality_class_invalid','Native transfer classification must be canonical C3, C4 or C5.',400);
+        $abuseVersion=Utils::text((string)$input['abuse_policy_version'],32);
+        if($nativeId===''||$relationship===''||$copyright===''||$confidentiality===''||$abuseVersion==='')
+            throw new Error('transfer_envelope_incomplete','Transfer governance identity is incomplete.',400);
+        $mediaClass=$input['media_class'];
+        if(!is_string($mediaClass)||!in_array($mediaClass,Policy::MEDIA,true))
+            throw new Error('transfer_media_class_invalid','Media class must be an approved canonical type.',400);
+        $now=Utils::now();
+        $expires=array_key_exists('expires_at',$input)
+            ?Utils::integer($input['expires_at'],'transfer_expiry_invalid',$now+300,$now+604800)
+            :$now+604800;
+        return [
+            'native_transfer_id'=>$nativeId,'native_transfer_version'=>$nativeVersion,
+            'sender_user_id'=>$sender,'recipient_type'=>$type,'recipient_user_id'=>$recipient,
+            'recipient_group_id'=>$group,
+            'recipient_ref_hash'=>Utils::hashReference($type.':'.($type==='user'?$recipient:$group)),
+            'expected_size'=>$size,'media_class'=>$mediaClass,
+            'declared_name'=>Utils::filename((string)$input['declared_name']),
+            'relationship'=>$relationship,'consent_status'=>$input['consent_status'],
+            'copyright_basis'=>$copyright,
+            'clinical_confidentiality'=>Utils::bool($input['clinical_confidentiality']??false),
+            'confidentiality_class'=>$confidentiality,'abuse_policy_version'=>$abuseVersion,
+            'expires_at'=>$expires
+        ];
+    }
+    public static function create(array $input,array $uploadPolicy,array $quotaLimits=[]): array {
+        RuntimeGuard::requireReady(['streaming']);$envelope=self::normalize($input);Auth::assertActor((int)$envelope['sender_user_id']);Auth::transferParties($envelope,'transfer_create');$policy=Policy::normalize($uploadPolicy,true);if($envelope['media_class']!==$policy['media_class'])throw new Error('transfer_media_policy_mismatch','Transfer media class must match its upload policy.',400);if(!in_array($envelope['confidentiality_class'],['C3','C4','C5'],true)
+            ||$envelope['confidentiality_class']!==$policy['privacy_class'])
+            throw new Error('transfer_confidentiality_class_mismatch','Owner transfer classification must match the upload privacy policy.',403);
+        if($envelope['clinical_confidentiality']!==$policy['rights']['clinical_confidentiality']
+            ||($envelope['clinical_confidentiality']&&!in_array($policy['privacy_class'],['C4','C5'],true)))
+            throw new Error('transfer_clinical_rights_mismatch','Clinical transfer confidentiality, data class and owner rights must agree.',403);
+        if($policy['owner_domain']!=='file17'||$policy['purpose']!=='verified-user-transfer'||!in_array($policy['privacy_class'],['C3','C4','C5'],true)||$policy['max_size_bytes']>self::MAX_FILE_BYTES)throw new Error('transfer_policy_invalid','Transfer policy must remain private, File 17-owned and within 1 GiB.',503);$decision=DomainRegistry::decision('file17','authorize_transfer_create',['transfer'=>$envelope,'policy'=>$policy]);if((int)$decision['object_version']!==(int)$envelope['native_transfer_version'])throw new Error('transfer_version_stale','Native transfer version is stale.',409);foreach(['relationship_allowed','consent_valid','copyright_valid','confidentiality_allowed','abuse_policy_allowed','recipient_authorized'] as $flag)if(($decision[$flag]??false)!==true)throw new Error('transfer_policy_denied','File 17 denied transfer policy.',403,['flag'=>$flag]);$id=Utils::id('tr');$record=['actor_id'=>$envelope['sender_user_id'],'transfer_id'=>$id]+$envelope+['policy'=>$policy,'policy_hash'=>$policy['policy_hash'],'status'=>'pending_upload','native_decision_version'=>$decision['contract_version'],'created_at'=>Utils::now()];$record=RecordStore::put('transfer',$id,$record);Audit::record('transfer_created',['transfer_id'=>$id,'actor_id'=>$envelope['sender_user_id'],'recipient_type'=>$envelope['recipient_type'],'expected_size'=>$envelope['expected_size']]);self::notify('transfer.created',$record);return $record;
+    }
+    public static function bindAsset(string $transferId,string $assetId,int $sender): array {RuntimeGuard::requireReady(['streaming']);Auth::assertActor($sender);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);if((int)$transfer['sender_user_id']!==$sender||($transfer['status']??'')!=='pending_upload'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_state_denied','Transfer cannot bind asset.',403);Auth::transferParties($transfer,'transfer_bind');$asset=RecordStore::get('asset',$assetId);if(!$asset||($asset['owner_domain']??'')!=='file17'||($asset['owner_object']??'')!==$transfer['native_transfer_id']||(int)$asset['size']!==(int)$transfer['expected_size']||($asset['policy_hash']??'')!==$transfer['policy_hash'])throw new Error('transfer_asset_mismatch','Asset does not match transfer.',409);if((int)($asset['actor_id']??0)!==$sender)throw new Error('transfer_asset_actor_mismatch','Transfer asset belongs to a different actor.',403);if((int)($asset['object_version']??0)!==(int)$transfer['native_transfer_version'])throw new Error('transfer_bind_version_stale','Transfer asset owner version does not match the native transfer.',409);$transfer['asset_id']=$assetId;$transfer['status']='processing';$transfer['bound_at']=Utils::now();return RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);}
+    private static function assertNativeAssetBinding(array $transfer,array $asset): void {
+        $owner=(string)($transfer['native_transfer_id']??'');
+        $policy=(array)($transfer['policy']??[]);
+        $ownerRights=(array)($policy['rights']??[]);
+        $assetRights=(array)($asset['rights']??[]);
+        if(($asset['owner_domain']??'')!=='file17'
+            ||$owner===''||($asset['owner_object']??'')!==$owner
+            ||Utils::integer($asset['size']??null,'transfer_asset_mismatch',1)!==Utils::integer($transfer['expected_size']??null,'transfer_asset_mismatch',1,self::MAX_FILE_BYTES)
+            ||($asset['policy_hash']??'')!==($transfer['policy_hash']??null)
+            ||($asset['actor_id']??0)!==($transfer['sender_user_id']??null)
+            ||($asset['object_version']??0)!==($transfer['native_transfer_version']??null)
+            ||($asset['privacy_class']??'')!==($policy['privacy_class']??null)
+            ||($asset['media_class']??'')!==($transfer['media_class']??null)
+            ||($assetRights['policy_hash']??'')!==($ownerRights['policy_hash']??null))
+            throw new Error('transfer_asset_mismatch','Transfer asset no longer matches the File 17 native identity, sender and approved policy.',409);
+    }
+    public static function markReady(string $transferId): array {RuntimeGuard::requireReady(['streaming']);$t=RecordStore::get('transfer',$transferId);if(!$t)throw new Error('transfer_not_found','Transfer not found.',404);if(($t['status']??'')!=='processing'||(int)($t['expires_at']??0)<=Utils::now())throw new Error('transfer_ready_state_denied','Only an active processing transfer can become ready.',409);$asset=RecordStore::get('asset',(string)($t['asset_id']??''));if(!$asset||($asset['status']??'')!=='ready')throw new Error('transfer_asset_not_ready','Transfer asset is not ready.',409);self::assertNativeAssetBinding($t,$asset);Auth::transferParties($t,'transfer_ready');$decision=DomainRegistry::decision('file17','authorize_transfer_ready',['transfer'=>$t,'asset'=>$asset]);if((int)$decision['object_version']!==(int)$t['native_transfer_version']||(int)$decision['object_version']!==(int)($asset['object_version']??0))throw new Error('transfer_ready_version_stale','Transfer readiness authorization is stale.',409);foreach(['relationship_allowed','consent_valid','copyright_valid','confidentiality_allowed','abuse_policy_allowed','recipient_authorized'] as $flag)if(($decision[$flag]??false)!==true)throw new Error('transfer_policy_denied','Transfer revalidation failed.',403,['flag'=>$flag]);$t['status']='ready';$t['ready_at']=Utils::now();$t=RecordStore::put('transfer',(string)$t['id'],$t,(int)$t['version']);self::notify('transfer.ready',$t);return $t;}
+    public static function issueRecipientGrant(string $transferId,int $recipient,string $sessionId,array $context=[]): string {Auth::assertActor($recipient);$transfer=RecordStore::get('transfer',$transferId);if(!$transfer||($transfer['status']??'')!=='ready'||(int)$transfer['expires_at']<=Utils::now())throw new Error('transfer_not_ready','Transfer is not ready or expired.',409);if($transfer['recipient_type']==='user'&&(int)$transfer['recipient_user_id']!==$recipient)throw new Error('transfer_recipient_denied','Recipient does not match the transfer.',403);$asset=RecordStore::get('asset',(string)($transfer['asset_id']??''));if(!$asset||($asset['status']??'')!=='ready')throw new Error('transfer_asset_not_ready','Transfer asset is not ready.',409);self::assertNativeAssetBinding($transfer,$asset);Auth::transferParties($transfer,'transfer_download');$decision=DomainRegistry::decision('file17','authorize_transfer_delivery',['transfer'=>$transfer,'asset'=>$asset,'recipient_user_id'=>$recipient,'session_id'=>$sessionId,'context'=>Utils::redact($context)]);if((int)$decision['object_version']!==(int)$transfer['native_transfer_version']||(int)$decision['object_version']!==(int)($asset['object_version']??0))throw new Error('transfer_delivery_version_stale','Transfer delivery authorization is stale.',409);if(($decision['recipient_authorized']??false)!==true)throw new Error('transfer_recipient_denied','Recipient is not authorized.',403);$audience=$transfer['recipient_type']==='user'?['type'=>'user','user_id'=>$recipient]:['type'=>'group','group_id'=>$transfer['recipient_group_id'],'user_id'=>$recipient];$deliveryContext=array_replace($context,['audience_type'=>'recipient','territory'=>$context['territory']??'GLOBAL']);$remaining=Utils::integer($transfer['expires_at'],'transfer_expiry_invalid',1)-Utils::now();
+        // Never mint a signed grant that can outlive the File 17 native transfer.
+        if($remaining<=2)throw new Error('transfer_not_ready','Transfer is too close to expiry to grant access.',409);
+        $grantTtl=min(300,$remaining-2);
+        return DeliveryService::issue((string)$transfer['asset_id'],null,$recipient,'file17-transfer',$audience,$deliveryContext,'download',['allow_ranges'=>$transfer['policy']['delivery']['allow_ranges'],'max_range_bytes'=>$transfer['policy']['delivery']['max_range_bytes']],$sessionId,$grantTtl,50,$transferId);}
+    public static function revoke(string $transferId,int $actor,string $reason): array {
+        Auth::assertActor($actor,'manage_options');
+        $reason=Utils::key($reason,64);
+        if($reason==='')throw new Error('transfer_revoke_reason_required','Transfer revoke reason required.',400);
+        $transfer=RecordStore::get('transfer',$transferId);
+        if(!$transfer)throw new Error('transfer_not_found','Transfer not found.',404);
+        // Authorize before returning or inspecting a previously revoked owner's record.
+        if($actor!==(int)$transfer['sender_user_id'])Auth::capability('media_reprocess');
+        if(($transfer['status']??'')==='revoked'){
+            // A prior run may have committed transfer revocation but failed to revoke
+            // all issued grants. Do not make that partial failure permanently unrecoverable.
+            if(!empty($transfer['asset_id']))
+                DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');
+            return $transfer;
+        }
+        $decision=DomainRegistry::decision('file17','authorize_transfer_revoke',[
+            'transfer'=>$transfer,'actor_id'=>$actor,'reason'=>$reason
+        ]);
+        if((int)$decision['object_version']!==(int)$transfer['native_transfer_version'])
+            throw new Error('transfer_revoke_version_stale','Transfer revocation authorization is stale.',409);
+        $transfer['status']='revoked';
+        $transfer['revoked_at']=Utils::now();
+        $transfer['revoke_reason']=$reason;
+        $transfer=RecordStore::put('transfer',$transferId,$transfer,(int)$transfer['version']);
+        if(!empty($transfer['asset_id']))
+            DeliveryService::revokeForAsset((string)$transfer['asset_id'],'transfer_revoked');
+        self::notify('transfer.revoked',$transfer);
+        return $transfer;
+    }
+    private static function notify(string $event,array $payload): void {if(function_exists('do_action'))do_action('scm_file19_notification',['event'=>$event,'payload'=>Utils::redact($payload)]);}
+}
+
+final class DownloadManagerService {
+    public static function create(int $actor,string $assetId,?string $derivativeId,string $mode,array $context=[]): array {RuntimeGuard::requireReady(['streaming']);Auth::assertActor($actor);Auth::verifiedUser($actor,'download_create','file20',['asset_id'=>$assetId]);$asset=RecordStore::get('asset',$assetId);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);if(!in_array($mode,['view','download'],true))throw new Error('download_mode_invalid','Download mode invalid.',400);if($mode==='download'&&!$asset['policy']['delivery']['allow_download'])throw new Error('download_denied','Download not allowed.',403);$decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'derivative_id'=>$derivativeId,'actor_id'=>$actor,'mode'=>$mode,'context'=>Utils::redact($context)]);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('domain_object_version_stale','Owner version stale.',409);$id=Utils::id('dl');$record=['actor_id'=>$actor,'download_id'=>$id,'asset_id'=>$assetId,'derivative_id'=>$derivativeId,'mode'=>$mode,'status'=>'authorized','owner_domain'=>$asset['owner_domain'],'object_version'=>$asset['object_version'],'created_at'=>Utils::now(),'expires_at'=>Utils::now()+3600];return RecordStore::put('download',$id,$record);}
+    public static function grant(string $downloadId,int $actor,string $sessionId,array $context=[]): string {Auth::assertActor($actor);$download=RecordStore::get('download',$downloadId);if(!$download||($download['status']??'')!=='authorized'||(int)$download['expires_at']<=Utils::now())throw new Error('download_task_invalid','Download task invalid or expired.',403);if((int)$download['actor_id']!==$actor)throw new Error('download_actor_denied','Download task belongs to another user.',403);$asset=RecordStore::get('asset',(string)$download['asset_id']);if(!$asset)throw new Error('asset_not_found','Asset not found.',404);if((int)($download['object_version']??0)!==(int)($asset['object_version']??0))throw new Error('download_authorization_stale','Download task owner version is stale.',409);$decision=DomainRegistry::decision($asset['owner_domain'],'authorize_download',['asset'=>$asset,'derivative_id'=>$download['derivative_id']?:null,'actor_id'=>$actor,'mode'=>$download['mode'],'context'=>Utils::redact($context),'phase'=>'grant']);if((int)$decision['object_version']!==(int)$asset['object_version'])throw new Error('download_authorization_stale','Download authorization is stale.',409);$audience=['type'=>'user','user_id'=>$actor];return DeliveryService::issue((string)$download['asset_id'],$download['derivative_id']?:null,$actor,'file20-download-manager',$audience,array_replace($context,['audience_type'=>'private']),(string)$download['mode'],['allow_ranges'=>true,'max_range_bytes'=>8388608],$sessionId,300,20);}
+    public static function list(int $actor): array {Auth::assertActor($actor);return RecordStore::list('download',$actor);}
+}
+
+final class WorkspaceUploadService {
+    private static function flag(mixed $value,string $name): bool {
+        if(!is_bool($value))throw new Error('workspace_boolean_invalid','Workspace '.$name.' must be an explicit boolean.',400);
+        return $value;
+    }
+    private static function trimTime(mixed $value): float {
+        if(is_int($value)||is_float($value))$result=(float)$value;
+        elseif(is_string($value)&&preg_match('/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/D',$value))$result=(float)$value;
+        else throw new Error('audio_trim_invalid','Audio trim time must be a canonical number.',400);
+        if(!is_finite($result)||$result<0.0)throw new Error('audio_trim_invalid','Audio trim time must be nonnegative and finite.',400);
+        return $result;
+    }
+    public static function normalize(string $type,array $input,int $actor): array {
+        if(!in_array($type,['image','audio'],true))throw new Error('workspace_type_invalid','Workspace upload type invalid.',400);
+        Auth::assertActor($actor);
+        Auth::verifiedUser($actor,'workspace_upload','workspace',['type'=>$type]);
+        $base=['actor_id'=>$actor,'workspace_type'=>$type,'source'=>Utils::key((string)($input['source']??'device'),32),'strip_location_metadata'=>true,'created_at'=>Utils::now()];
+        if($type==='image'){
+            $rotation=Utils::integer($input['rotation_degrees']??0,'image_rotation_invalid',0,270);
+            if(!in_array($rotation,[0,90,180,270],true))throw new Error('image_rotation_invalid','Image rotation invalid.',400);
+            $quality=Utils::integer($input['compression_quality']??82,'image_compression_quality_invalid',40,95);
+            $crop=[
+                'requested'=>self::flag($input['crop_requested']??false,'crop_requested'),
+                'x'=>Utils::integer($input['crop_x']??0,'image_crop_invalid',0,100000),
+                'y'=>Utils::integer($input['crop_y']??0,'image_crop_invalid',0,100000),
+                'width'=>Utils::integer($input['crop_width']??0,'image_crop_invalid',0,100000),
+                'height'=>Utils::integer($input['crop_height']??0,'image_crop_invalid',0,100000)
+            ];
+            if($crop['requested']&&($crop['width']<1||$crop['height']<1))throw new Error('image_crop_invalid','Requested crop must have positive dimensions.',400);
+            $base+=['rotation_degrees'=>$rotation,'compression_quality'=>$quality,'crop'=>$crop];
+        }else{
+            $start=self::trimTime($input['trim_start']??0);
+            $end=self::trimTime($input['trim_end']??0);
+            if($end>0&&$end<=$start)throw new Error('audio_trim_invalid','Audio trim range invalid.',400);
+            $base+=['trim_start'=>$start,'trim_end'=>$end,'normalize_loudness'=>self::flag($input['normalize_loudness']??true,'normalize_loudness')];
+        }
+        return $base;
+    }
+}
