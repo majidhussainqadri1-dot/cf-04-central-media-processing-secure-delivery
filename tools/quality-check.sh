@@ -201,6 +201,7 @@ run_php "$ROOT/tests/review-round-266-provider-rollback-all-sources-preflight.ph
 run_php "$ROOT/tests/review-round-267-restore-rights-malformed-failclosed.php"
 run_php "$ROOT/tests/review-round-268-restore-tombstone-identity.php"
 run_php "$ROOT/tests/review-round-270-provider-purge-live-target-integrity.php"
+run_php "$ROOT/tests/review-round-271-restore-inventory-fingerprint-fence.php"
 run_php "$ROOT/tests/review-round-11-governance.php"
 run_php "$ROOT/tests/review-round-12-security.php"
 run_php "$ROOT/tests/review-round-13-adversarial.php"
