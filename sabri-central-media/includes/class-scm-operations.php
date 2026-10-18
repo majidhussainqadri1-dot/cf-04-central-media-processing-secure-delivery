@@ -547,7 +547,6 @@ final class KeyRotationInventoryStage {
         $items=[];
         foreach($page as $record){
             if(($record['status']??null)==='deleted'||empty($record['object_key']))continue;
-            if(($record['storage']['key_id']??null)===$stage['active_key_id'])continue;
             $objectKey=$record['object_key']??null;
             $sha=$record['sha256']??null;
             $provider=$record['storage']['provider_id']??null;
@@ -557,7 +556,9 @@ final class KeyRotationInventoryStage {
                !is_string($sha)||!preg_match('/^[a-f0-9]{64}$/D',$sha)||
                !is_string($provider)||$provider===''||Utils::key($provider,64)!==$provider||
                !is_string($oldKey)||$oldKey===''||Utils::key($oldKey,64)!==$oldKey)
-                throw new Error('key_rotation_identity_invalid','Stale key reference is noncanonical.',409);
+                throw new Error('key_rotation_identity_invalid','Key inventory reference is noncanonical, even when labelled already-current.',409);
+            // A current-key record is skipped only after its identity is verified.
+            if($oldKey===$stage['active_key_id'])continue;
             $items[]=['type'=>$family,'id'=>$record['id'],'provider_id'=>$provider,
                 'object_key'=>$objectKey,'sha256'=>$sha,'size'=>$size,
                 'old_key_id'=>$oldKey,'status'=>'candidate_unfenced'];
