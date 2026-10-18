@@ -208,6 +208,7 @@ run_php "$ROOT/tests/review-round-275-provider-inventory-complete-revalidation.p
 run_php "$ROOT/tests/review-round-276-key-rotation-staged-candidates.php"
 run_php "$ROOT/tests/review-round-277-restore-resumable-checkpoint-dryrun.php"
 run_php "$ROOT/tests/review-round-279-segmented-provider-shadow-copy.php"
+run_php "$ROOT/tests/review-round-280-key-candidate-complete-verification.php"
 run_php "$ROOT/tests/review-round-11-governance.php"
 run_php "$ROOT/tests/review-round-12-security.php"
 run_php "$ROOT/tests/review-round-13-adversarial.php"
