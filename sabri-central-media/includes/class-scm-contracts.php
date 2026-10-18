@@ -11,9 +11,14 @@ final class RuntimeGuard {
         ProviderRegistry::store();
         foreach($capabilities as $capability) ProviderRegistry::assertCapability((string)$capability);
         foreach(['file00','file17'] as $domain) if(!DomainRegistry::has($domain)) throw new Error('domain_contract_unavailable','Required owner contract unavailable.',503,['domain'=>$domain]);
-        if(function_exists('apply_filters')){
+        // Lack of the WordPress approval hook is not permission to activate.
+        // The test-only exemption must never leak into ordinary runtime paths.
+        if(!(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true)){
+            if(!function_exists('apply_filters'))
+                throw new Error('activation_evidence_missing','Approved staging/provider/migration/rollback evidence is required.',503);
             $evidence=apply_filters('scm_activation_evidence',null);
-            if(!(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true) && (!is_array($evidence)||($evidence['approved']??false)!==true)) throw new Error('activation_evidence_missing','Approved staging/provider/migration/rollback evidence is required.',503);
+            if(!is_array($evidence)||($evidence['approved']??false)!==true)
+                throw new Error('activation_evidence_missing','Approved staging/provider/migration/rollback evidence is required.',503);
         }
     }
 }
