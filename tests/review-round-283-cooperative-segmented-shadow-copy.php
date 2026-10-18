@@ -90,7 +90,17 @@ ok(ProviderRegistry::activeId()===$active&&RecordStore::all('provider_exit')===[
    &&RecordStore::get('asset','r283-z-file17-00')['storage']['provider_id']==='source-private',
    'R283 large inventory shadow coordinator cannot cut over, purge source or modify native owners');
 $copies=RecordStore::all('provider_exit_shadow_segment',0,null,20);
-$key=$copies[0]['copies'][0]['target_key'];
+$key=null;
+foreach($copies as $segment){
+    foreach(($segment['copies']??[]) as $entry){
+        if(is_string($entry['target_key']??null)&&$entry['target_key']!==''){
+            $key=$entry['target_key'];
+            break 2;
+        }
+    }
+}
+ok(is_string($key)&&$key!=='',
+   'R283 choose a genuine completed shadow-copy target across all segments');
 $target->delete($key);
 r283put($target,$key,'r283-corrupted-shadow-bytes');
 err(fn()=>ProviderExitShadowCopyStage::advanceInventory($stage['id'],11,1),
