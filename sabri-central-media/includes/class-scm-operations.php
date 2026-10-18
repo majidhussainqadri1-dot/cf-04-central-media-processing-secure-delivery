@@ -596,6 +596,65 @@ final class KeyRotationInventoryStage {
         $stage['updated_at']=Utils::now();
         return RecordStore::put('key_rotation_inventory',$id,$stage,(int)$stage['version']);
     }
+
+    /** Full source/journal recheck; advisory only until alias write fencing exists. */
+    public static function verifyComplete(string $id,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $stage=RecordStore::get('key_rotation_inventory',$id);
+        if(!$stage||($stage['status']??null)!=='inventory_complete_unfenced'||
+           ($stage['record_family']??null)!=='complete'||
+           ($stage['after_id']??null)!==''||
+           ($stage['page_size']??null)!==250)
+            throw new Error('key_rotation_inventory_not_complete','Key inventory discovery is incomplete.',409);
+        Keyring::assertReady();
+        if(($stage['active_key_id']??null)!==Keyring::activeId())
+            throw new Error('key_rotation_inventory_key_changed','Encryption key epoch changed after staging.',409);
+        $hash=str_repeat('0',64);$segments=0;$visited=0;$stale=0;
+        foreach(['asset','derivative'] as $family){
+            $after='';
+            do{
+                $page=RecordStore::scan($family,250,$after);
+                $pageHash=hash('sha256',Utils::canonicalJson($page));
+                $last=$page===[]?$after:(string)$page[count($page)-1]['id'];
+                $segmentId=hash('sha256',$id.'|'.$family.'|'.$after);
+                $segment=RecordStore::get('key_rotation_inventory_segment',$segmentId);
+                $expected=[];
+                foreach($page as $asset){
+                    if(($asset['status']??null)==='deleted'||empty($asset['object_key']))continue;
+                    if(($asset['storage']['key_id']??null)===$stage['active_key_id'])continue;
+                    $expected[]=['type'=>$family,'id'=>$asset['id'],
+                        'provider_id'=>$asset['storage']['provider_id']??null,
+                        'object_key'=>$asset['object_key']??null,
+                        'sha256'=>$asset['sha256']??null,
+                        'size'=>$asset['size']??null,
+                        'old_key_id'=>$asset['storage']['key_id']??null,
+                        'status'=>'candidate_unfenced'];
+                }
+                if(!$segment||($segment['inventory_id']??null)!==$id||
+                   ($segment['record_family']??null)!==$family||
+                   ($segment['status']??null)!=='candidate_unfenced'||
+                   ($segment['after_id']??null)!==$after||
+                   ($segment['last_id']??null)!==$last||
+                   ($segment['raw_rows']??null)!==count($page)||
+                   ($segment['page_hash']??null)!==$pageHash||
+                   !is_array($segment['items']??null)||
+                   Utils::canonicalJson($segment['items'])!==Utils::canonicalJson($expected))
+                    throw new Error('key_rotation_inventory_drift','Stale-key candidate segment changed after discovery.',409);
+                $hash=hash('sha256',$hash.'|'.$segmentId.'|'.$pageHash);
+                $segments++;$visited+=count($page);$stale+=count($expected);
+                if(count($page)<250)break;
+                $after=$last;
+            }while(true);
+        }
+        if(($stage['chain_hash']??null)!==$hash||
+           ($stage['segments']??null)!==$segments||
+           ($stage['visited_rows']??null)!==$visited||
+           ($stage['stale_references']??null)!==$stale)
+            throw new Error('key_rotation_inventory_drift','Stale-key discovery totals or chained proof changed.',409);
+        return ['inventory_id'=>$id,'status'=>'verified_unfenced',
+            'segments'=>$segments,'visited_rows'=>$visited,
+            'stale_references'=>$stale,'chain_hash'=>$hash];
+    }
 }
 
 final class KeyRotationService {
