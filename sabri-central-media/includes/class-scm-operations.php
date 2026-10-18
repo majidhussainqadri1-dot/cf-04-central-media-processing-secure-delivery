@@ -344,6 +344,175 @@ final class ProviderExitInventoryStage {
  * Candidate records are NOT safe atomic ciphertext groups; an executable
  * worker must gather every current/stale alias and acquire owner fencing.
  */
+
+/**
+ * Resumable, bounded non-destructive provider-exit shadow copying.
+ *
+ * Explicitly UNFENCED: physical copy and hash validation are not a
+ * cross-owner cutover transaction. No authoritative mapping, source
+ * ciphertext, active provider or credential may be changed here.
+ */
+final class ProviderExitShadowCopyStage {
+    private static function loaded(string $inventoryId,int $actor): array {
+        Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
+        $state=RecordStore::get('provider_exit_inventory',$inventoryId);
+        if(!$state||($state['status']??null)!=='inventory_complete_unfenced')
+            throw new Error('provider_exit_shadow_inventory_incomplete',
+                'Only completed inventory plans may be shadow-copied.',409);
+        ProviderExitInventoryStage::verifyComplete($inventoryId,$actor);
+        return $state;
+    }
+    private static function hashObject(ObjectStore $store,string $key): array {
+        $stream=$store->openStream($key);
+        try{return Utils::streamHash($stream,1073741824);}
+        finally{fclose($stream);}
+    }
+    private static function expected(array $item,array $stage): array {
+        if(($item['status']??null)!=='planned_unfenced'||
+            !in_array(($item['type']??null),['asset','derivative'],true)||
+            !is_string($item['id']??null)||$item['id']===''||
+            !is_string($item['asset_id']??null)||$item['asset_id']===''||
+            !is_string($item['object_key']??null)||
+            !preg_match('/^[a-f0-9]{64}$/D',$item['object_key'])||
+            !is_string($item['sha256']??null)||
+            !preg_match('/^[a-f0-9]{64}$/D',$item['sha256']))
+            throw new Error('provider_exit_shadow_identity_invalid','Untrusted staged item identity.',409);
+        $bytes=Utils::integer($item['size']??null,
+            'provider_exit_shadow_identity_invalid',0,1073741824);
+        $current=RecordStore::get($item['type'],$item['id']);
+        if(!$current||($current['status']??null)==='deleted'||
+            ($current['storage']['provider_id']??null)!==$stage['source_provider']||
+            ($current['object_key']??null)!==$item['object_key']||
+            ($current['sha256']??null)!==$item['sha256']||
+            ($current['size']??null)!==$bytes||
+            ($item['type']==='derivative'&&($current['asset_id']??null)!==$item['asset_id']))
+            throw new Error('provider_exit_shadow_mapping_stale',
+                'Authoritative source mapping changed during shadow copying.',409);
+        LegalHoldService::assertNoHold($item['asset_id'],'provider_exit');
+        ResidencyCryptoService::assertProviderRegion($item['asset_id'],(string)$stage['target_provider']);
+        return ['sha256'=>$item['sha256'],'size'=>$bytes,'key'=>$item['object_key']];
+    }
+
+    /** Move at most 25 copied items forward, with a durable per-segment CAS cursor. */
+    public static function copySegment(string $inventoryId,string $segmentId,int $actor,int $limit=10): array {
+        if($limit<1||$limit>25)
+            throw new Error('provider_exit_shadow_limit_invalid','Shadow batch size must be 1–25.',400);
+        $stage=self::loaded($inventoryId,$actor);
+        $segment=RecordStore::get('provider_exit_inventory_segment',$segmentId);
+        if(!$segment||($segment['inventory_id']??null)!==$inventoryId||
+            ($segment['status']??null)!=='planned_unfenced'||
+            !is_array($segment['items']??null)||count($segment['items'])>250)
+            throw new Error('provider_exit_shadow_segment_invalid','Segment is not a valid stage item journal.',409);
+        $copyId=hash('sha256',$inventoryId.'|'.$segmentId);
+        $row=RecordStore::get('provider_exit_shadow_segment',$copyId);
+        if(!$row)$row=RecordStore::put('provider_exit_shadow_segment',$copyId,[
+            'actor_id'=>$actor,'inventory_id'=>$inventoryId,'segment_id'=>$segmentId,
+            'status'=>'copying_unfenced','next_index'=>0,'copies'=>[],
+            'created_at'=>Utils::now()
+        ],0);
+        if(($row['status']??null)==='copied_unfenced'){
+            if(($row['next_index']??null)!==count($segment['items'])||
+               count($row['copies']??[])!==count($segment['items']))
+                throw new Error('provider_exit_shadow_journal_invalid','Completed shadow journal is incomplete.',409);
+            return $row;
+        }
+        if(($row['status']??null)!=='copying_unfenced'||
+           !is_int($row['next_index']??null)||
+           $row['next_index']<0||$row['next_index']>count($segment['items'])||
+           !is_array($row['copies']??null)||count($row['copies'])!==$row['next_index'])
+            throw new Error('provider_exit_shadow_journal_invalid','Shadow copy checkpoint is invalid.',409);
+        $source=ProviderRegistry::get((string)$stage['source_provider']);
+        $target=ProviderRegistry::get((string)$stage['target_provider']);
+        $until=min(count($segment['items']),$row['next_index']+$limit);
+        for($i=$row['next_index'];$i<$until;$i++){
+            $item=$segment['items'][$i];
+            $identity=self::expected($item,$stage);
+            $sourceStats=self::hashObject($source,$identity['key']);
+            if($sourceStats['size']!==$identity['size']||
+               !hash_equals($sourceStats['sha256'],$identity['sha256']))
+                throw new Error('provider_exit_shadow_source_mismatch',
+                    'Source bytes differ from the staged original.',409);
+            $targetKey=hash('sha256','provider-shadow|'.$inventoryId.'|'.$segmentId.
+                '|'.$identity['key'].'|'.$identity['sha256']);
+            $stored=$source->copyTo($identity['key'],$target,$targetKey);
+            if(!is_array($stored))
+                throw new Error('provider_exit_shadow_copy_invalid','Object store copy evidence is invalid.',503);
+            $targetStats=self::hashObject($target,$targetKey);
+            if($targetStats['size']!==$identity['size']||
+               !hash_equals($targetStats['sha256'],$identity['sha256']))
+                throw new Error('provider_exit_shadow_target_mismatch',
+                    'Shadow target bytes do not match source identity.',409);
+            $row['copies'][]=['type'=>$item['type'],'id'=>$item['id'],
+                'source_key'=>$identity['key'],'target_key'=>$targetKey,
+                'sha256'=>$identity['sha256'],'size'=>$identity['size'],
+                'status'=>'copied_unfenced'];
+            $row['next_index']=$i+1;
+            $row['updated_at']=Utils::now();
+            // Persist each successfully verified copy. Failed next copy resumes here.
+            $row=RecordStore::put('provider_exit_shadow_segment',$copyId,
+                $row,(int)$row['version']);
+        }
+        if($row['next_index']===count($segment['items'])){
+            $row['status']='copied_unfenced';
+            $row['completed_at']=Utils::now();
+            $row=RecordStore::put('provider_exit_shadow_segment',$copyId,
+                $row,(int)$row['version']);
+        }
+        return $row;
+    }
+
+    /** Validate all source/target bytes again; still no authority to cut over. */
+    public static function verifyComplete(string $inventoryId,int $actor): array {
+        $stage=self::loaded($inventoryId,$actor);
+        $target=ProviderRegistry::get((string)$stage['target_provider']);
+        $source=ProviderRegistry::get((string)$stage['source_provider']);
+        $after='';$segments=0;$objects=0;
+        do{
+            $page=RecordStore::scan('provider_exit_inventory_segment',250,$after);
+            foreach($page as $seg){
+                if(($seg['inventory_id']??null)!==$inventoryId)continue;
+                $copyId=hash('sha256',$inventoryId.'|'.$seg['id']);
+                $row=RecordStore::get('provider_exit_shadow_segment',$copyId);
+                $items=$seg['items']??null;
+                if(!is_array($items)||!$row||
+                   ($row['status']??null)!=='copied_unfenced'||
+                   ($row['next_index']??null)!==count($items)||
+                   !is_array($row['copies']??null)||
+                   count($row['copies'])!==count($items))
+                    throw new Error('provider_exit_shadow_incomplete','At least one shadow segment is unverified.',409);
+                foreach($items as $index=>$item){
+                    $expected=self::expected($item,$stage);
+                    $proof=$row['copies'][$index]??null;
+                    $targetKey=hash('sha256','provider-shadow|'.$inventoryId.'|'.$seg['id'].
+                        '|'.$expected['key'].'|'.$expected['sha256']);
+                    if(!is_array($proof)||
+                       ($proof['type']??null)!==$item['type']||
+                       ($proof['id']??null)!==$item['id']||
+                       ($proof['source_key']??null)!==$expected['key']||
+                       ($proof['target_key']??null)!==$targetKey||
+                       ($proof['sha256']??null)!==$expected['sha256']||
+                       ($proof['size']??null)!==$expected['size'])
+                        throw new Error('provider_exit_shadow_journal_invalid','Shadow proof is not bound to its authoritative item.',409);
+                    foreach([[$source,$expected['key']],[$target,$targetKey]] as $object){
+                        $stats=self::hashObject($object[0],$object[1]);
+                        if($stats['size']!==$expected['size']||
+                           !hash_equals($stats['sha256'],$expected['sha256']))
+                            throw new Error('provider_exit_shadow_integrity_failed','Shadow verification content differs from source.',409);
+                    }
+                    $objects++;
+                }
+                $segments++;
+            }
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+        if($segments!==$stage['segments']||$objects!==$stage['eligible_items'])
+            throw new Error('provider_exit_shadow_incomplete','Shadow evidence counts do not match the inventory.',409);
+        return ['inventory_id'=>$inventoryId,'status'=>'shadow_verified_unfenced',
+            'segments'=>$segments,'verified_objects'=>$objects];
+    }
+}
+
 final class KeyRotationInventoryStage {
     public static function begin(int $actor): array {
         Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
