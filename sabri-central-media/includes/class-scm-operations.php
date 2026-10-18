@@ -542,6 +542,13 @@ final class ProviderExitShadowCopyStage {
             if(count($page)<250){$exhausted=true;break;}
             if($page===[]){$exhausted=true;break;}
         }
+        // Persist progress even when a catalogue page contained only other
+        // inventories; otherwise a bounded worker could rescan it forever.
+        if($cursor!==$work['after_segment_id']){
+            $work['after_segment_id']=$cursor;
+            $work['updated_at']=Utils::now();
+            $work=RecordStore::put('provider_exit_shadow_run',$workId,$work,(int)$work['version']);
+        }
         if($exhausted){
             if($work['segments_done']!==$stage['segments']||
                $work['completed_objects']!==$stage['eligible_items'])
