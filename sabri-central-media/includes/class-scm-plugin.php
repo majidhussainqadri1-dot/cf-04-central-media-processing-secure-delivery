@@ -55,6 +55,9 @@ final class Plugin {
     }
     public static function cronJobs(): void {
         if(!RuntimeGuard::enabled())return;
+        // Never enter scheduled workflows before all activation gates pass.
+        try{RuntimeGuard::requireReady(['streaming']);}
+        catch(\Throwable $e){self::cronAlert('runtime_activation_not_ready',$e);return;}
         $token=self::acquire('cron-jobs',300);
         if($token===null)return;
         try{
@@ -87,6 +90,9 @@ final class Plugin {
     }
     public static function cronRetention(): void {
         if(!RuntimeGuard::enabled())return;
+        // Never enter scheduled workflows before all activation gates pass.
+        try{RuntimeGuard::requireReady(['streaming']);}
+        catch(\Throwable $e){self::cronAlert('runtime_activation_not_ready',$e);return;}
         $token=self::acquire('retention',1800);if($token===null)return;
         try {
             $failure=null;
@@ -105,6 +111,9 @@ final class Plugin {
     }
     public static function cronDeletions(): void {
         if(!RuntimeGuard::enabled())return;
+        // Never enter scheduled workflows before all activation gates pass.
+        try{RuntimeGuard::requireReady(['streaming']);}
+        catch(\Throwable $e){self::cronAlert('runtime_activation_not_ready',$e);return;}
         $token=self::acquire('deletions',1800);
         if($token===null)return;
         try{
@@ -125,6 +134,9 @@ final class Plugin {
     }
     public static function cronIntegrity(): void {
         if(!RuntimeGuard::enabled())return;
+        // Never enter scheduled workflows before all activation gates pass.
+        try{RuntimeGuard::requireReady(['streaming']);}
+        catch(\Throwable $e){self::cronAlert('runtime_activation_not_ready',$e);return;}
         $token=self::acquire('integrity',7200);
         if($token===null)return;
         try{
