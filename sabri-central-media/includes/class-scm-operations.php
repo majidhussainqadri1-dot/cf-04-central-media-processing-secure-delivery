@@ -392,6 +392,11 @@ final class ProviderExitShadowCopyStage {
         ResidencyCryptoService::assertProviderRegion($item['asset_id'],(string)$stage['target_provider']);
         return ['sha256'=>$item['sha256'],'size'=>$bytes,'key'=>$item['object_key']];
     }
+    /** The one canonical destination identity used by copy, replay and verify. */
+    private static function shadowTargetKey(string $inventoryId,string $segmentId,string $sourceKey,string $sourceSha): string {
+        return hash('sha256','provider-shadow|'.$inventoryId.'|'.$segmentId.
+            '|'.$sourceKey.'|'.$sourceSha);
+    }
 
     /** Move at most 25 copied items forward, with a durable per-segment CAS cursor. */
     public static function copySegment(string $inventoryId,string $segmentId,int $actor,int $limit=10): array {
@@ -424,6 +429,8 @@ final class ProviderExitShadowCopyStage {
                ($proof['type']??null)!==($item['type']??null)||
                ($proof['id']??null)!==($item['id']??null)||
                ($proof['source_key']??null)!==($item['object_key']??null)||
+               ($proof['target_key']??null)!==self::shadowTargetKey(
+                   $inventoryId,$segmentId,(string)($item['object_key']??''),(string)($item['sha256']??''))||
                ($proof['sha256']??null)!==($item['sha256']??null)||
                ($proof['size']??null)!==($item['size']??null)||
                ($proof['status']??null)!=='copied_unfenced')
@@ -452,8 +459,8 @@ final class ProviderExitShadowCopyStage {
                !hash_equals($sourceStats['sha256'],$identity['sha256']))
                 throw new Error('provider_exit_shadow_source_mismatch',
                     'Source bytes differ from the staged original.',409);
-            $targetKey=hash('sha256','provider-shadow|'.$inventoryId.'|'.$segmentId.
-                '|'.$identity['key'].'|'.$identity['sha256']);
+            $targetKey=self::shadowTargetKey($inventoryId,$segmentId,
+                $identity['key'],$identity['sha256']);
             $stored=$source->copyTo($identity['key'],$target,$targetKey);
             if(!is_array($stored))
                 throw new Error('provider_exit_shadow_copy_invalid','Object store copy evidence is invalid.',503);
@@ -607,8 +614,8 @@ final class ProviderExitShadowCopyStage {
                 foreach($items as $index=>$item){
                     $expected=self::expected($item,$stage);
                     $proof=$row['copies'][$index]??null;
-                    $targetKey=hash('sha256','provider-shadow|'.$inventoryId.'|'.$seg['id'].
-                        '|'.$expected['key'].'|'.$expected['sha256']);
+                    $targetKey=self::shadowTargetKey($inventoryId,(string)$seg['id'],
+                        $expected['key'],$expected['sha256']);
                     if(!is_array($proof)||
                        ($proof['type']??null)!==$item['type']||
                        ($proof['id']??null)!==$item['id']||
