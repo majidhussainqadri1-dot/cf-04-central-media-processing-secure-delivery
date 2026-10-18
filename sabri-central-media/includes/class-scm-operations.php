@@ -410,9 +410,29 @@ final class ProviderExitShadowCopyStage {
             'status'=>'copying_unfenced','next_index'=>0,'copies'=>[],
             'created_at'=>Utils::now()
         ],0);
+        // The copy proof is a versioned security ledger: never trust a saved
+        // row only because it was retrieved under a deterministic record key.
+        if(($row['inventory_id']??null)!==$inventoryId||
+           ($row['segment_id']??null)!==$segmentId||
+           !is_int($row['actor_id']??null)||$row['actor_id']<1||
+           !is_array($row['copies']??null)||!array_is_list($row['copies']))
+            throw new Error('provider_exit_shadow_journal_invalid',
+                'Shadow checkpoint identity, actor or copy list is invalid.',409);
+        foreach($row['copies'] as $index=>$proof){
+            $item=$segment['items'][$index]??null;
+            if(!is_array($item)||!is_array($proof)||
+               ($proof['type']??null)!==($item['type']??null)||
+               ($proof['id']??null)!==($item['id']??null)||
+               ($proof['source_key']??null)!==($item['object_key']??null)||
+               ($proof['sha256']??null)!==($item['sha256']??null)||
+               ($proof['size']??null)!==($item['size']??null)||
+               ($proof['status']??null)!=='copied_unfenced')
+                throw new Error('provider_exit_shadow_journal_invalid',
+                    'Shadow copy checkpoint no longer matches its staged item.',409);
+        }
         if(($row['status']??null)==='copied_unfenced'){
             if(($row['next_index']??null)!==count($segment['items'])||
-               count($row['copies']??[])!==count($segment['items']))
+               count($row['copies'])!==count($segment['items']))
                 throw new Error('provider_exit_shadow_journal_invalid','Completed shadow journal is incomplete.',409);
             return $row;
         }
@@ -576,8 +596,12 @@ final class ProviderExitShadowCopyStage {
                 $items=$seg['items']??null;
                 if(!is_array($items)||!$row||
                    ($row['status']??null)!=='copied_unfenced'||
+                   ($row['inventory_id']??null)!==$inventoryId||
+                   ($row['segment_id']??null)!==$seg['id']||
+                   !is_int($row['actor_id']??null)||$row['actor_id']<1||
                    ($row['next_index']??null)!==count($items)||
                    !is_array($row['copies']??null)||
+                   !array_is_list($row['copies'])||
                    count($row['copies'])!==count($items))
                     throw new Error('provider_exit_shadow_incomplete','At least one shadow segment is unverified.',409);
                 foreach($items as $index=>$item){
@@ -591,7 +615,8 @@ final class ProviderExitShadowCopyStage {
                        ($proof['source_key']??null)!==$expected['key']||
                        ($proof['target_key']??null)!==$targetKey||
                        ($proof['sha256']??null)!==$expected['sha256']||
-                       ($proof['size']??null)!==$expected['size'])
+                       ($proof['size']??null)!==$expected['size']||
+                       ($proof['status']??null)!=='copied_unfenced')
                         throw new Error('provider_exit_shadow_journal_invalid','Shadow proof is not bound to its authoritative item.',409);
                     foreach([[$source,$expected['key']],[$target,$targetKey]] as $object){
                         $stats=self::hashObject($object[0],$object[1]);
