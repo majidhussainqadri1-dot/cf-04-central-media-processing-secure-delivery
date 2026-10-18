@@ -461,6 +461,99 @@ final class ProviderExitShadowCopyStage {
         return $row;
     }
 
+    /**
+     * Cooperative worker for an entire segmented inventory. One invocation
+     * copies at most 25 objects and completes at most three segment journals.
+     * Parent progress advances only after a segment's item journal is durable.
+     * Never changes native owner references, active provider, or old ciphertext.
+     */
+    public static function advanceInventory(string $inventoryId,int $actor,int $limit=10): array {
+        if($limit<1||$limit>25)
+            throw new Error('provider_exit_shadow_limit_invalid','Shadow worker limit must be 1–25.',400);
+        $stage=self::loaded($inventoryId,$actor);
+        $workId=hash('sha256','shadow-run|'.$inventoryId);
+        $work=RecordStore::get('provider_exit_shadow_run',$workId);
+        if(!$work){
+            $work=RecordStore::put('provider_exit_shadow_run',$workId,[
+                'actor_id'=>$actor,'inventory_id'=>$inventoryId,
+                'inventory_chain'=>$stage['chain_hash'],
+                'status'=>'copying_unfenced','after_segment_id'=>'',
+                'segments_done'=>0,'completed_objects'=>0,'created_at'=>Utils::now()
+            ],0);
+        }
+        if(($work['inventory_id']??null)!==$inventoryId||
+           ($work['inventory_chain']??null)!==$stage['chain_hash']||
+           !is_string($work['after_segment_id']??null)||
+           strlen($work['after_segment_id'])>96||
+           Utils::text($work['after_segment_id'],96)!==$work['after_segment_id']||
+           !is_int($work['segments_done']??null)||$work['segments_done']<0||
+           !is_int($work['completed_objects']??null)||$work['completed_objects']<0)
+            throw new Error('provider_exit_shadow_run_invalid','Shadow worker checkpoint does not match source inventory.',409);
+        if(($work['status']??null)==='shadow_verified_unfenced'){
+            // A previous verified run must still be valid if queried again.
+            self::verifyComplete($inventoryId,$actor);
+            return $work;
+        }
+        if(($work['status']??null)!=='copying_unfenced')
+            throw new Error('provider_exit_shadow_run_invalid','Shadow worker status invalid.',409);
+
+        $cursor=$work['after_segment_id'];
+        $remaining=$limit;
+        $completedHere=0;$pages=0;$exhausted=false;
+        // Bound both the physical copies and the catalogue traversal.
+        while($remaining>0&&$completedHere<3&&$pages++<4){
+            $page=RecordStore::scan('provider_exit_inventory_segment',250,$cursor);
+            foreach($page as $segment){
+                $id=(string)($segment['id']??'');
+                if($id===''||$id<=$cursor)
+                    throw new Error('provider_exit_shadow_catalog_invalid','Segment scan cursor is not strictly increasing.',409);
+                if(($segment['inventory_id']??null)!==$inventoryId){
+                    $cursor=$id;
+                    continue;
+                }
+                $entryCount=is_array($segment['items']??null)?count($segment['items']):-1;
+                if($entryCount<0||$entryCount>250)
+                    throw new Error('provider_exit_shadow_segment_invalid','Invalid staged segment payload.',409);
+                $copyId=hash('sha256',$inventoryId.'|'.$id);
+                $before=RecordStore::get('provider_exit_shadow_segment',$copyId);
+                $previous=$before?(int)($before['next_index']??0):0;
+                $result=self::copySegment($inventoryId,$id,$actor,$remaining);
+                $new=(int)($result['next_index']??-1);
+                if($new<$previous||$new>$entryCount)
+                    throw new Error('provider_exit_shadow_journal_invalid','Shadow copy cursor regressed.',409);
+                $remaining-=($new-$previous);
+                if(($result['status']??null)!=='copied_unfenced'){
+                    $work['after_segment_id']=$cursor;
+                    $work['updated_at']=Utils::now();
+                    return RecordStore::put('provider_exit_shadow_run',$workId,$work,(int)$work['version']);
+                }
+                // A crash after copySegment() but before this write repeats
+                // this completed segment and credits it exactly once.
+                $cursor=$id;
+                $work['after_segment_id']=$cursor;
+                $work['segments_done']++;
+                $work['completed_objects']+=$entryCount;
+                $work['updated_at']=Utils::now();
+                $work=RecordStore::put('provider_exit_shadow_run',$workId,$work,(int)$work['version']);
+                $completedHere++;
+                if($remaining===0||$completedHere>=3)break;
+            }
+            if($remaining===0||$completedHere>=3)break;
+            if(count($page)<250){$exhausted=true;break;}
+            if($page===[]){$exhausted=true;break;}
+        }
+        if($exhausted){
+            if($work['segments_done']!==$stage['segments']||
+               $work['completed_objects']!==$stage['eligible_items'])
+                throw new Error('provider_exit_shadow_incomplete','Shadow worker counters do not match complete source.',409);
+            self::verifyComplete($inventoryId,$actor);
+            $work['status']='shadow_verified_unfenced';
+            $work['verified_at']=Utils::now();
+            $work=RecordStore::put('provider_exit_shadow_run',$workId,$work,(int)$work['version']);
+        }
+        return $work;
+    }
+
     /** Validate all source/target bytes again; still no authority to cut over. */
     public static function verifyComplete(string $inventoryId,int $actor): array {
         $stage=self::loaded($inventoryId,$actor);
