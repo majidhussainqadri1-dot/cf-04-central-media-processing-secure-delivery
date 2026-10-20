@@ -41,9 +41,17 @@ final class StreamingEndpoint {
             if(function_exists('status_header'))status_header((int)$result['status']);else http_response_code((int)$result['status']);
             foreach((array)$result['headers'] as $name=>$value){$name=trim((string)$name);$value=str_replace(["\r","\n"],'',trim((string)$value));if($name!==''&&$value!=='')header($name.': '.$value,true);}
             header('X-Robots-Tag: noindex, nofollow, noarchive',true);header('X-Frame-Options: DENY',true);$started=true;
-            while(!feof($stream)){if(connection_aborted())break;$chunk=fread($stream,1048576);if($chunk===false)throw new Error('delivery_read_failed','Delivery stream failed.',500);if($chunk==='')break;echo $chunk;if(function_exists('ob_get_level')&&ob_get_level()>0)@ob_flush();flush();}
+            while(!feof($stream)){if(connection_aborted())break;$chunk=self::readChunk($stream);if($chunk==='')break;echo $chunk;if(function_exists('ob_get_level')&&ob_get_level()>0)@ob_flush();flush();}
             exit;
-        }catch(Error $e){if($started)exit;$trace=Utils::id('trace');if(function_exists('status_header'))status_header($e->httpStatus);else http_response_code($e->httpStatus);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');echo Utils::json(['code'=>$e->errorCode,'message'=>$e->getMessage(),'status'=>$e->httpStatus,'trace_id'=>$trace,'context'=>Utils::redact($e->context)]);exit;}catch(\Throwable $e){if($started)exit;$trace=Utils::id('trace');try{Audit::record('delivery_unexpected_error',['trace_id'=>$trace,'exception_class'=>get_class($e)]);}catch(\Throwable){}http_response_code(500);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');echo Utils::json(['code'=>'internal_error','message'=>'Delivery failed.','status'=>500,'trace_id'=>$trace,'context'=>[]]);exit;}finally{if(is_resource($stream))fclose($stream);}
+        }catch(Error $e){if($started){try{Audit::record('delivery_stream_incomplete',['error_code'=>$e->errorCode]);}catch(\Throwable){}exit;}$trace=Utils::id('trace');if(function_exists('status_header'))status_header($e->httpStatus);else http_response_code($e->httpStatus);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');echo Utils::json(['code'=>$e->errorCode,'message'=>$e->getMessage(),'status'=>$e->httpStatus,'trace_id'=>$trace,'context'=>Utils::redact($e->context)]);exit;}catch(\Throwable $e){if($started)exit;$trace=Utils::id('trace');try{Audit::record('delivery_unexpected_error',['trace_id'=>$trace,'exception_class'=>get_class($e)]);}catch(\Throwable){}http_response_code(500);header('Content-Type: application/json; charset=utf-8');header('Cache-Control: no-store');echo Utils::json(['code'=>'internal_error','message'=>'Delivery failed.','status'=>500,'trace_id'=>$trace,'context'=>[]]);exit;}finally{if(is_resource($stream))fclose($stream);}
+    }
+    /** An empty read is a valid terminal chunk only when EOF is authoritative. */
+    private static function readChunk($stream): string {
+        if(!is_resource($stream))throw new Error('delivery_stream_invalid','Delivery stream unavailable.',500);
+        $chunk=fread($stream,1048576);
+        if($chunk===false)throw new Error('delivery_read_failed','Delivery stream failed.',500);
+        if($chunk===''&&!feof($stream))throw new Error('delivery_stream_stalled','Delivery stream stopped before EOF.',503);
+        return $chunk;
     }
     private static function bearer(): string {$header=(string)($_SERVER['HTTP_AUTHORIZATION']??$_SERVER['REDIRECT_HTTP_AUTHORIZATION']??'');$token='';if(preg_match('/^Bearer\s+([^\s]+)$/i',$header,$m))$token=trim($m[1]);elseif(isset($_SERVER['HTTP_X_DELIVERY_TOKEN']))$token=trim((string)$_SERVER['HTTP_X_DELIVERY_TOKEN']);if($token===''||strlen($token)>8192)throw new Error('delivery_token_missing','Delivery token missing or invalid.',401);return $token;}
 }
