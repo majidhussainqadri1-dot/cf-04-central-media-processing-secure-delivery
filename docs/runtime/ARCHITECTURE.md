@@ -1,0 +1,5 @@
+# Runtime Architecture
+
+`UploadService` creates purpose-bound sessions and streams verified parts through private storage. `Validator`, `ScannerRegistry`, `ToolRunner` and `SafetySignalService` gate quarantine promotion. `JobService` persists the probe → scan → metadata → transform → validate → store → manifest graph. Media-class pipelines generate provider-attested outputs; `DerivativeService` preserves immutable lineage and atomically switches manifests. `DeliveryService` reauthorizes native owners, rights, actors, audiences, context, sessions, ranges and policies at issuance and consumption. `RetentionService`, `LegalHoldService` and `DeletionService` implement lifecycle controls. `ProviderExitService`, `KeyRotationService`, `CostService`, `RepairService`, `RestoreService` and `Observability` provide operational governance.
+
+All business/domain truth remains with native domain owners through `DomainRegistry`; CF-04 fails closed when a required owner or provider contract is unavailable.
