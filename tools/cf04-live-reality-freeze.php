@@ -82,7 +82,7 @@ $report=[
     'environment'=>['php'=>PHP_VERSION,
         'wordpress'=>isset($wp_version)?(string)$wp_version:'unverified',
         'active_plugin_ids'=>$plugins],
-    'repository_source_version'=>defined('SCM_VERSION')?(string)SCM_VERSION:'not_loaded',
+    'loaded_plugin_version_constant'=>defined('SCM_VERSION')?(string)SCM_VERSION:'not_loaded',
     'deployed_schema_constant'=>defined('SCM_SCHEMA_VERSION')?(string)SCM_SCHEMA_VERSION:'not_loaded',
     'deployed_contract_constant'=>defined('SCM_CONTRACT_VERSION')?(string)SCM_CONTRACT_VERSION:'not_loaded',
     'deployment'=>$deployment,

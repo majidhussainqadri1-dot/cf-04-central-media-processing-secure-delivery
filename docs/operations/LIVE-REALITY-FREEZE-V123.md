@@ -13,3 +13,7 @@ Keep the incident's five truth fields separate: Repository HEAD, Deployed Versio
 ## Deterministic source-parity witness
 
 The candidate CI package manifest and RELEASE-EVIDENCE now include php_tree_sha256 and php_tree_file_count, using the same ordered path + NUL + file SHA-256 + newline scheme as the WordPress CLI freeze collector. Compare the observed deployed php_tree_sha256 to the exact candidate manifest before making a source-parity claim. A matching PHP digest proves only this limited PHP file scope; it does not establish DB migration, provider configuration, external workers, installed artifact packaging, consent state, or live end-to-end acceptance.
+
+## Exact truth-label correction (R297)
+
+The CLI field `loaded_plugin_version_constant` refers exclusively to the `SCM_VERSION` constant actually loaded by WordPress. It is **not** a GitHub source repository commit or proof of deployed package parity. The repository SHA must be collected separately and matched to a deployed artifact independently.

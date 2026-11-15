@@ -53,6 +53,9 @@ $check($data['database']['tables']['scm_records']['row_count']==='25'&&
        $data['wp_options']['scm_runtime_activated']['present']===true&&
        $data['wp_options']['scm_runtime_activated']['value']===false,
        'R294 schema/table counters and false activation option reported accurately');
+$check($data['loaded_plugin_version_constant']==='1.3.0-rc.1'&&
+       !array_key_exists('repository_source_version',$data),
+       'R297 deployed constant is never mislabeled as GitHub source repository state');
 $check($data['migration_state']==='unverified_requires_migration_logs_and_runtime_checks'&&
        $data['github_deployment_parity']==='unverified_requires_exact_package_and_manifest'&&
        $data['live_verified']===false&&$data['writes_performed']===false,

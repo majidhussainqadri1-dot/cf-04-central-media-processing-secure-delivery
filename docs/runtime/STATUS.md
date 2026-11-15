@@ -57,3 +57,7 @@ Deterministic manifest and release evidence carry a reproducible PHP-only tree d
 ## R296 — target/source pre-switch preflight and administrator guard
 
 Source-level hardening checks every planned target and original source before first provider remap, validates target-storage envelopes and enforces media_manage_providers on copy, shadow, switch and purge operations. These checks do not provide native cross-owner write fencing or >2,000 item cutover. The corresponding regression is mandatory in the source quality gate.
+
+## R297 — honest version provenance
+
+Corrected a misleading live-freeze output key: the loaded plugin `SCM_VERSION` constant is now labeled `loaded_plugin_version_constant`, not repository truth. R294 fixture asserts the distinction; no live access or migration was performed.
