@@ -65,3 +65,7 @@ Corrected a misleading live-freeze output key: the loaded plugin `SCM_VERSION` c
 ## R298 — exact branch HEAD CI evidence
 
 The candidate branch is included in the GitHub Actions push matrix in addition to PR validation. Pull-request checkout normally uses a synthetic merge commit; the push workflow explicitly builds/tests the exact source-branch commit for PHP 8.1/8.3/8.4. A green PR merge test alone must never be misreported as a tested deployed package or an exact PR-head execution. Evidence remains bound to the **current** SHA at the time of checking.
+
+## R299 restore physical source audit — 2026-11-15
+
+Read-only bounded encrypted source-object rehashing added for asset/derivative pages with durable CAS journals and final fresh verification. The successful marker is `physical_verified_unfenced` only. No executable restore, snapshot consistency across DB/object/key, KMS, owner write fence, staging or live acceptance has been achieved.
