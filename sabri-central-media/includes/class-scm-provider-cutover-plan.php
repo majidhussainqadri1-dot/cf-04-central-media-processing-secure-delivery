@@ -100,6 +100,13 @@ final class ProviderExitCutoverManifestStage {
         if(!is_string($owner)||$owner===''||Utils::key($owner,64)!==$owner)
             throw new Error('provider_cutover_owner_missing',
                 'A canonical native domain owner must authorize cutover.',409);
+        // A mere string in owner_domain is not evidence that the native owner
+        // integration actually exists. Never produce a complete unfenced
+        // manifest for an unknown, disabled, or unregistered owner module.
+        // Presence is NOT consent or an executable write fence.
+        if(!DomainRegistry::has($owner))
+            throw new Error('provider_cutover_owner_unregistered',
+                'Canonical native owner domain is not registered for integration.',409);
         $generation=Utils::integer($asset['object_version']??null,
             'provider_cutover_owner_version_invalid',1,PHP_INT_MAX);
         $cas=Utils::integer($record['version']??null,

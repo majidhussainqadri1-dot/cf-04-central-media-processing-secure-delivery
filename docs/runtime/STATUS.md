@@ -97,3 +97,7 @@ Added deterministic in-memory physical provider regression with 2,001 genuinely 
 ## R306 — native owner mapping manifest before provider cutover
 
 Added read-only, per-segment CAS-bound native owner mapping manifest verified against real encrypted shadow copy and source DB records. It detects forged references and physical target loss; terminal state is `verified_unfenced` with no permission to remap, purge or revoke credentials. Full-fleet write fencing, approved atomic cutover/rollback, Hostinger and other real-provider acceptance remain unverified.
+
+## R308 — provider cutover owner registry truth
+
+Read-only cutover manifests reject an unregistered native owner ID instead of accepting a canonical-looking owner string. The separate regression proves the terminal state is still unfenced. Actual owner authorization, cross-owner write fencing and live integration are not provided by this source fix.
