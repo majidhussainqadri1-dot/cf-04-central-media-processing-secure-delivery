@@ -66,18 +66,21 @@ final class ProviderExitService {
         }while(true);
     }
     public static function copy(string $exitId): array {
+    Auth::capability('media_manage_providers');
         $plan=self::load($exitId,['planned','copying','copy_failed','verified']);if(($plan['status']??'')==='verified')return $plan;$source=ProviderRegistry::get((string)$plan['source_provider']);$target=ProviderRegistry::get((string)$plan['target_provider']);$plan['status']='copying';$plan=self::save($plan);
-        try{foreach($plan['items'] as $index=>$item){if(in_array(($item['status']??''),['verified','switched','purged'],true))continue;$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$identity=self::identity($item);$targetKey=hash('sha256','migration|'.$plan['target_provider'].'|'.$identity['object_key'].'|'.$identity['sha256']);$stored=$source->copyTo($identity['object_key'],$target,$targetKey);$stream=$target->openStream($targetKey);try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}if(!hash_equals($identity['sha256'],$stats['sha256'])||$identity['size']!==$stats['size'])throw new Error('provider_exit_integrity_failed','Copied object integrity failed.',500,['id'=>$item['id']]);$plan['items'][$index]['target_key']=$targetKey;$plan['items'][$index]['target_storage']=$stored+['provider_id'=>$plan['target_provider']];$plan['items'][$index]['status']='verified';$plan=self::counted(self::save($plan));$plan=self::save($plan);} $plan['status']='verified';$plan['verified_at']=Utils::now();return self::save(self::counted($plan));}
+        try{foreach($plan['items'] as $index=>$item){if(in_array(($item['status']??''),['verified','switched','purged'],true))continue;$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$identity=self::identity($item);$targetKey=hash('sha256','migration|'.$plan['target_provider'].'|'.$identity['object_key'].'|'.$identity['sha256']);$stored=$source->copyTo($identity['object_key'],$target,$targetKey);$stream=$target->openStream($targetKey);try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}if(!hash_equals($identity['sha256'],$stats['sha256'])||$identity['size']!==$stats['size'])throw new Error('provider_exit_integrity_failed','Copied object integrity failed.',500,['id'=>$item['id']]);$plan['items'][$index]['target_key']=$targetKey;$plan['items'][$index]['target_storage']=array_merge($stored,['provider_id'=>$plan['target_provider']]);$plan['items'][$index]['status']='verified';$plan=self::counted(self::save($plan));$plan=self::save($plan);} $plan['status']='verified';$plan['verified_at']=Utils::now();return self::save(self::counted($plan));}
         catch(\Throwable $e){$plan=RecordStore::get('provider_exit',$exitId)??$plan;$plan['status']='copy_failed';$plan['last_error']=$e instanceof Error?$e->errorCode:'unexpected';try{self::save(self::counted($plan));}catch(\Throwable){}throw $e;}
     }
     public static function shadowVerify(string $exitId): array {
+    Auth::capability('media_manage_providers');
         $plan=self::load($exitId,['verified','shadow_verifying','shadow_failed','shadow_verified']);if(($plan['status']??'')==='shadow_verified')return $plan;$target=ProviderRegistry::get((string)$plan['target_provider']);$plan['status']='shadow_verifying';$plan=self::save($plan);
         try{foreach($plan['items'] as $item){$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no residency parent.',409,['id'=>$item['id']??'']);ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$identity=self::identity($item);if(empty($item['target_key']))throw new Error('provider_exit_target_missing','Target mapping missing.',500,['id'=>$item['id']]);$stream=$target->openStream((string)$item['target_key']);try{$stats=Utils::streamHash($stream);}finally{fclose($stream);}if(!hash_equals($identity['sha256'],$stats['sha256'])||$identity['size']!==$stats['size'])throw new Error('provider_shadow_mismatch','Shadow delivery integrity mismatch.',500,['id'=>$item['id']]);}$plan['status']='shadow_verified';$plan['shadow_verified_at']=Utils::now();return self::save($plan);}
         catch(\Throwable $e){$plan=RecordStore::get('provider_exit',$exitId)??$plan;$plan['status']='shadow_failed';$plan['last_error']=$e instanceof Error?$e->errorCode:'unexpected';try{self::save($plan);}catch(\Throwable){}throw $e;}
     }
     public static function switch(string $exitId): array {
+    Auth::capability('media_manage_providers');
         $plan=self::load($exitId,['shadow_verified','switching','switch_failed','switched']);if(($plan['status']??'')==='switched')return $plan;$plan['status']='switching';$plan=self::save($plan);
-        try{foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='switched')continue;if(($item['status']??'')!=='verified')throw new Error('provider_exit_item_not_verified','Provider exit item is not verified.',409,['id'=>$item['id']]);$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$type=$item['type']==='asset'?'asset':'derivative';$record=RecordStore::get($type,(string)$item['id']);if(!$record)throw new Error('provider_exit_record_missing','Migrated record missing.',500,['id'=>$item['id']]);$planned=self::identity($item);$current=self::identity($record);if($planned['sha256']!==$current['sha256']||$planned['size']!==$current['size'])throw new Error('provider_exit_mapping_stale','Content identity changed during provider exit.',409,['id'=>$item['id']]);$provider=(string)($record['storage']['provider_id']??'');$key=(string)($record['object_key']??'');if($provider===(string)$plan['target_provider']&&$key===(string)$item['target_key']){$plan['items'][$index]['status']='switched';$plan=self::save(self::counted($plan));continue;}if($provider!==(string)$plan['source_provider']||$key!==(string)$item['object_key'])throw new Error('provider_exit_mapping_stale','Source mapping changed during provider exit.',409,['id'=>$item['id']]);$record['previous_storage']=$record['storage']??null;$record['previous_object_key']=$record['object_key']??null;$record['storage']=$item['target_storage'];$record['object_key']=$item['target_key'];$record['provider_migrated_at']=Utils::now();RecordStore::put($type,(string)$record['id'],$record,(int)$record['version']);$plan['items'][$index]['status']='switched';$plan=self::save(self::counted($plan));}self::assertSourceDrained($plan);ProviderRegistry::activate((string)$plan['target_provider']);$plan['status']='switched';$plan['switched_at']=Utils::now();return self::save(self::counted($plan));}
+        try{self::preflightSwitchTargets($plan);foreach($plan['items'] as $index=>$item){if(($item['status']??'')==='switched')continue;if(($item['status']??'')!=='verified')throw new Error('provider_exit_item_not_verified','Provider exit item is not verified.',409,['id'=>$item['id']]);$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit item has no hold parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['target_provider']);$type=$item['type']==='asset'?'asset':'derivative';$record=RecordStore::get($type,(string)$item['id']);if(!$record)throw new Error('provider_exit_record_missing','Migrated record missing.',500,['id'=>$item['id']]);$planned=self::identity($item);$current=self::identity($record);if($planned['sha256']!==$current['sha256']||$planned['size']!==$current['size'])throw new Error('provider_exit_mapping_stale','Content identity changed during provider exit.',409,['id'=>$item['id']]);$provider=(string)($record['storage']['provider_id']??'');$key=(string)($record['object_key']??'');if($provider===(string)$plan['target_provider']&&$key===(string)$item['target_key']){$plan['items'][$index]['status']='switched';$plan=self::save(self::counted($plan));continue;}if($provider!==(string)$plan['source_provider']||$key!==(string)$item['object_key'])throw new Error('provider_exit_mapping_stale','Source mapping changed during provider exit.',409,['id'=>$item['id']]);$record['previous_storage']=$record['storage']??null;$record['previous_object_key']=$record['object_key']??null;$record['storage']=$item['target_storage'];$record['object_key']=$item['target_key'];$record['provider_migrated_at']=Utils::now();RecordStore::put($type,(string)$record['id'],$record,(int)$record['version']);$plan['items'][$index]['status']='switched';$plan=self::save(self::counted($plan));}self::assertSourceDrained($plan);ProviderRegistry::activate((string)$plan['target_provider']);$plan['status']='switched';$plan['switched_at']=Utils::now();return self::save(self::counted($plan));}
         catch(\Throwable $e){$plan=RecordStore::get('provider_exit',$exitId)??$plan;$plan['status']='switch_failed';$plan['last_error']=$e instanceof Error?$e->errorCode:'unexpected';try{self::save(self::counted($plan));}catch(\Throwable){}throw $e;}
     }
     public static function rollback(string $exitId,int $actor,string $reason): array {
@@ -101,6 +104,63 @@ final class ProviderExitService {
         }
         foreach($plan['items'] as $index=>$item){if(($item['status']??'')!=='switched')continue;$holdAssetId=($item['type']??'')==='asset'?(string)$item['id']:(string)($item['asset_id']??'');if($holdAssetId==='')throw new Error('provider_exit_parent_missing','Provider-exit rollback item has no policy parent.',409,['id'=>$item['id']??'']);LegalHoldService::assertNoHold($holdAssetId,'provider_exit');ResidencyCryptoService::assertProviderRegion($holdAssetId,(string)$plan['source_provider']);$type=$item['type']==='asset'?'asset':'derivative';$record=RecordStore::get($type,(string)$item['id']);if(!$record||empty($record['previous_object_key'])||empty($record['previous_storage']))throw new Error('provider_exit_rollback_missing','Previous provider mapping missing.',500,['id'=>$item['id']]);$currentProvider=(string)($record['storage']['provider_id']??'');$currentKey=(string)($record['object_key']??'');if($currentProvider===(string)$plan['target_provider']&&$currentKey===(string)$item['target_key']){self::verifyRollbackSource($source,$record);$record['object_key']=$record['previous_object_key'];$record['storage']=$record['previous_storage'];$record['provider_rollback_at']=Utils::now();RecordStore::put($type,(string)$record['id'],$record,(int)$record['version']);}elseif($currentProvider!==(string)$plan['source_provider']||$currentKey!==(string)$item['object_key'])throw new Error('provider_exit_rollback_mapping_stale','Provider mapping changed during rollback.',409,['id'=>$item['id']]);if(ResidencyCryptoService::isLocked($holdAssetId)){$plan['items'][$index]['target_cleanup_deferred']='object_lock';}elseif(StorageReferenceWitness::first((string)$plan['target_provider'],(string)$item['target_key'])!==null){$plan['items'][$index]['target_cleanup_deferred']='live_reference';}elseif($target->exists((string)$item['target_key'])&&!$target->delete((string)$item['target_key'])&&$target->exists((string)$item['target_key']))throw new Error('provider_exit_rollback_cleanup_failed','Rollback target cleanup failed.',503,['id'=>$item['id']]);$plan['items'][$index]['status']='verified';$plan=self::save(self::counted($plan));}ProviderRegistry::activate((string)$plan['source_provider']);$plan['status']='rolled_back';$plan['rollback_by']=$actor;$plan['rollback_reason']=$reason;$plan['rolled_back_at']=Utils::now();return self::save(self::counted($plan));
     }
+    /**
+     * Complete non-destructive target/source preflight BEFORE the first
+     * provider remap. Prior shadow verification is not a current byte witness.
+     * This does not substitute for a cross-owner write fence or transaction.
+     */
+    private static function preflightSwitchTargets(array $plan): void {
+        $sourceId=(string)($plan['source_provider']??'');
+        $targetId=(string)($plan['target_provider']??'');
+        $source=ProviderRegistry::get($sourceId);
+        $target=ProviderRegistry::get($targetId);
+        if(!is_array($plan['items']??null)||$plan['items']===[])
+            throw new Error('provider_exit_preflight_invalid','Provider switch requires a complete plan.',409);
+        foreach($plan['items'] as $item){
+            if(!is_array($item)||!in_array(($item['status']??null),['verified','switched'],true)||
+               !in_array(($item['type']??null),['asset','derivative'],true)||
+               !is_string($item['id']??null)||$item['id']==='')
+                throw new Error('provider_exit_preflight_invalid','Provider item is not verified and canonical.',409);
+            $expected=self::identity($item);
+            $targetKey=$item['target_key']??null;
+            $stored=$item['target_storage']??null;
+            if(!is_string($targetKey)||!preg_match('/^[a-f0-9]{64}$/D',$targetKey)||
+               !is_array($stored)||
+               ($stored['provider_id']??null)!==$targetId||
+               ($stored['object_key']??null)!==$targetKey||
+               ($stored['sha256']??null)!==$expected['sha256']||
+               !is_string($stored['key_id']??null)||
+               $stored['key_id']===''||
+               Utils::key($stored['key_id'],64)!==$stored['key_id'])
+                throw new Error('provider_exit_target_storage_invalid',
+                    'Target storage envelope differs from the approved migration identity.',409);
+            $storedSize=Utils::integer($stored['size']??null,
+                'provider_exit_target_storage_invalid',0,1073741824);
+            if($storedSize!==$expected['size'])
+                throw new Error('provider_exit_target_storage_invalid',
+                    'Target storage size differs from the approved migration identity.',409);
+            $record=RecordStore::get($item['type'],$item['id']);
+            if(!$record)throw new Error('provider_exit_record_missing','Source record disappeared before remap.',409);
+            $current=self::identity($record);
+            if($current['size']!==$expected['size']||
+               !hash_equals($current['sha256'],$expected['sha256']))
+                throw new Error('provider_exit_mapping_stale','Source record changed before remap.',409);
+            $provider=$record['storage']['provider_id']??null;
+            $objectKey=$record['object_key']??null;
+            if(!(($provider===$sourceId&&$objectKey===$expected['object_key'])||
+                 ($provider===$targetId&&$objectKey===$targetKey)))
+                throw new Error('provider_exit_mapping_stale','Current mapping differs from the migration plan.',409);
+            foreach([[$source,$expected['object_key']],[$target,$targetKey]] as $pair){
+                $stream=$pair[0]->openStream($pair[1]);
+                try{$actual=Utils::streamHash($stream,1073741824);}
+                finally{fclose($stream);}
+                if($actual['size']!==$expected['size']||
+                   !hash_equals($actual['sha256'],$expected['sha256']))
+                    throw new Error('provider_exit_preflight_integrity_failed',
+                        'Source or target bytes changed after shadow verification.',409);
+            }
+        }
+    }
     /** Rollback is forbidden unless the original source ciphertext decrypts to the expected bytes. */
     private static function verifyRollbackSource(ObjectStore $source,array $record): void {
         $expected=self::identity($record);
@@ -113,6 +173,7 @@ final class ProviderExitService {
             throw new Error('provider_exit_rollback_source_mismatch','Original source object no longer matches the recorded media bytes.',409,['id'=>$record['id']??'']);
     }
     public static function purgeSource(string $exitId): array {
+    Auth::capability('media_manage_providers');
         $plan=self::load($exitId,['switched','purge_pending','credentials_pending']);$source=ProviderRegistry::get((string)$plan['source_provider']);$target=ProviderRegistry::get((string)$plan['target_provider']);$plan['status']='purge_pending';$plan=self::save($plan);
         // An exit plan can go stale after cutover. Never start destructive purge
         // while any authoritative asset or derivative still points to the source.

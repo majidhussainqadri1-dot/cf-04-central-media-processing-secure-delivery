@@ -53,3 +53,7 @@ Added a CLI-only non-mutating evidence collector for deployed PHP fingerprints, 
 ## R295 — candidate package PHP source witness
 
 Deterministic manifest and release evidence carry a reproducible PHP-only tree digest matching the CLI freeze collector's algorithm; CI validates ZIP entries against the manifest. This does not establish live deployment parity until observed deployed PHP hashes are collected and matched independently.
+
+## R296 — target/source pre-switch preflight and administrator guard
+
+Source-level hardening checks every planned target and original source before first provider remap, validates target-storage envelopes and enforces media_manage_providers on copy, shadow, switch and purge operations. These checks do not provide native cross-owner write fencing or >2,000 item cutover. The corresponding regression is mandatory in the source quality gate.
