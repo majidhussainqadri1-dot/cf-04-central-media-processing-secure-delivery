@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:sabri:cf04:authorize-provider-exit:v1",
+  "$id": "https://schemas.sabrihomeopathy.com/cf04/native-owner-provider-exit-1.5.0.json",
   "title": "CF-04 native owner provider exit approval-only handshake v1",
   "description": "No write fence, provider cutover or authorization to delete.",
   "$defs": {
@@ -37,10 +37,14 @@
       ],
       "properties": {
         "plan_id": {
-          "$ref": "#/$defs/identifier"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
         },
         "asset_id": {
-          "$ref": "#/$defs/identifier"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
         },
         "record_type": {
           "enum": [
@@ -49,7 +53,9 @@
           ]
         },
         "record_id": {
-          "$ref": "#/$defs/identifier"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
         },
         "object_version": {
           "type": "integer",
@@ -60,16 +66,20 @@
           "minimum": 1
         },
         "source_provider": {
-          "$ref": "#/$defs/provider"
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
         },
         "target_provider": {
-          "$ref": "#/$defs/provider"
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
         },
         "source_key_sha256": {
-          "$ref": "#/$defs/sha256"
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         },
         "target_key_sha256": {
-          "$ref": "#/$defs/sha256"
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         },
         "phase": {
           "const": "read_only_preflight"
@@ -104,16 +114,22 @@
           "const": true
         },
         "asset_id": {
-          "$ref": "#/$defs/identifier"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
         },
         "record_id": {
-          "$ref": "#/$defs/identifier"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
         },
         "source_provider": {
-          "$ref": "#/$defs/provider"
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
         },
         "target_provider": {
-          "$ref": "#/$defs/provider"
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
         },
         "object_version": {
           "type": "integer",
@@ -125,5 +141,137 @@
         }
       }
     }
-  }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_id",
+        "service_id",
+        "plan_id",
+        "asset_id",
+        "record_type",
+        "record_id",
+        "object_version",
+        "record_cas",
+        "source_provider",
+        "target_provider",
+        "source_key_sha256",
+        "target_key_sha256",
+        "phase"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "record_type": {
+          "enum": [
+            "asset",
+            "derivative"
+          ]
+        },
+        "record_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "object_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_cas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "target_provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "source_key_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "target_key_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "phase": {
+          "const": "read_only_preflight"
+        },
+        "actor_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "service_id": {
+          "const": "cf04"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "allowed",
+        "approved_for_provider_exit",
+        "asset_id",
+        "record_id",
+        "source_provider",
+        "target_provider",
+        "object_version",
+        "record_cas"
+      ],
+      "properties": {
+        "allowed": {
+          "const": true
+        },
+        "approved_for_provider_exit": {
+          "const": true
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "record_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96
+        },
+        "source_provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "target_provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$"
+        },
+        "object_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_cas": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "required": [
+    "request",
+    "response"
+  ]
 }
