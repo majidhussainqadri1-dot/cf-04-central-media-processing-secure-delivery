@@ -221,6 +221,35 @@ final class ProviderExitService {
 }
 
 /**
+ * Prevent a fabricated extra segment from being accepted by a completed
+ * inventory that only checks its expected source-derived page identifiers.
+ * This is an inventory catalogue check, NOT an atomic owner write fence.
+ */
+final class StageSegmentCatalogGuard {
+    public static function assertExactCount(string $type,string $ownerField,
+        string $ownerId,int $expected,string $code): void {
+        if($expected<0)
+            throw new Error($code,'Segment catalogue count is invalid.',409);
+        $cursor='';$seen=0;
+        do{
+            $page=RecordStore::scan($type,250,$cursor);
+            foreach($page as $entry){
+                if(($entry[$ownerField]??null)!==$ownerId)continue;
+                $seen++;
+                if($seen>$expected)
+                    throw new Error($code,
+                        'Unexpected extra segment has been added to a verified inventory.',409);
+            }
+            if(count($page)<250)break;
+            $cursor=(string)$page[count($page)-1]['id'];
+        }while(true);
+        if($seen!==$expected)
+            throw new Error($code,
+                'Physical segment catalogue is incomplete or has drifted.',409);
+    }
+}
+
+/**
  * Durable, non-destructive inventory staging for large provider exits.
  * This is deliberately NOT an executable cutover plan: source writes have
  * not been fenced and no provider copy, source deletion or credential
@@ -311,6 +340,9 @@ final class ProviderExitInventoryStage {
                 $after=$last;
             }while(true);
         }
+        StageSegmentCatalogGuard::assertExactCount(
+            'provider_exit_inventory_segment','inventory_id',$inventoryId,
+            $segments,'provider_exit_inventory_drift');
         if(($stage['chain_hash']??null)!==$chain||
            ($stage['segments']??null)!==$segments||
            ($stage['visited_rows']??null)!==$visited||
@@ -861,6 +893,9 @@ final class KeyRotationInventoryStage {
                 $after=$last;
             }while(true);
         }
+        StageSegmentCatalogGuard::assertExactCount(
+            'key_rotation_inventory_segment','inventory_id',$id,
+            $segments,'key_rotation_inventory_drift');
         if(($stage['chain_hash']??null)!==$hash||
            ($stage['segments']??null)!==$segments||
            ($stage['visited_rows']??null)!==$visited||
@@ -1339,6 +1374,9 @@ final class RestoreCheckpointStage {
                 $after=$last;
             }while(true);
         }
+        StageSegmentCatalogGuard::assertExactCount(
+            'restore_checkpoint_segment','checkpoint_id',$id,
+            $segments,'restore_checkpoint_drift');
         if(($state['chain_hash']??null)!==$chain||
            ($state['segments']??null)!==$segments||
            ($state['visited_rows']??null)!==$rows)

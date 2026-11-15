@@ -85,3 +85,7 @@ Implemented source-only, bounded 1–25 item shadow re-encryption of staged stal
 ## R303 — cooperative multi-segment shadow key coordinator
 
 Added a durable source-only coordinator across all staged key candidate segments, bounded 1–25 aliases per invocation with CAS checkpoints and complete fresh physical rehash. Test uses >2,600 metadata records plus real encrypted stale candidates, interruption/recovery and no remap. This does not prove performance for >2,000 affected aliases or authorize old-key cutover, KMS retirement, staging or live deployment.
+
+## R304 — exact staged segment catalogue check
+
+Provider-exit, key-rotation and restore source inventories now reject extra segments claiming the same inventory/checkpoint ID, rather than only verifying expected page IDs and chain hashes. Negative tests inject and remove an extraneous segment for each source family. This is source-level fail-closed validation, not concurrent owner write fencing or live acceptance.
