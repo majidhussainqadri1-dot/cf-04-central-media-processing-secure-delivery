@@ -38,3 +38,10 @@ No external-environment claim may be inferred from source completion.
 - External media engines/providers are adapter-gated and fail closed when absent.
 - Canonical ownership remains with the existing domain owners; CF-04 owns binary/media infrastructure only.
 - This source completion does not claim real C2PA/provider certification, real CDN failover, real regional replication, staging acceptance, live deployment or operational acceptance.
+
+## V12.3 checkpoint replay hardening — 2026-11-15 (source-only)
+
+- Scope: defensive replay verification for the final completed physical shadow target in `ProviderExitShadowCopyStage::copySegment()`.
+- Before advancing or accepting an idempotent completed journal, the last target object is rehashed and checked against the current authoritative staged identity; missing/corrupt targets fail closed with `provider_exit_shadow_checkpoint_stale`.
+- New `tests/review-round-293-shadow-checkpoint-replay.php` covers missing target, corrupt target, non-advancement, recovery, completion, and continued non-destructive owner mapping.
+- This bounded replay guard **is not** full segmented cutover, cross-owner write fencing, >2,000 reference migration, real KMS rotation, restore execution, Hostinger staging acceptance, or live deployment. Every external release gate remains mandatory.

@@ -437,6 +437,27 @@ final class ProviderExitShadowCopyStage {
                 throw new Error('provider_exit_shadow_journal_invalid',
                     'Shadow copy checkpoint no longer matches its staged item.',409);
         }
+        // A journaled copy is not a durable proof that the physical target still
+        // exists. A crash, provider rollback or corruption between batches must
+        // stop replay BEFORE any subsequent object is copied. Bound the check
+        // to the last checkpointed target; verifyComplete() rehashes every object.
+        if($row['copies']!==[]){
+            $last=count($row['copies'])-1;
+            $lastItem=$segment['items'][$last];
+            $lastProof=$row['copies'][$last];
+            $identity=self::expected($lastItem,$stage);
+            $target=ProviderRegistry::get((string)$stage['target_provider']);
+            try{
+                $actual=self::hashObject($target,(string)$lastProof['target_key']);
+            }catch(\Throwable){
+                throw new Error('provider_exit_shadow_checkpoint_stale',
+                    'Last checkpointed target object cannot be verified on replay.',409);
+            }
+            if($actual['size']!==$identity['size']||
+               !hash_equals($actual['sha256'],$identity['sha256']))
+                throw new Error('provider_exit_shadow_checkpoint_stale',
+                    'Last checkpointed target bytes differ from the authoritative source.',409);
+        }
         if(($row['status']??null)==='copied_unfenced'){
             if(($row['next_index']??null)!==count($segment['items'])||
                count($row['copies'])!==count($segment['items']))
