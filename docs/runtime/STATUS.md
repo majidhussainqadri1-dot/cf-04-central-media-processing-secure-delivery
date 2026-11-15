@@ -133,3 +133,7 @@ The isolated R317 test can now enable the otherwise production-only requireForSe
 ## R319 — restore post-attestation source fingerprint fence
 
 After validating the separately signed external restore claim, authorizeServe() checks the exact authoritative source fingerprint a second time before any serving authorization. A callback-driven or concurrent source mutation leaves media serving blocked. R319 tests the production-like hook with a signed proof, adversarial mutation and fresh-reconciliation recovery.
+
+## R320 — versioned owner approval-only integration contract
+
+Added JSON Schema, a native owner integration guide and source-parity CI assertions for the required authorize_provider_exit callback. This permits other modules to integrate with exact subject-bound consent, without raw object keys. No native owner plugin has yet been modified or deployed. Full production write fencing remains externally pending.

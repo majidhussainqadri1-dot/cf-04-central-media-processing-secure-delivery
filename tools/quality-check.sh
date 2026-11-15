@@ -20,6 +20,7 @@ find "$ROOT/sabri-central-media" "$ROOT/tests" -type f -name '*.php' -print0 | L
 python3 "$ROOT/tests/contracts-runtime.py"
 python3 "$ROOT/tests/source-integration.py"
 python3 "$ROOT/tests/review-round-174-gate-coverage.py"
+python3 "$ROOT/tests/review-round-320-owner-contract-parity.py"
 run_php "$ROOT/tests/run-all.php"
 run_php "$ROOT/tests/new-plan-parity.php"
 run_php "$ROOT/tests/future40.php"

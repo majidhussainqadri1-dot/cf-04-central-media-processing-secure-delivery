@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:sabri:cf04:authorize-provider-exit:v1",
+  "title": "CF-04 native owner provider exit approval-only handshake v1",
+  "description": "No write fence, provider cutover or authorization to delete.",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "provider": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_id",
+        "asset_id",
+        "record_type",
+        "record_id",
+        "object_version",
+        "record_cas",
+        "source_provider",
+        "target_provider",
+        "source_key_sha256",
+        "target_key_sha256",
+        "phase"
+      ],
+      "properties": {
+        "plan_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "asset_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "record_type": {
+          "enum": [
+            "asset",
+            "derivative"
+          ]
+        },
+        "record_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "object_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_cas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "target_provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "source_key_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "target_key_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "phase": {
+          "const": "read_only_preflight"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "allowed",
+        "approved_for_provider_exit",
+        "asset_id",
+        "record_id",
+        "source_provider",
+        "target_provider",
+        "object_version",
+        "record_cas"
+      ],
+      "properties": {
+        "allowed": {
+          "const": true
+        },
+        "approved_for_provider_exit": {
+          "const": true
+        },
+        "asset_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "record_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "source_provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "target_provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "object_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_cas": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
