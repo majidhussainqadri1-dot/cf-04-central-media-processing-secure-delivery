@@ -69,3 +69,7 @@ The candidate branch is included in the GitHub Actions push matrix in addition t
 ## R299 restore physical source audit — 2026-11-15
 
 Read-only bounded encrypted source-object rehashing added for asset/derivative pages with durable CAS journals and final fresh verification. The successful marker is `physical_verified_unfenced` only. No executable restore, snapshot consistency across DB/object/key, KMS, owner write fence, staging or live acceptance has been achieved.
+
+## R300 — physical key identity check for staged candidates
+
+Added optional ObjectCipherKeyInspector and bounded source ciphertext/key-id preflight for candidate key rotation. Real LocalObjectStore encrypted bytes and physical key IDs are checked without rewriting, retiring keys or allowing unfenced cutover. Real KMS/third-party provider integration, durable >2,000-alias group processing and staging acceptance remain open.
