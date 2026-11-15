@@ -1,0 +1,82 @@
+<?php
+declare(strict_types=1);
+require __DIR__.'/bootstrap.php';
+use Sabri\CentralMedia\{ProviderExitInventoryStage,ProviderExitShadowCopyStage,
+    ProviderExitCutoverManifestStage,ProviderExitOwnerReadiness,
+    ProviderRegistry,RecordStore,DomainRegistry,Utils};
+RecordStore::resetMemory();
+$source=ProviderRegistry::get('source-private');
+$key=hash('sha256','r310-clinical-source');
+$bytes='r310-private-encoded-bytes';
+$s=Utils::tempStream();Utils::writeAll($s,$bytes);rewind($s);
+try{$source->putStream($key,$s);}finally{fclose($s);}
+RecordStore::put('asset','r310-asset',[
+    'actor_id'=>11,'owner_domain'=>'file17','object_version'=>7,'status'=>'ready',
+    'storage'=>['provider_id'=>'source-private','key_id'=>'test-v1'],
+    'object_key'=>$key,'sha256'=>hash('sha256',$bytes),'size'=>strlen($bytes)
+]);
+$inventory=ProviderExitInventoryStage::begin('source-private','target-private',11);
+while($inventory['status']==='planning')
+    $inventory=ProviderExitInventoryStage::advance($inventory['id'],11);
+foreach(RecordStore::all('provider_exit_inventory_segment',0,null,25) as $segment){
+    if(($segment['inventory_id']??null)!==$inventory['id'])continue;
+    ProviderExitShadowCopyStage::copySegment($inventory['id'],$segment['id'],11,25);
+}
+$plan=ProviderExitCutoverManifestStage::begin($inventory['id'],11);
+while($plan['status']==='planning_unfenced')
+    $plan=ProviderExitCutoverManifestStage::advance($plan['id'],11);
+ok(ProviderExitCutoverManifestStage::verifyComplete($plan['id'],11)['candidates']===1,
+    'R310 baseline full physical source and owner mapping is verified');
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'domain_contract_unavailable',
+    'R310 absence of native owner approval callback fails closed');
+$GLOBALS['r310_owner_version']=3;
+$GLOBALS['r310_cas']=1;
+$GLOBALS['r310_approved']=true;
+$GLOBALS['r310_callback_context']=null;
+DomainRegistry::reset();
+DomainRegistry::register('file17','1.0.0',[
+    'authorize_provider_exit'=>static function(array $context):array {
+        $GLOBALS['r310_callback_context']=$context;
+        return ['allowed'=>true,'approved_for_provider_exit'=>$GLOBALS['r310_approved'],
+            'object_version'=>$GLOBALS['r310_owner_version'],
+            'record_cas'=>$GLOBALS['r310_cas']];
+    }
+]);
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_owner_approval_stale',
+    'R310 stale owner object generation fails closed');
+$GLOBALS['r310_owner_version']=7;
+$GLOBALS['r310_cas']=20;
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_owner_approval_stale',
+    'R310 wrong current record CAS cannot approve provider migration');
+$GLOBALS['r310_cas']=RecordStore::get('asset','r310-asset')['version'];
+$GLOBALS['r310_approved']=false;
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_owner_approval_stale',
+    'R310 owner approval must explicitly opt into provider exit');
+$GLOBALS['r310_approved']=true;
+$GLOBALS['scm_test_denied_caps']=['media_manage_providers'];
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'capability_denied',
+    'R310 unauthorized operator cannot request owner approval preflight');
+unset($GLOBALS['scm_test_denied_caps']);
+$ready=ProviderExitOwnerReadiness::inspect($plan['id'],11);
+ok($ready['status']==='owner_approved_unfenced'&&$ready['approvals']===1&&
+   $ready['registered_domains']===1&&
+   $ready['native_owner_write_fenced']===false&&
+   $ready['authorization_to_switch']===false&&
+   preg_match('/^[a-f0-9]{64}$/D',$ready['owner_decision_chain'])===1,
+   'R310 version-bound native owner callback acknowledged without switch authority');
+$context=$GLOBALS['r310_callback_context'];
+ok(($context['object_version']??null)===7&&
+   ($context['phase']??null)==='read_only_preflight'&&
+   !array_key_exists('source_key',$context)&&
+   !array_key_exists('target_key',$context)&&
+   ($context['source_key_sha256']??null)===hash('sha256',$key),
+   'R310 owner receives only source/target key hashes, not raw object keys');
+ok(RecordStore::get('asset','r310-asset')['object_key']===$key&&
+   $source->exists($key)&&RecordStore::all('provider_exit')===[],
+   'R310 owner read-only attestation never remaps, purges or switches');
+echo "REVIEW ROUND 310 OWNER APPROVAL-ONLY HANDSHAKE: PASS\n";

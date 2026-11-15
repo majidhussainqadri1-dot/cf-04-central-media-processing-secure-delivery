@@ -101,3 +101,7 @@ Added read-only, per-segment CAS-bound native owner mapping manifest verified ag
 ## R308 — provider cutover owner registry truth
 
 Read-only cutover manifests reject an unregistered native owner ID instead of accepting a canonical-looking owner string. The separate regression proves the terminal state is still unfenced. Actual owner authorization, cross-owner write fencing and live integration are not provided by this source fix.
+
+## R310 — native owner version/CAS approval-only callback preflight
+
+Source-only optional owner handshake now rejects missing callbacks, explicit denials, stale owner generation or stale record CAS without altering the media references or storage. Terminal status is explicitly **owner_approved_unfenced**, NEVER an owner write fence or authorization to switch. Native owner implementations in other repositories and actual cross-domain atomic cutover remain externally dependent.

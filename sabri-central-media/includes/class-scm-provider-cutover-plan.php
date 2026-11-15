@@ -259,3 +259,97 @@ final class ProviderExitCutoverManifestStage {
             'source_purged'=>false,'credentials_revoked'=>false];
     }
 }
+
+
+/**
+ * A source-only, side-effect-free approval preflight against native owner
+ * callback contracts. It does not acquire a write fence, switch any provider,
+ * commit owner mappings or authorize physical purge.
+ */
+final class ProviderExitOwnerReadiness {
+    public static function inspect(string $planId,int $actor): array {
+        Auth::capability('media_manage_providers');
+        Auth::assertActor($actor,'manage_options');
+        // Revalidate every staged source/target byte before consulting owners.
+        $verified=ProviderExitCutoverManifestStage::verifyComplete($planId,$actor);
+        if(($verified['status']??null)!=='verified_unfenced'||
+           ($verified['authorization_to_switch']??true)!==false)
+            throw new Error('provider_owner_readiness_invalid',
+                'Only fully verified, non-executable cutover plans can be inspected.',409);
+        $plan=RecordStore::get('provider_cutover_plan',$planId);
+        if(!$plan||($plan['status']??null)!=='verified_unfenced')
+            throw new Error('provider_owner_readiness_invalid',
+                'Native owner preflight requires a terminal source manifest.',409);
+        $after='';$seen=0;$owners=[];
+        $hash=hash_init('sha256');
+        do{
+            $page=RecordStore::scan('provider_cutover_segment',250,$after);
+            foreach($page as $segment){
+                if(($segment['plan_id']??null)!==$planId)continue;
+                if(($segment['status']??null)!=='prepared_unfenced'||
+                   !is_array($segment['mappings']??null)||
+                   !array_is_list($segment['mappings']))
+                    throw new Error('provider_owner_segment_invalid',
+                        'Owner mapping journal is noncanonical.',409);
+                foreach($segment['mappings'] as $mapping){
+                    $owner=$mapping['native_domain']??null;
+                    $asset=$mapping['asset_id']??null;
+                    $recordId=$mapping['id']??null;
+                    $type=$mapping['type']??null;
+                    if(!is_string($owner)||$owner===''||
+                       Utils::key($owner,64)!==$owner||!DomainRegistry::has($owner)||
+                       !is_string($asset)||$asset===''||
+                       !is_string($recordId)||$recordId===''||
+                       !in_array($type,['asset','derivative'],true))
+                        throw new Error('provider_owner_identity_invalid',
+                            'Native owner identity is unavailable or malformed.',409);
+                    $ownerVersion=Utils::integer($mapping['owner_generation']??null,
+                        'provider_owner_version_invalid',1,PHP_INT_MAX);
+                    $cas=Utils::integer($mapping['record_cas']??null,
+                        'provider_owner_cas_invalid',1,PHP_INT_MAX);
+                    $decision=DomainRegistry::decision($owner,
+                        'authorize_provider_exit',[
+                            'plan_id'=>$planId,'asset_id'=>$asset,
+                            'record_type'=>$type,'record_id'=>$recordId,
+                            'object_version'=>$ownerVersion,'record_cas'=>$cas,
+                            'source_provider'=>$mapping['source_provider'],
+                            'target_provider'=>$mapping['target_provider'],
+                            // No raw object keys or clinical media bytes leave CF-04.
+                            'source_key_sha256'=>hash('sha256',(string)$mapping['source_key']),
+                            'target_key_sha256'=>hash('sha256',(string)$mapping['target_key']),
+                            'phase'=>'read_only_preflight'
+                        ],true);
+                    if(($decision['approved_for_provider_exit']??null)!==true||
+                       $decision['object_version']!==$ownerVersion||
+                       Utils::integer($decision['record_cas']??null,
+                           'provider_owner_cas_mismatch',1,PHP_INT_MAX)!==$cas)
+                        throw new Error('provider_owner_approval_stale',
+                            'Owner approval is absent or does not match current versions.',409);
+                    $contract=$decision['contract_version']??null;
+                    if(!is_string($contract)||$contract==='')throw new Error(
+                        'provider_owner_contract_invalid','Owner contract version missing.',409);
+                    hash_update($hash,Utils::canonicalJson([
+                        'owner'=>$owner,'asset'=>$asset,'record_type'=>$type,
+                        'record_id'=>$recordId,'owner_version'=>$ownerVersion,
+                        'record_cas'=>$cas,'owner_contract'=>$contract
+                    ])."\n");
+                    $owners[$owner]=true;
+                    if($seen===PHP_INT_MAX)throw new Error(
+                        'provider_owner_count_overflow','Owner approval count overflow.',409);
+                    $seen++;
+                }
+            }
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+        if($seen!==($verified['candidates']??null)||$seen<1)
+            throw new Error('provider_owner_incomplete',
+                'Approved owner references differ from the cutover manifest.',409);
+        return ['plan_id'=>$planId,'status'=>'owner_approved_unfenced',
+            'approvals'=>$seen,'registered_domains'=>count($owners),
+            'owner_decision_chain'=>hash_final($hash),
+            'native_owner_write_fenced'=>false,
+            'authorization_to_switch'=>false,
+            'source_purged'=>false,'credentials_revoked'=>false];
+    }
+}
