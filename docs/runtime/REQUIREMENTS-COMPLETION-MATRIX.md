@@ -141,3 +141,15 @@ The Future-40 layer is fail-closed. Capabilities that require specialist engines
 ## Release boundary
 
 `Specified`, `Coded`, `Packaged`, `Automated-QA Green`, `Staging-Accepted`, `Live-Deployed` and `Operational` are distinct statuses. This matrix can support only repository/source claims. No staging, live or operational claim is made here.
+
+## V12.3 delta after R299–R302 — source-only, not live acceptance
+
+- CF04-FR-017: R300 physically inspects candidate old-key ciphertext, R301 bounds its key-ID header read, and R302 can create bounded, verified, separate active-key shadow ciphertext with durable per-item checkpoints. Still **OPEN**: an authorized, write-fenced and durable full-fleet >2,000-alias cutover, old-key retirement, real KMS/HSM, and staging acceptance.
+- CF04-FR-032: R299 reads and hashes physical encrypted sources against a nine-family restore metadata checkpoint. Still **OPEN**: immutable cross-resource DB/object/key snapshot, actual restore execution, owner integration, database staging and live retest.
+- CF04-FR-027: R293/R296 strengthen shadow replay and pre-switch integrity. Still **OPEN**: cross-owner write fences and executable >2,000-item atomic migration/rollback and real provider staging acceptance.
+
+These updates are incremental source capabilities; they do not alter the Draft / unmerged / runtime-disabled release status.
+
+## R306 — cross-owner cutover manifest, source-only
+
+CF04-FR-027 now also has a durable, native-owner/version/CAS-aware read-only cutover manifest and full source/target revalidation. It is `verified_unfenced` only; an atomic cross-owner fencing and cutover/rollback executor is NOT implemented or accepted. No live/staging provider exit occurred.

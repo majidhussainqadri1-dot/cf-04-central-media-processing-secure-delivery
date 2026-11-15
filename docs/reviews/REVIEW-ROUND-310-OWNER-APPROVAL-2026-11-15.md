@@ -1,0 +1,7 @@
+# R310: Canonical owner opt-in preflight — not a write fence (2026-11-15)
+
+`ProviderExitOwnerReadiness::inspect(plan, actor)` independently reconfirms the native owner cutover manifest and source/target bytes, then invokes each registered native owner's `authorize_provider_exit` callback. The callback must affirm `approved_for_provider_exit=true`, current `object_version` and exact `record_cas`. A missing owner callback, refusal, changed version or missing administrative capability fails closed. Raw physical object keys and clinical media bytes are not passed to owners; only their SHA-256 hashes and canonical reference identities are sent.
+
+The response state is **`owner_approved_unfenced`**, always with `native_owner_write_fenced=false` and `authorization_to_switch=false`; this is explicitly **not** a production cutover authorization or proof of actual write-fence ownership. Cross-module integration, durable fence token/lease coordination, 2,000+ atomic migration, rollback, real provider and KMS test evidence remain open.
+
+The owner callback is a privileged, trusted read-only integration in the proposed contract; external domain implementations MUST be independently inspected for side effects and permission scope before acceptance. `tests/review-round-310-provider-owner-approval.php` covers missing callback, stale owner generation, stale row CAS, explicit denial, denied administrator, callback payload redaction and proof-only success.

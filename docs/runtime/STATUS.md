@@ -38,3 +38,106 @@ No external-environment claim may be inferred from source completion.
 - External media engines/providers are adapter-gated and fail closed when absent.
 - Canonical ownership remains with the existing domain owners; CF-04 owns binary/media infrastructure only.
 - This source completion does not claim real C2PA/provider certification, real CDN failover, real regional replication, staging acceptance, live deployment or operational acceptance.
+
+## V12.3 checkpoint replay hardening — 2026-11-15 (source-only)
+
+- Scope: defensive replay verification for the final completed physical shadow target in `ProviderExitShadowCopyStage::copySegment()`.
+- Before advancing or accepting an idempotent completed journal, the last target object is rehashed and checked against the current authoritative staged identity; missing/corrupt targets fail closed with `provider_exit_shadow_checkpoint_stale`.
+- New `tests/review-round-293-shadow-checkpoint-replay.php` covers missing target, corrupt target, non-advancement, recovery, completion, and continued non-destructive owner mapping.
+- This bounded replay guard **is not** full segmented cutover, cross-owner write fencing, >2,000 reference migration, real KMS rotation, restore execution, Hostinger staging acceptance, or live deployment. Every external release gate remains mandatory.
+
+## V12.3 read-only deployment freeze utility (R294)
+
+Added a CLI-only non-mutating evidence collector for deployed PHP fingerprints, schema/options, active plugin list and safe table counts. Fixture tests require no data mutation or false claims. **No live evidence was collected**: the WordPress account has no connected WPVibe site, and the attempted connection returned HTTP 530.
+
+## R295 — candidate package PHP source witness
+
+Deterministic manifest and release evidence carry a reproducible PHP-only tree digest matching the CLI freeze collector's algorithm; CI validates ZIP entries against the manifest. This does not establish live deployment parity until observed deployed PHP hashes are collected and matched independently.
+
+## R296 — target/source pre-switch preflight and administrator guard
+
+Source-level hardening checks every planned target and original source before first provider remap, validates target-storage envelopes and enforces media_manage_providers on copy, shadow, switch and purge operations. These checks do not provide native cross-owner write fencing or >2,000 item cutover. The corresponding regression is mandatory in the source quality gate.
+
+## R297 — honest version provenance
+
+Corrected a misleading live-freeze output key: the loaded plugin `SCM_VERSION` constant is now labeled `loaded_plugin_version_constant`, not repository truth. R294 fixture asserts the distinction; no live access or migration was performed.
+
+## R298 — exact branch HEAD CI evidence
+
+The candidate branch is included in the GitHub Actions push matrix in addition to PR validation. Pull-request checkout normally uses a synthetic merge commit; the push workflow explicitly builds/tests the exact source-branch commit for PHP 8.1/8.3/8.4. A green PR merge test alone must never be misreported as a tested deployed package or an exact PR-head execution. Evidence remains bound to the **current** SHA at the time of checking.
+
+## R299 restore physical source audit — 2026-11-15
+
+Read-only bounded encrypted source-object rehashing added for asset/derivative pages with durable CAS journals and final fresh verification. The successful marker is `physical_verified_unfenced` only. No executable restore, snapshot consistency across DB/object/key, KMS, owner write fence, staging or live acceptance has been achieved.
+
+## R300 — physical key identity check for staged candidates
+
+Added optional ObjectCipherKeyInspector and bounded source ciphertext/key-id preflight for candidate key rotation. Real LocalObjectStore encrypted bytes and physical key IDs are checked without rewriting, retiring keys or allowing unfenced cutover. Real KMS/third-party provider integration, durable >2,000-alias group processing and staging acceptance remain open.
+
+## R301 — bounded local ciphertext key-header inspection
+
+Changed the physical key ID reader from unbounded fgets to a 65,536-byte newline-terminated, strict-format, canonical-key envelope check. Added R301 regression including deliberately overlong and forged headers. This prevents an untrusted local object header from being interpreted as valid key identity but does not replace a KMS/HSM provider audit.
+
+## R302 — bounded physical key-rotation shadow re-encryption
+
+Implemented source-only, bounded 1–25 item shadow re-encryption of staged stale-key candidates into separately encrypted new objects, using deterministic target identity, physical source/target key-ID and byte hashes, durable CAS journals, replay and complete segment verification. Original source, key, mapping and serving state stay untouched. This is not a global >2,000-item cutover or approved KMS key retirement. Quality gate must pass at the exact candidate HEAD before source acceptance.
+
+## R303 — cooperative multi-segment shadow key coordinator
+
+Added a durable source-only coordinator across all staged key candidate segments, bounded 1–25 aliases per invocation with CAS checkpoints and complete fresh physical rehash. Test uses >2,600 metadata records plus real encrypted stale candidates, interruption/recovery and no remap. This does not prove performance for >2,000 affected aliases or authorize old-key cutover, KMS retirement, staging or live deployment.
+
+## R304 — exact staged segment catalogue check
+
+Provider-exit, key-rotation and restore source inventories now reject extra segments claiming the same inventory/checkpoint ID, rather than only verifying expected page IDs and chain hashes. Negative tests inject and remove an extraneous segment for each source family. This is source-level fail-closed validation, not concurrent owner write fencing or live acceptance.
+
+## R305 — greater-than-2000 affected alias source regression
+
+Added deterministic in-memory physical provider regression with 2,001 genuinely stale key aliases, ten source inventory segments, bounded resumable shadow copies, one reused target ciphertext, full fresh proof and wrong-physical-key rejection. No real MySQL/provider/KMS or production cutover has been verified; all original mappings stay unchanged.
+
+## R306 — native owner mapping manifest before provider cutover
+
+Added read-only, per-segment CAS-bound native owner mapping manifest verified against real encrypted shadow copy and source DB records. It detects forged references and physical target loss; terminal state is `verified_unfenced` with no permission to remap, purge or revoke credentials. Full-fleet write fencing, approved atomic cutover/rollback, Hostinger and other real-provider acceptance remain unverified.
+
+## R308 — provider cutover owner registry truth
+
+Read-only cutover manifests reject an unregistered native owner ID instead of accepting a canonical-looking owner string. The separate regression proves the terminal state is still unfenced. Actual owner authorization, cross-owner write fencing and live integration are not provided by this source fix.
+
+## R310 — native owner version/CAS approval-only callback preflight
+
+Source-only optional owner handshake now rejects missing callbacks, explicit denials, stale owner generation or stale record CAS without altering the media references or storage. Terminal status is explicitly **owner_approved_unfenced**, NEVER an owner write fence or authorization to switch. Native owner implementations in other repositories and actual cross-domain atomic cutover remain externally dependent.
+
+## R312 — post-owner callback source drift guard
+
+A fresh full source/target and owner CAS manifest verification now runs after owner callbacks before emitting approval-only evidence. The new adversarial negative test mutates a source version within the callback and expects failure. This guard remains unfenced and does not authorize migration.
+
+## R313 — subject- and provider-bound native owner decision
+
+Owner opt-in reports must echo and match the exact canonical asset, record, old provider and target provider; a generic allowed=true response cannot authorize a different subject. Negative tests cover asset/target substitution. This remains an approval-only, unfenced source candidate.
+
+## R314 — cooperative durable native-owner approval journals
+
+Native owner provider-exit approvals can now be collected in CAS-bound 250-mapping segments and reverified over the full source, with digest-tamper detection and no write-fence or provider cutover capability. Tests cover two owner modules and independent segments; >2,000-object performance with real owner plugins remains unaccepted.
+
+## R315 — shared native-owner helper privilege boundary
+
+The newly factored inspectMapping() callback helper now independently checks media_manage_providers so direct invocation cannot bypass administrative authorization. R310 includes a direct-call permission-denial regression.
+
+## R317 — independent restore-execution evidence gate
+
+Production RestoreService::authorizeServe now requires fresh HMAC-signed, restore-ID- and inventory-bound claims from an independently configured restoration executor. Absent keys/executor/proof are fail-closed. The code does **not** restore database, binary objects or real key material; external executor, Hostinger staging/backup/restore evidence and live retest are still required. Test mode maintains mock-only reconciliation; R317 verifies signed-proof acceptance and adversarial negatives.
+
+## R318 — production-like forced attestation hook regression
+
+The isolated R317 test can now enable the otherwise production-only requireForServe() branch in SCM_TEST_MODE: it asserts that no external executor callback fails closed and a matching signed, restore-ID-bound callback succeeds. No real restoration or live serving occurs.
+
+## R319 — restore post-attestation source fingerprint fence
+
+After validating the separately signed external restore claim, authorizeServe() checks the exact authoritative source fingerprint a second time before any serving authorization. A callback-driven or concurrent source mutation leaves media serving blocked. R319 tests the production-like hook with a signed proof, adversarial mutation and fresh-reconciliation recovery.
+
+## R320 — versioned owner approval-only integration contract
+
+Added JSON Schema, a native owner integration guide and source-parity CI assertions for the required authorize_provider_exit callback. This permits other modules to integrate with exact subject-bound consent, without raw object keys. No native owner plugin has yet been modified or deployed. Full production write fencing remains externally pending.
+
+## R321 — authenticated actor binding to owner callback request
+
+The explicit v1 owner contract now includes actor_id and service_id=cf04 in each callback request; the same source decision subject, version and CAS checks remain required. Regression verifies actor 11 is preserved and cannot be substituted by a generic unsigned owner consent.
