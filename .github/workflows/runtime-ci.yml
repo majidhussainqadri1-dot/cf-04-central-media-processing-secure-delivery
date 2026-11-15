@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - codex/cf04-three-plan-complete-1.2.0
+      - codex/cf04-v123-checkpoint-integrity-20261115
       - main
   pull_request:
   workflow_dispatch:

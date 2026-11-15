@@ -61,3 +61,7 @@ Source-level hardening checks every planned target and original source before fi
 ## R297 — honest version provenance
 
 Corrected a misleading live-freeze output key: the loaded plugin `SCM_VERSION` constant is now labeled `loaded_plugin_version_constant`, not repository truth. R294 fixture asserts the distinction; no live access or migration was performed.
+
+## R298 — exact branch HEAD CI evidence
+
+The candidate branch is included in the GitHub Actions push matrix in addition to PR validation. Pull-request checkout normally uses a synthetic merge commit; the push workflow explicitly builds/tests the exact source-branch commit for PHP 8.1/8.3/8.4. A green PR merge test alone must never be misreported as a tested deployed package or an exact PR-head execution. Evidence remains bound to the **current** SHA at the time of checking.
