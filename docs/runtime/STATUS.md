@@ -73,3 +73,7 @@ Read-only bounded encrypted source-object rehashing added for asset/derivative p
 ## R300 — physical key identity check for staged candidates
 
 Added optional ObjectCipherKeyInspector and bounded source ciphertext/key-id preflight for candidate key rotation. Real LocalObjectStore encrypted bytes and physical key IDs are checked without rewriting, retiring keys or allowing unfenced cutover. Real KMS/third-party provider integration, durable >2,000-alias group processing and staging acceptance remain open.
+
+## R301 — bounded local ciphertext key-header inspection
+
+Changed the physical key ID reader from unbounded fgets to a 65,536-byte newline-terminated, strict-format, canonical-key envelope check. Added R301 regression including deliberately overlong and forged headers. This prevents an untrusted local object header from being interpreted as valid key identity but does not replace a KMS/HSM provider audit.

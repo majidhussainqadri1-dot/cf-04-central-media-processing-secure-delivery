@@ -1,0 +1,5 @@
+# R301: Bound and validate the local ciphertext header used for key inspection
+
+The local object's headerKeyId implementation previously called fgets without a length bound. The new trusted physical key-id API made it especially important to reject malicious oversized or malformed object headers before returning an encryption key identity.
+
+R301 sets a 65,536-byte maximum line-read bound, requires an actual newline terminator, checks the SCM-CHUNK-GCM-1 format, exact 1,048,576 byte chunk size, and a canonical key ID. An absent, oversized or forged header fails closed as object_envelope_invalid. Regression exercises the genuine physical key ID, a 70,000-byte malformed header, wrong format, and restored ciphertext. This is a source/fixture verification, not a proof of external storage-provider integrity or live KMS readiness.
