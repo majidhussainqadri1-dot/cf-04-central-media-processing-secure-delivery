@@ -137,3 +137,7 @@ After validating the separately signed external restore claim, authorizeServe() 
 ## R320 — versioned owner approval-only integration contract
 
 Added JSON Schema, a native owner integration guide and source-parity CI assertions for the required authorize_provider_exit callback. This permits other modules to integrate with exact subject-bound consent, without raw object keys. No native owner plugin has yet been modified or deployed. Full production write fencing remains externally pending.
+
+## R321 — authenticated actor binding to owner callback request
+
+The explicit v1 owner contract now includes actor_id and service_id=cf04 in each callback request; the same source decision subject, version and CAS checks remain required. Regression verifies actor 11 is preserved and cannot be substituted by a generic unsigned owner consent.

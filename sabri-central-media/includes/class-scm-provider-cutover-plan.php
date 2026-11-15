@@ -288,6 +288,7 @@ final class ProviderExitOwnerReadiness {
             'provider_owner_cas_invalid',1,PHP_INT_MAX);
         $decision=DomainRegistry::decision($owner,
             'authorize_provider_exit',[
+                'actor_id'=>Auth::currentUser(),'service_id'=>'cf04',
                 'plan_id'=>$planId,'asset_id'=>$asset,
                 'record_type'=>$type,'record_id'=>$recordId,
                 'object_version'=>$ownerVersion,'record_cas'=>$cas,

@@ -6,13 +6,15 @@ root=Path(__file__).resolve().parents[1]
 schema=json.loads((root/'contracts/native-owner-provider-exit-v1.schema.json').read_text())
 req=schema['$defs']['request']
 res=schema['$defs']['response']
-expected={'plan_id','asset_id','record_type','record_id','object_version',
+expected={'actor_id','service_id','plan_id','asset_id','record_type','record_id','object_version',
     'record_cas','source_provider','target_provider','source_key_sha256',
     'target_key_sha256','phase'}
 assert schema['$schema'].endswith('/draft/2020-12/schema')
 assert req['additionalProperties'] is False
 assert set(req['required'])==expected
 assert req['properties']['phase']['const']=='read_only_preflight'
+assert req['properties']['actor_id']['minimum']==1
+assert req['properties']['service_id']['const']=='cf04'
 assert set(req['properties']['record_type']['enum'])=={'asset','derivative'}
 assert req['properties']['object_version']['minimum']==1
 assert req['properties']['record_cas']['minimum']==1

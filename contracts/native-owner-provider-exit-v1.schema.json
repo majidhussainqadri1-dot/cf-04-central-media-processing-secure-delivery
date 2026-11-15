@@ -21,6 +21,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "actor_id",
+        "service_id",
         "plan_id",
         "asset_id",
         "record_type",
@@ -71,6 +73,13 @@
         },
         "phase": {
           "const": "read_only_preflight"
+        },
+        "actor_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "service_id": {
+          "const": "cf04"
         }
       }
     },

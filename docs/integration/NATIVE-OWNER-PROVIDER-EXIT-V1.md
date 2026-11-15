@@ -15,3 +15,7 @@ The owner MUST acknowledge allowed=true and approved_for_provider_exit=true and 
 CF-04 revalidates source and target bytes and the immutable version/CAS mapping before and after owner callbacks. Bounded persistent owner approvals may check 250 references per stage invocation; the final decision chain is rechecked. Even a positive result means owner_approved_unfenced with native_owner_write_fenced=false and authorization_to_switch=false.
 
 Real owner plugins, durable multi-owner write fencing, lease renewal, atomic 2,000+ cutover, rollback, provider credentials retirement, Hostinger staging, and live deployment require separate independently accepted code and evidence. This contract does not prove them.
+
+## Mandatory caller identity (R321)
+
+Every owner preflight supplies a positive actor_id and service_id=cf04, obtained from the currently authenticated privileged WordPress operator. The owner must independently verify its permissions and must not infer authority merely from this field. The caller's identity is not a write fence or production migration authorization.

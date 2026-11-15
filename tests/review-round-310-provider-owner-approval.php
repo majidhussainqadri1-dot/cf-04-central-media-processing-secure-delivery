@@ -103,6 +103,8 @@ ok($ready['status']==='owner_approved_unfenced'&&$ready['approvals']===1&&
    preg_match('/^[a-f0-9]{64}$/D',$ready['owner_decision_chain'])===1,
    'R310 version-bound native owner callback acknowledged without switch authority');
 $context=$GLOBALS['r310_callback_context'];
+ok(($context['actor_id']??null)===11&&($context['service_id']??null)==='cf04',
+   'R321 exact authenticated administrator and CF04 service identity passed to native owner');
 ok(($context['object_version']??null)===7&&
    ($context['phase']??null)==='read_only_preflight'&&
    !array_key_exists('source_key',$context)&&
