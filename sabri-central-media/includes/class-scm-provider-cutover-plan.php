@@ -267,6 +267,60 @@ final class ProviderExitCutoverManifestStage {
  * commit owner mappings or authorize physical purge.
  */
 final class ProviderExitOwnerReadiness {
+    public static function inspectMapping(array $mapping,string $planId): array {
+        $owner=$mapping['native_domain']??null;
+        $asset=$mapping['asset_id']??null;
+        $recordId=$mapping['id']??null;
+        $type=$mapping['type']??null;
+        if(!is_string($owner)||$owner===''||
+           Utils::key($owner,64)!==$owner||!DomainRegistry::has($owner)||
+           !is_string($asset)||$asset===''||
+           !is_string($recordId)||$recordId===''||
+           !in_array($type,['asset','derivative'],true))
+            throw new Error('provider_owner_identity_invalid',
+                'Native owner identity is unavailable or malformed.',409);
+        $ownerVersion=Utils::integer($mapping['owner_generation']??null,
+            'provider_owner_version_invalid',1,PHP_INT_MAX);
+        $cas=Utils::integer($mapping['record_cas']??null,
+            'provider_owner_cas_invalid',1,PHP_INT_MAX);
+        $decision=DomainRegistry::decision($owner,
+            'authorize_provider_exit',[
+                'plan_id'=>$planId,'asset_id'=>$asset,
+                'record_type'=>$type,'record_id'=>$recordId,
+                'object_version'=>$ownerVersion,'record_cas'=>$cas,
+                'source_provider'=>$mapping['source_provider'],
+                'target_provider'=>$mapping['target_provider'],
+                // No raw object keys or clinical media bytes leave CF-04.
+                'source_key_sha256'=>hash('sha256',(string)$mapping['source_key']),
+                'target_key_sha256'=>hash('sha256',(string)$mapping['target_key']),
+                'phase'=>'read_only_preflight'
+            ],true);
+        // A generic affirmative callback is not authorization for
+        // this exact owner/object/source/target pair. Require the
+        // owner to echo all canonical reference identities.
+        if(($decision['asset_id']??null)!==$asset||
+           ($decision['record_id']??null)!==$recordId||
+           ($decision['source_provider']??null)!==$mapping['source_provider']||
+           ($decision['target_provider']??null)!==$mapping['target_provider'])
+            throw new Error('provider_owner_subject_mismatch',
+                'Native owner approval is not bound to the requested object and providers.',409);
+        if(($decision['approved_for_provider_exit']??null)!==true||
+           $decision['object_version']!==$ownerVersion||
+           Utils::integer($decision['record_cas']??null,
+               'provider_owner_cas_mismatch',1,PHP_INT_MAX)!==$cas)
+            throw new Error('provider_owner_approval_stale',
+                'Owner approval is absent or does not match current versions.',409);
+        $contract=$decision['contract_version']??null;
+        if(!is_string($contract)||$contract==='')throw new Error(
+            'provider_owner_contract_invalid','Owner contract version missing.',409);
+        return [
+            'owner'=>$owner,'asset'=>$asset,'record_type'=>$type,
+            'record_id'=>$recordId,'owner_version'=>$ownerVersion,
+            'record_cas'=>$cas,'owner_contract'=>$contract
+        ];
+
+    }
+
     public static function inspect(string $planId,int $actor): array {
         Auth::capability('media_manage_providers');
         Auth::assertActor($actor,'manage_options');
@@ -292,57 +346,9 @@ final class ProviderExitOwnerReadiness {
                     throw new Error('provider_owner_segment_invalid',
                         'Owner mapping journal is noncanonical.',409);
                 foreach($segment['mappings'] as $mapping){
-                    $owner=$mapping['native_domain']??null;
-                    $asset=$mapping['asset_id']??null;
-                    $recordId=$mapping['id']??null;
-                    $type=$mapping['type']??null;
-                    if(!is_string($owner)||$owner===''||
-                       Utils::key($owner,64)!==$owner||!DomainRegistry::has($owner)||
-                       !is_string($asset)||$asset===''||
-                       !is_string($recordId)||$recordId===''||
-                       !in_array($type,['asset','derivative'],true))
-                        throw new Error('provider_owner_identity_invalid',
-                            'Native owner identity is unavailable or malformed.',409);
-                    $ownerVersion=Utils::integer($mapping['owner_generation']??null,
-                        'provider_owner_version_invalid',1,PHP_INT_MAX);
-                    $cas=Utils::integer($mapping['record_cas']??null,
-                        'provider_owner_cas_invalid',1,PHP_INT_MAX);
-                    $decision=DomainRegistry::decision($owner,
-                        'authorize_provider_exit',[
-                            'plan_id'=>$planId,'asset_id'=>$asset,
-                            'record_type'=>$type,'record_id'=>$recordId,
-                            'object_version'=>$ownerVersion,'record_cas'=>$cas,
-                            'source_provider'=>$mapping['source_provider'],
-                            'target_provider'=>$mapping['target_provider'],
-                            // No raw object keys or clinical media bytes leave CF-04.
-                            'source_key_sha256'=>hash('sha256',(string)$mapping['source_key']),
-                            'target_key_sha256'=>hash('sha256',(string)$mapping['target_key']),
-                            'phase'=>'read_only_preflight'
-                        ],true);
-                    // A generic affirmative callback is not authorization for
-                    // this exact owner/object/source/target pair. Require the
-                    // owner to echo all canonical reference identities.
-                    if(($decision['asset_id']??null)!==$asset||
-                       ($decision['record_id']??null)!==$recordId||
-                       ($decision['source_provider']??null)!==$mapping['source_provider']||
-                       ($decision['target_provider']??null)!==$mapping['target_provider'])
-                        throw new Error('provider_owner_subject_mismatch',
-                            'Native owner approval is not bound to the requested object and providers.',409);
-                    if(($decision['approved_for_provider_exit']??null)!==true||
-                       $decision['object_version']!==$ownerVersion||
-                       Utils::integer($decision['record_cas']??null,
-                           'provider_owner_cas_mismatch',1,PHP_INT_MAX)!==$cas)
-                        throw new Error('provider_owner_approval_stale',
-                            'Owner approval is absent or does not match current versions.',409);
-                    $contract=$decision['contract_version']??null;
-                    if(!is_string($contract)||$contract==='')throw new Error(
-                        'provider_owner_contract_invalid','Owner contract version missing.',409);
-                    hash_update($hash,Utils::canonicalJson([
-                        'owner'=>$owner,'asset'=>$asset,'record_type'=>$type,
-                        'record_id'=>$recordId,'owner_version'=>$ownerVersion,
-                        'record_cas'=>$cas,'owner_contract'=>$contract
-                    ])."\n");
-                    $owners[$owner]=true;
+                    $proof=self::inspectMapping($mapping,$planId);
+                    hash_update($hash,Utils::canonicalJson($proof)."\n");
+                    $owners[$proof['owner']]=true;
                     if($seen===PHP_INT_MAX)throw new Error(
                         'provider_owner_count_overflow','Owner approval count overflow.',409);
                     $seen++;
@@ -368,5 +374,196 @@ final class ProviderExitOwnerReadiness {
             'native_owner_write_fenced'=>false,
             'authorization_to_switch'=>false,
             'source_purged'=>false,'credentials_revoked'=>false];
+    }
+}
+
+
+/**
+ * Durable, bounded, approval-only owner consent journal. The native owner
+ * callback MUST be independently verified read-only before staging acceptance.
+ * Every state remains unfenced and cannot switch or delete any provider object.
+ */
+final class ProviderExitOwnerApprovalCheckpointStage {
+    private static function authorize(int $actor):void {
+        Auth::capability('media_manage_providers');
+        Auth::assertActor($actor,'manage_options');
+    }
+    private static function boundPlan(string $planId,int $actor):array {
+        $proof=ProviderExitCutoverManifestStage::verifyComplete($planId,$actor);
+        $plan=RecordStore::get('provider_cutover_plan',$planId);
+        if(!$plan||($plan['status']??null)!=='verified_unfenced'||
+           ($proof['authorization_to_switch']??true)!==false)
+            throw new Error('provider_owner_checkpoint_plan_invalid',
+                'Only verified, unfenced native owner manifests are eligible.',409);
+        return $plan;
+    }
+    private static function load(string $runId,int $actor):array {
+        self::authorize($actor);
+        $state=RecordStore::get('provider_owner_approval_run',$runId);
+        if(!$state||($state['actor_id']??null)!==$actor||
+           !is_string($state['plan_id']??null)||$state['plan_id']===''||
+           !is_string($state['parent_chain']??null)||
+           !preg_match('/^[a-f0-9]{64}$/D',$state['parent_chain'])||
+           !is_string($state['after_segment_id']??null)||
+           strlen($state['after_segment_id'])>96||
+           !is_int($state['segments']??null)||$state['segments']<0||
+           !is_int($state['approvals']??null)||$state['approvals']<0||
+           !is_string($state['chain_hash']??null)||
+           !preg_match('/^[a-f0-9]{64}$/D',$state['chain_hash']))
+            throw new Error('provider_owner_checkpoint_state_invalid',
+                'Owner checkpoint journal identity or counters invalid.',409);
+        return $state;
+    }
+    public static function begin(string $planId,int $actor):array {
+        self::authorize($actor);
+        $plan=self::boundPlan($planId,$actor);
+        $runId=Utils::id('ownstage');
+        return RecordStore::put('provider_owner_approval_run',$runId,[
+            'actor_id'=>$actor,'plan_id'=>$planId,
+            'parent_chain'=>$plan['chain_hash'],
+            'status'=>'collecting_unfenced','after_segment_id'=>'',
+            'segments'=>0,'approvals'=>0,
+            'chain_hash'=>str_repeat('0',64),'created_at'=>Utils::now()
+        ],0);
+    }
+    private static function evidence(string $runId,string $planId,array $seg,
+        bool $allowCreate):array {
+        if(($seg['plan_id']??null)!==$planId||
+           ($seg['status']??null)!=='prepared_unfenced'||
+           !is_array($seg['mappings']??null)||
+           !array_is_list($seg['mappings'])||
+           count($seg['mappings'])>250)
+            throw new Error('provider_owner_checkpoint_segment_invalid',
+                'Native owner segment is malformed.',409);
+        $hash=hash_init('sha256');
+        foreach($seg['mappings'] as $mapping){
+            if(!is_array($mapping))
+                throw new Error('provider_owner_checkpoint_segment_invalid',
+                    'Native owner entry is malformed.',409);
+            $approved=ProviderExitOwnerReadiness::inspectMapping($mapping,$planId);
+            hash_update($hash,Utils::canonicalJson($approved)."\n");
+        }
+        $digest=hash_final($hash);
+        $id=hash('sha256','owner-stage|'.$runId.'|'.$seg['id']);
+        $saved=RecordStore::get('provider_owner_approval_segment',$id);
+        if(!$saved){
+            if(!$allowCreate)throw new Error('provider_owner_checkpoint_missing',
+                'Native owner approval segment proof is missing.',409);
+            $saved=RecordStore::put('provider_owner_approval_segment',$id,[
+                'actor_id'=>0,'run_id'=>$runId,
+                'plan_id'=>$planId,'manifest_segment_id'=>$seg['id'],
+                'approval_count'=>count($seg['mappings']),
+                'decision_hash'=>$digest,'status'=>'approved_unfenced',
+                'created_at'=>Utils::now()
+            ],0);
+        }
+        if(($saved['run_id']??null)!==$runId||
+           ($saved['plan_id']??null)!==$planId||
+           ($saved['manifest_segment_id']??null)!==$seg['id']||
+           ($saved['approval_count']??null)!==count($seg['mappings'])||
+           ($saved['decision_hash']??null)!==$digest||
+           ($saved['status']??null)!=='approved_unfenced')
+            throw new Error('provider_owner_checkpoint_drift',
+                'Saved owner approval evidence differs from fresh native decision.',409);
+        return ['id'=>$id,'count'=>count($seg['mappings']),'digest'=>$digest];
+    }
+    /** At most one 250-mapping segment per call, resuming with a CAS cursor. */
+    public static function advance(string $runId,int $actor):array {
+        $state=self::load($runId,$actor);
+        if(($state['status']??null)==='owner_approved_unfenced'){
+            self::verifyComplete($runId,$actor);
+            return $state;
+        }
+        if(($state['status']??null)!=='collecting_unfenced')
+            throw new Error('provider_owner_checkpoint_state_invalid',
+                'Owner approval journal cannot advance from its current status.',409);
+        $planId=(string)$state['plan_id'];
+        $plan=self::boundPlan($planId,$actor);
+        if(($plan['chain_hash']??null)!==$state['parent_chain'])
+            throw new Error('provider_owner_checkpoint_plan_drift',
+                'Underlying provider cutover manifest changed.',409);
+        $cursor=$state['after_segment_id'];
+        $page=RecordStore::scan('provider_cutover_segment',250,$cursor);
+        foreach($page as $seg){
+            $next=(string)($seg['id']??'');
+            if($next===''||$next<=$cursor)
+                throw new Error('provider_owner_checkpoint_cursor_invalid',
+                    'Owner manifest segment cursor is not increasing.',409);
+            $cursor=$next;
+            if(($seg['plan_id']??null)!==$planId)continue;
+            $proof=self::evidence($runId,$planId,$seg,true);
+            // An owner callback may change its own source. Refuse checkpoint
+            // progress unless all source/target mappings remain current.
+            self::boundPlan($planId,$actor);
+            if($state['segments']===PHP_INT_MAX||
+               $state['approvals']>PHP_INT_MAX-$proof['count'])
+                throw new Error('provider_owner_checkpoint_overflow',
+                    'Owner approval progress overflowed.',409);
+            $state['segments']++;
+            $state['approvals']+=$proof['count'];
+            $state['chain_hash']=hash('sha256',$state['chain_hash'].'|'.
+                $proof['id'].'|'.$proof['digest']);
+            $state['after_segment_id']=$cursor;
+            $state['updated_at']=Utils::now();
+            return RecordStore::put('provider_owner_approval_run',$runId,
+                $state,(int)$state['version']);
+        }
+        $state['after_segment_id']=$cursor;
+        if(count($page)<250){
+            $verified=ProviderExitCutoverManifestStage::verifyComplete($planId,$actor);
+            if($state['segments']!==$verified['segments']||
+               $state['approvals']!==$verified['candidates'])
+                throw new Error('provider_owner_checkpoint_incomplete',
+                    'Staged owner approvals do not cover every candidate.',409);
+            self::verifyComplete($runId,$actor);
+            $state['status']='owner_approved_unfenced';
+            $state['completed_at']=Utils::now();
+        }
+        $state['updated_at']=Utils::now();
+        return RecordStore::put('provider_owner_approval_run',$runId,
+            $state,(int)$state['version']);
+    }
+    /** Verify every owner decision again; still neither lease nor cutover. */
+    public static function verifyComplete(string $runId,int $actor):array {
+        $state=self::load($runId,$actor);
+        if(!in_array(($state['status']??null),
+            ['collecting_unfenced','owner_approved_unfenced'],true))
+            throw new Error('provider_owner_checkpoint_state_invalid',
+                'Owner approval stage has invalid state.',409);
+        $planId=(string)$state['plan_id'];
+        $plan=self::boundPlan($planId,$actor);
+        if(($plan['chain_hash']??null)!==$state['parent_chain'])
+            throw new Error('provider_owner_checkpoint_plan_drift',
+                'The source mapping plan no longer matches this approval run.',409);
+        $after='';$segments=0;$approvals=0;$chain=str_repeat('0',64);
+        do {
+            $page=RecordStore::scan('provider_cutover_segment',250,$after);
+            foreach($page as $seg){
+                if(($seg['plan_id']??null)!==$planId)continue;
+                $proof=self::evidence($runId,$planId,$seg,false);
+                if($approvals>PHP_INT_MAX-$proof['count'])
+                    throw new Error('provider_owner_checkpoint_overflow',
+                        'Owner approval count overflowed.',409);
+                $approvals+=$proof['count'];$segments++;
+                $chain=hash('sha256',$chain.'|'.$proof['id'].'|'.$proof['digest']);
+            }
+            if(count($page)<250)break;
+            $after=(string)$page[count($page)-1]['id'];
+        }while(true);
+        StageSegmentCatalogGuard::assertExactCount('provider_owner_approval_segment',
+            'run_id',$runId,$segments,'provider_owner_checkpoint_drift');
+        if($segments!==($plan['segments']??null)||
+           $approvals!==($plan['candidates']??null)||
+           $segments!==$state['segments']||
+           $approvals!==$state['approvals']||
+           !hash_equals($chain,(string)$state['chain_hash']))
+            throw new Error('provider_owner_checkpoint_drift',
+                'Owner decision journal does not match the full native source.',409);
+        // Recheck all sources AFTER owner callbacks, before reporting approval.
+        self::boundPlan($planId,$actor);
+        return ['run_id'=>$runId,'status'=>'owner_approved_unfenced',
+            'segments'=>$segments,'approvals'=>$approvals,
+            'decision_chain'=>$chain,'native_owner_write_fenced'=>false,
+            'authorization_to_switch'=>false,'source_purged'=>false];
     }
 }
