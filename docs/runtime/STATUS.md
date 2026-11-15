@@ -105,3 +105,7 @@ Read-only cutover manifests reject an unregistered native owner ID instead of ac
 ## R310 — native owner version/CAS approval-only callback preflight
 
 Source-only optional owner handshake now rejects missing callbacks, explicit denials, stale owner generation or stale record CAS without altering the media references or storage. Terminal status is explicitly **owner_approved_unfenced**, NEVER an owner write fence or authorization to switch. Native owner implementations in other repositories and actual cross-domain atomic cutover remain externally dependent.
+
+## R312 — post-owner callback source drift guard
+
+A fresh full source/target and owner CAS manifest verification now runs after owner callbacks before emitting approval-only evidence. The new adversarial negative test mutates a source version within the callback and expects failure. This guard remains unfenced and does not authorize migration.

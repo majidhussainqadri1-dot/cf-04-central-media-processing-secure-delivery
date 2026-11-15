@@ -38,6 +38,12 @@ DomainRegistry::reset();
 DomainRegistry::register('file17','1.0.0',[
     'authorize_provider_exit'=>static function(array $context):array {
         $GLOBALS['r310_callback_context']=$context;
+        if(!empty($GLOBALS['r310_mutate_during_approval'])){
+            $GLOBALS['r310_mutate_during_approval']=false;
+            $mutated=RecordStore::get('asset','r310-asset');
+            $mutated['object_version']++;
+            RecordStore::put('asset',$mutated['id'],$mutated,(int)$mutated['version']);
+        }
         return ['allowed'=>true,'approved_for_provider_exit'=>$GLOBALS['r310_approved'],
             'object_version'=>$GLOBALS['r310_owner_version'],
             'record_cas'=>$GLOBALS['r310_cas']];
@@ -79,4 +85,10 @@ ok(($context['object_version']??null)===7&&
 ok(RecordStore::get('asset','r310-asset')['object_key']===$key&&
    $source->exists($key)&&RecordStore::all('provider_exit')===[],
    'R310 owner read-only attestation never remaps, purges or switches');
+$GLOBALS['r310_mutate_during_approval']=true;
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_exit_inventory_drift',
+    'R312 owner callback mutation invalidates the post-approval inventory witness');
+ok(($GLOBALS['r310_mutate_during_approval']??true)===false,
+    'R312 adversarial callback actually changed the source during inspection');
 echo "REVIEW ROUND 310 OWNER APPROVAL-ONLY HANDSHAKE: PASS\n";

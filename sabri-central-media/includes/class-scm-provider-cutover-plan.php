@@ -345,6 +345,14 @@ final class ProviderExitOwnerReadiness {
         if($seen!==($verified['candidates']??null)||$seen<1)
             throw new Error('provider_owner_incomplete',
                 'Approved owner references differ from the cutover manifest.',409);
+        // Owner callbacks are external code. A callback or concurrent job can
+        // mutate a source record while approvals are being collected. Never
+        // return even an unfenced approval on a stale, post-callback inventory.
+        $fresh=ProviderExitCutoverManifestStage::verifyComplete($planId,$actor);
+        if(($fresh['candidates']??null)!==$seen||
+           ($fresh['authorization_to_switch']??true)!==false)
+            throw new Error('provider_owner_postcheck_drift',
+                'Native records changed during owner decision collection.',409);
         return ['plan_id'=>$planId,'status'=>'owner_approved_unfenced',
             'approvals'=>$seen,'registered_domains'=>count($owners),
             'owner_decision_chain'=>hash_final($hash),
