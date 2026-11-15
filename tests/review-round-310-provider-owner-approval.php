@@ -67,6 +67,19 @@ err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
     'provider_owner_approval_stale',
     'R310 owner approval must explicitly opt into provider exit');
 $GLOBALS['r310_approved']=true;
+$mapping=null;
+foreach(RecordStore::all('provider_cutover_segment',0,null,30) as $seg){
+    if(($seg['plan_id']??null)===$plan['id']&&
+       is_array($seg['mappings']??null)&&$seg['mappings']!==[]){
+        $mapping=$seg['mappings'][0];break;
+    }
+}
+ok(is_array($mapping),'R315 native mapping fixture available for direct helper authorization');
+$GLOBALS['scm_test_denied_caps']=['media_manage_providers'];
+err(fn()=>ProviderExitOwnerReadiness::inspectMapping($mapping,$plan['id']),
+    'capability_denied',
+    'R315 direct approval helper cannot bypass privileged stage authorization');
+unset($GLOBALS['scm_test_denied_caps']);
 $GLOBALS['r310_wrong_subject']=true;
 err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
     'provider_owner_subject_mismatch',

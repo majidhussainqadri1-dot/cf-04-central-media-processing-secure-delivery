@@ -117,3 +117,7 @@ Owner opt-in reports must echo and match the exact canonical asset, record, old 
 ## R314 — cooperative durable native-owner approval journals
 
 Native owner provider-exit approvals can now be collected in CAS-bound 250-mapping segments and reverified over the full source, with digest-tamper detection and no write-fence or provider cutover capability. Tests cover two owner modules and independent segments; >2,000-object performance with real owner plugins remains unaccepted.
+
+## R315 — shared native-owner helper privilege boundary
+
+The newly factored inspectMapping() callback helper now independently checks media_manage_providers so direct invocation cannot bypass administrative authorization. R310 includes a direct-call permission-denial regression.

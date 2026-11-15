@@ -268,6 +268,9 @@ final class ProviderExitCutoverManifestStage {
  */
 final class ProviderExitOwnerReadiness {
     public static function inspectMapping(array $mapping,string $planId): array {
+        // This helper is shared by two source-only workflows. Do not allow
+        // a direct plugin call to bypass the privileged outer stage.
+        Auth::capability('media_manage_providers');
         $owner=$mapping['native_domain']??null;
         $asset=$mapping['asset_id']??null;
         $recordId=$mapping['id']??null;
