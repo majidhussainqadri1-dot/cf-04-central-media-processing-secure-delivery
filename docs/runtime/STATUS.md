@@ -45,3 +45,7 @@ No external-environment claim may be inferred from source completion.
 - Before advancing or accepting an idempotent completed journal, the last target object is rehashed and checked against the current authoritative staged identity; missing/corrupt targets fail closed with `provider_exit_shadow_checkpoint_stale`.
 - New `tests/review-round-293-shadow-checkpoint-replay.php` covers missing target, corrupt target, non-advancement, recovery, completion, and continued non-destructive owner mapping.
 - This bounded replay guard **is not** full segmented cutover, cross-owner write fencing, >2,000 reference migration, real KMS rotation, restore execution, Hostinger staging acceptance, or live deployment. Every external release gate remains mandatory.
+
+## V12.3 read-only deployment freeze utility (R294)
+
+Added a CLI-only non-mutating evidence collector for deployed PHP fingerprints, schema/options, active plugin list and safe table counts. Fixture tests require no data mutation or false claims. **No live evidence was collected**: the WordPress account has no connected WPVibe site, and the attempted connection returned HTTP 530.
