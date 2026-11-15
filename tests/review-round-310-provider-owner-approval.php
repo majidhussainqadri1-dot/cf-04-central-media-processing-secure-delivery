@@ -45,6 +45,10 @@ DomainRegistry::register('file17','1.0.0',[
             RecordStore::put('asset',$mutated['id'],$mutated,(int)$mutated['version']);
         }
         return ['allowed'=>true,'approved_for_provider_exit'=>$GLOBALS['r310_approved'],
+            'asset_id'=>!empty($GLOBALS['r310_wrong_subject'])?'different-asset':$context['asset_id'],
+            'record_id'=>$context['record_id'],
+            'source_provider'=>$context['source_provider'],
+            'target_provider'=>!empty($GLOBALS['r310_wrong_target'])?'other-provider':$context['target_provider'],
             'object_version'=>$GLOBALS['r310_owner_version'],
             'record_cas'=>$GLOBALS['r310_cas']];
     }
@@ -63,6 +67,16 @@ err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
     'provider_owner_approval_stale',
     'R310 owner approval must explicitly opt into provider exit');
 $GLOBALS['r310_approved']=true;
+$GLOBALS['r310_wrong_subject']=true;
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_owner_subject_mismatch',
+    'R313 owner cannot approve a different asset with matching CAS/version');
+$GLOBALS['r310_wrong_subject']=false;
+$GLOBALS['r310_wrong_target']=true;
+err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
+    'provider_owner_subject_mismatch',
+    'R313 owner cannot substitute a different migration target provider');
+$GLOBALS['r310_wrong_target']=false;
 $GLOBALS['scm_test_denied_caps']=['media_manage_providers'];
 err(fn()=>ProviderExitOwnerReadiness::inspect($plan['id'],11),
     'capability_denied',

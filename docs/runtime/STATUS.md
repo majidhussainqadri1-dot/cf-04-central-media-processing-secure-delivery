@@ -109,3 +109,7 @@ Source-only optional owner handshake now rejects missing callbacks, explicit den
 ## R312 — post-owner callback source drift guard
 
 A fresh full source/target and owner CAS manifest verification now runs after owner callbacks before emitting approval-only evidence. The new adversarial negative test mutates a source version within the callback and expects failure. This guard remains unfenced and does not authorize migration.
+
+## R313 — subject- and provider-bound native owner decision
+
+Owner opt-in reports must echo and match the exact canonical asset, record, old provider and target provider; a generic allowed=true response cannot authorize a different subject. Negative tests cover asset/target substitution. This remains an approval-only, unfenced source candidate.

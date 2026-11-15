@@ -319,6 +319,15 @@ final class ProviderExitOwnerReadiness {
                             'target_key_sha256'=>hash('sha256',(string)$mapping['target_key']),
                             'phase'=>'read_only_preflight'
                         ],true);
+                    // A generic affirmative callback is not authorization for
+                    // this exact owner/object/source/target pair. Require the
+                    // owner to echo all canonical reference identities.
+                    if(($decision['asset_id']??null)!==$asset||
+                       ($decision['record_id']??null)!==$recordId||
+                       ($decision['source_provider']??null)!==$mapping['source_provider']||
+                       ($decision['target_provider']??null)!==$mapping['target_provider'])
+                        throw new Error('provider_owner_subject_mismatch',
+                            'Native owner approval is not bound to the requested object and providers.',409);
                     if(($decision['approved_for_provider_exit']??null)!==true||
                        $decision['object_version']!==$ownerVersion||
                        Utils::integer($decision['record_cas']??null,
