@@ -81,3 +81,7 @@ Changed the physical key ID reader from unbounded fgets to a 65,536-byte newline
 ## R302 — bounded physical key-rotation shadow re-encryption
 
 Implemented source-only, bounded 1–25 item shadow re-encryption of staged stale-key candidates into separately encrypted new objects, using deterministic target identity, physical source/target key-ID and byte hashes, durable CAS journals, replay and complete segment verification. Original source, key, mapping and serving state stay untouched. This is not a global >2,000-item cutover or approved KMS key retirement. Quality gate must pass at the exact candidate HEAD before source acceptance.
+
+## R303 — cooperative multi-segment shadow key coordinator
+
+Added a durable source-only coordinator across all staged key candidate segments, bounded 1–25 aliases per invocation with CAS checkpoints and complete fresh physical rehash. Test uses >2,600 metadata records plus real encrypted stale candidates, interruption/recovery and no remap. This does not prove performance for >2,000 affected aliases or authorize old-key cutover, KMS retirement, staging or live deployment.
