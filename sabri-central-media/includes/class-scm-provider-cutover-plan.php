@@ -93,7 +93,7 @@ final class ProviderExitCutoverManifestStage {
            ($record['sha256']??null)!==$sha||
            ($record['size']??null)!==$size||
            ($type==='derivative'&&($record['asset_id']??null)!==$assetId)||
-           ($type==='asset'&&$id!==$assetId)
+           ($type==='asset'&&$id!==$assetId))
             throw new Error('provider_cutover_mapping_stale',
                 'Native media source no longer equals the copied inventory.',409);
         $owner=$asset['owner_domain']??null;
