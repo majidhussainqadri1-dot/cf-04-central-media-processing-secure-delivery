@@ -25,8 +25,12 @@ foreach(RecordStore::all('provider_exit_inventory_segment',0,null,20) as $seg){
     ProviderExitShadowCopyStage::copySegment($inventory['id'],$seg['id'],11,25);
 }
 $plan=ProviderExitCutoverManifestStage::begin($inventory['id'],11);
-err(fn()=>ProviderExitCutoverManifestStage::advance($plan['id'],11),
-    'provider_cutover_owner_unregistered',
+err(static function()use($plan):void {
+    for($attempt=0;$attempt<10;$attempt++){
+        $step=ProviderExitCutoverManifestStage::advance($plan['id'],11);
+        if(($step['status']??null)!=='planning_unfenced')break;
+    }
+},'provider_cutover_owner_unregistered',
     'R308 unregistered native owner cannot produce a fake complete cutover manifest');
 ok((RecordStore::get('provider_cutover_plan',$plan['id'])['status']??null)==='planning_unfenced',
     'R308 unregistered owner leaves cutover manifest unfinished');
