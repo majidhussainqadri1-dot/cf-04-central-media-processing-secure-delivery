@@ -15,7 +15,13 @@ plugin=temp/'sabri-central-media'
 files=[]
 for path in sorted(p for p in plugin.rglob('*') if p.is_file()):
     raw=path.read_bytes(); files.append({'path':path.relative_to(plugin).as_posix(),'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest()})
-manifest={'module':'CF-04','version':version,'schema_version':'1.5.0','contract_version':'1.5.0','runtime_default':'disabled','requirements_complete_in_source':33,'current_plan_cen_complete_in_source':10,'current_plan_native_journeys_source_covered':6,'future40_source_capabilities':40,'cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'source_date_epoch':1577836800,'files':files}
+php_files=[x for x in files if x['path']=='sabri-central-media.php'
+           or (x['path'].startswith('includes/') and x['path'].endswith('.php'))]
+php_tree=hashlib.sha256()
+for x in php_files:
+    php_tree.update(x['path'].encode('utf-8')+b'\0'
+                    +x['sha256'].encode('ascii')+b'\n')
+manifest={'php_tree_sha256':php_tree.hexdigest(),'php_tree_file_count':len(php_files),'php_tree_scope':'entrypoint_and_includes_php','module':'CF-04','version':version,'schema_version':'1.5.0','contract_version':'1.5.0','runtime_default':'disabled','requirements_complete_in_source':33,'current_plan_cen_complete_in_source':10,'current_plan_native_journeys_source_covered':6,'future40_source_capabilities':40,'cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'source_date_epoch':1577836800,'files':files}
 (root/'dist/MANIFEST.json').write_text(json.dumps(manifest,sort_keys=True,separators=(',',':'))+'\n')
 raw_uuid=hashlib.sha256((version+'CF-04').encode()).hexdigest()[:32]
 uuid=f"{raw_uuid[:8]}-{raw_uuid[8:12]}-{raw_uuid[12:16]}-{raw_uuid[16:20]}-{raw_uuid[20:32]}"

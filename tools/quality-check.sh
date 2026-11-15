@@ -236,7 +236,11 @@ python3 - "$ROOT" "$VERSION" "$COMMIT" "$PACKAGE_SHA" <<'PY'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]);version=sys.argv[2];commit=sys.argv[3];sha=sys.argv[4]
 evidence={'module':'CF-04','version':version,'source_commit':commit,'package_sha256':sha,'runtime_default':'disabled','source_requirements':'33/33','current_plan_requirements':'CF04-CEN-01..10','native_journeys':'CF04-NJ-01..06','future40_source_capabilities':'CF04-FUT-001..040','cross_plan_directives':['CHAT-XFER-001','CHAT-QA-001'],'quality_gate':'passed','external_acceptance':'pending'}
+manifest=json.loads((root/'dist/MANIFEST.json').read_text())
+evidence['php_tree_sha256']=manifest['php_tree_sha256']
+evidence['php_tree_file_count']=manifest['php_tree_file_count']
 (root/'dist/RELEASE-EVIDENCE.json').write_text(json.dumps(evidence,sort_keys=True,separators=(',',':'))+'\n')
 PY
 (cd "$ROOT/dist" && sha256sum RELEASE-EVIDENCE.json > RELEASE-EVIDENCE.sha256 && sha256sum -c RELEASE-EVIDENCE.sha256)
+python3 "$ROOT/tests/review-round-295-package-php-parity.py"
 echo "CF-04 QUALITY GATE: PASS ($VERSION $PACKAGE_SHA)"

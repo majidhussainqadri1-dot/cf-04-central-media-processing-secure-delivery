@@ -49,3 +49,7 @@ No external-environment claim may be inferred from source completion.
 ## V12.3 read-only deployment freeze utility (R294)
 
 Added a CLI-only non-mutating evidence collector for deployed PHP fingerprints, schema/options, active plugin list and safe table counts. Fixture tests require no data mutation or false claims. **No live evidence was collected**: the WordPress account has no connected WPVibe site, and the attempted connection returned HTTP 530.
+
+## R295 — candidate package PHP source witness
+
+Deterministic manifest and release evidence carry a reproducible PHP-only tree digest matching the CLI freeze collector's algorithm; CI validates ZIP entries against the manifest. This does not establish live deployment parity until observed deployed PHP hashes are collected and matched independently.
