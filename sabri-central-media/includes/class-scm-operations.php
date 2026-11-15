@@ -1552,6 +1552,12 @@ final class RestoreService {
     // an independent DB+object+key snapshot was actually executed and restored.
     // Production serving stays blocked until a signed external executor agrees.
     RestoreExecutionAttestation::requireForServe($restore);
+    // Trusted attestation callbacks are still external runtime code; a row
+    // mutation during proof retrieval must not reopen the restore serve gate.
+    if(!hash_equals((string)($restore['source_fingerprint']??''),
+       self::sourceFingerprint()))
+        throw new Error('restore_attestation_source_drift',
+            'Restore data changed while independent execution proof was obtained.',409);
     $restoreStatus=(string)$restore['status'];
     if($restoreStatus!=='serve_authorized'){$restore['status']='serve_authorized';$restore['serve_authorized_at']=Utils::now();$restore=RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);}
     $gate=RecordStore::get('restore_gate','current')??$gate;if(($gate['restore_id']??'')!==$restoreId||!in_array(($gate['status']??''),['reconciled','serve_authorized'],true))throw new Error('restore_gate_mismatch','Restore gate changed during serve authorization.',409);

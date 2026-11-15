@@ -129,3 +129,7 @@ Production RestoreService::authorizeServe now requires fresh HMAC-signed, restor
 ## R318 — production-like forced attestation hook regression
 
 The isolated R317 test can now enable the otherwise production-only requireForServe() branch in SCM_TEST_MODE: it asserts that no external executor callback fails closed and a matching signed, restore-ID-bound callback succeeds. No real restoration or live serving occurs.
+
+## R319 — restore post-attestation source fingerprint fence
+
+After validating the separately signed external restore claim, authorizeServe() checks the exact authoritative source fingerprint a second time before any serving authorization. A callback-driven or concurrent source mutation leaves media serving blocked. R319 tests the production-like hook with a signed proof, adversarial mutation and fresh-reconciliation recovery.
