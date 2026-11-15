@@ -77,3 +77,7 @@ Added optional ObjectCipherKeyInspector and bounded source ciphertext/key-id pre
 ## R301 — bounded local ciphertext key-header inspection
 
 Changed the physical key ID reader from unbounded fgets to a 65,536-byte newline-terminated, strict-format, canonical-key envelope check. Added R301 regression including deliberately overlong and forged headers. This prevents an untrusted local object header from being interpreted as valid key identity but does not replace a KMS/HSM provider audit.
+
+## R302 — bounded physical key-rotation shadow re-encryption
+
+Implemented source-only, bounded 1–25 item shadow re-encryption of staged stale-key candidates into separately encrypted new objects, using deterministic target identity, physical source/target key-ID and byte hashes, durable CAS journals, replay and complete segment verification. Original source, key, mapping and serving state stay untouched. This is not a global >2,000-item cutover or approved KMS key retirement. Quality gate must pass at the exact candidate HEAD before source acceptance.
