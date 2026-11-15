@@ -93,3 +93,7 @@ Provider-exit, key-rotation and restore source inventories now reject extra segm
 ## R305 — greater-than-2000 affected alias source regression
 
 Added deterministic in-memory physical provider regression with 2,001 genuinely stale key aliases, ten source inventory segments, bounded resumable shadow copies, one reused target ciphertext, full fresh proof and wrong-physical-key rejection. No real MySQL/provider/KMS or production cutover has been verified; all original mappings stay unchanged.
+
+## R306 — native owner mapping manifest before provider cutover
+
+Added read-only, per-segment CAS-bound native owner mapping manifest verified against real encrypted shadow copy and source DB records. It detects forged references and physical target loss; terminal state is `verified_unfenced` with no permission to remap, purge or revoke credentials. Full-fleet write fencing, approved atomic cutover/rollback, Hostinger and other real-provider acceptance remain unverified.

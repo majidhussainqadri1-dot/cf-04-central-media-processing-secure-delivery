@@ -149,3 +149,7 @@ The Future-40 layer is fail-closed. Capabilities that require specialist engines
 - CF04-FR-027: R293/R296 strengthen shadow replay and pre-switch integrity. Still **OPEN**: cross-owner write fences and executable >2,000-item atomic migration/rollback and real provider staging acceptance.
 
 These updates are incremental source capabilities; they do not alter the Draft / unmerged / runtime-disabled release status.
+
+## R306 — cross-owner cutover manifest, source-only
+
+CF04-FR-027 now also has a durable, native-owner/version/CAS-aware read-only cutover manifest and full source/target revalidation. It is `verified_unfenced` only; an atomic cross-owner fencing and cutover/rollback executor is NOT implemented or accepted. No live/staging provider exit occurred.
