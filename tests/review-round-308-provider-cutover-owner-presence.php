@@ -30,10 +30,22 @@ err(fn()=>ProviderExitCutoverManifestStage::advance($plan['id'],11),
     'R308 unregistered native owner cannot produce a fake complete cutover manifest');
 ok((RecordStore::get('provider_cutover_plan',$plan['id'])['status']??null)==='planning_unfenced',
     'R308 unregistered owner leaves cutover manifest unfinished');
+// Owner changes invalidate the already verified source inventory.
+// Never recycle a stale inventory, even in a regression fixture.
 $changed=RecordStore::get('asset',$assetId);
 $changed['owner_domain']='file17';
 RecordStore::put('asset',$assetId,$changed,(int)$changed['version']);
-$plan=ProviderExitCutoverManifestStage::advance($plan['id'],11);
+err(fn()=>ProviderExitCutoverManifestStage::advance($plan['id'],11),
+    'provider_exit_inventory_drift',
+    'R308 changed owner invalidates old source inventory rather than bypassing its hash');
+$inventory=ProviderExitInventoryStage::begin('source-private','target-private',11);
+while($inventory['status']==='planning')
+    $inventory=ProviderExitInventoryStage::advance($inventory['id'],11);
+foreach(RecordStore::all('provider_exit_inventory_segment',0,null,30) as $seg){
+    if($seg['inventory_id']!==$inventory['id'])continue;
+    ProviderExitShadowCopyStage::copySegment($inventory['id'],$seg['id'],11,25);
+}
+$plan=ProviderExitCutoverManifestStage::begin($inventory['id'],11);
 while(($plan['status']??null)==='planning_unfenced')
     $plan=ProviderExitCutoverManifestStage::advance($plan['id'],11);
 $proof=ProviderExitCutoverManifestStage::verifyComplete($plan['id'],11);
