@@ -89,3 +89,7 @@ Added a durable source-only coordinator across all staged key candidate segments
 ## R304 — exact staged segment catalogue check
 
 Provider-exit, key-rotation and restore source inventories now reject extra segments claiming the same inventory/checkpoint ID, rather than only verifying expected page IDs and chain hashes. Negative tests inject and remove an extraneous segment for each source family. This is source-level fail-closed validation, not concurrent owner write fencing or live acceptance.
+
+## R305 — greater-than-2000 affected alias source regression
+
+Added deterministic in-memory physical provider regression with 2,001 genuinely stale key aliases, ten source inventory segments, bounded resumable shadow copies, one reused target ciphertext, full fresh proof and wrong-physical-key rejection. No real MySQL/provider/KMS or production cutover has been verified; all original mappings stay unchanged.
