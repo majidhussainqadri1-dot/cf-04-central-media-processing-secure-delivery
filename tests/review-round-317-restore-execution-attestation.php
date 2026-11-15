@@ -1,5 +1,8 @@
 <?php
 declare(strict_types=1);
+// Force the independent production-like branch in this isolated fixture.
+define('SCM_TEST_REQUIRE_SIGNED_RESTORE',true);
+define('SCM_RESTORE_ATTESTATION_KEY',str_repeat('r',64));
 require __DIR__.'/bootstrap.php';
 use Sabri\CentralMedia\{RestoreExecutionAttestation,Utils};
 $key=str_repeat('r',64);
@@ -26,6 +29,16 @@ function r317sign(array $proof,string $key):array {
     return $proof;
 }
 $good=r317sign($proof,$key);
+err(fn()=>RestoreExecutionAttestation::requireForServe($restore),
+    'restore_attestation_incomplete',
+    'R318 signed-proof production-like guard denies when external executor hook is absent');
+add_filter('scm_restore_execution_proof',
+    static function($value,array $request)use($good):array {
+        if(($request['restore_id']??null)!==$good['restore_id'])
+            throw new RuntimeException('wrong_restore_context');
+        return $good;
+    });
+RestoreExecutionAttestation::requireForServe($restore);
 $ok=RestoreExecutionAttestation::validate($restore,$good,$key);
 ok($ok['signature_verified']===true&&
    $ok['status']==='independently_attested_source_only',

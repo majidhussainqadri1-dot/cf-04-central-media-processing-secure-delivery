@@ -125,3 +125,7 @@ The newly factored inspectMapping() callback helper now independently checks med
 ## R317 — independent restore-execution evidence gate
 
 Production RestoreService::authorizeServe now requires fresh HMAC-signed, restore-ID- and inventory-bound claims from an independently configured restoration executor. Absent keys/executor/proof are fail-closed. The code does **not** restore database, binary objects or real key material; external executor, Hostinger staging/backup/restore evidence and live retest are still required. Test mode maintains mock-only reconciliation; R317 verifies signed-proof acceptance and adversarial negatives.
+
+## R318 — production-like forced attestation hook regression
+
+The isolated R317 test can now enable the otherwise production-only requireForServe() branch in SCM_TEST_MODE: it asserts that no external executor callback fails closed and a matching signed, restore-ID-bound callback succeeds. No real restoration or live serving occurs.
