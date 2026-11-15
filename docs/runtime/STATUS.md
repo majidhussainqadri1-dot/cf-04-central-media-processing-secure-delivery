@@ -121,3 +121,7 @@ Native owner provider-exit approvals can now be collected in CAS-bound 250-mappi
 ## R315 — shared native-owner helper privilege boundary
 
 The newly factored inspectMapping() callback helper now independently checks media_manage_providers so direct invocation cannot bypass administrative authorization. R310 includes a direct-call permission-denial regression.
+
+## R317 — independent restore-execution evidence gate
+
+Production RestoreService::authorizeServe now requires fresh HMAC-signed, restore-ID- and inventory-bound claims from an independently configured restoration executor. Absent keys/executor/proof are fail-closed. The code does **not** restore database, binary objects or real key material; external executor, Hostinger staging/backup/restore evidence and live retest are still required. Test mode maintains mock-only reconciliation; R317 verifies signed-proof acceptance and adversarial negatives.

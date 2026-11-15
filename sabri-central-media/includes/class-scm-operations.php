@@ -1387,6 +1387,88 @@ final class RestoreCheckpointStage {
     }
 }
 
+/**
+ * Independent, short-lived authenticated execution evidence for restoration.
+ * This checks an external trusted executor's attestation; it does NOT restore
+ * DB rows, objects, keys, nor certify any staging/live provider by itself.
+ */
+final class RestoreExecutionAttestation {
+    public static function validate(array $restore,array $proof,string $key): array {
+        if(strlen($key)<32)
+            throw new Error('restore_attestation_key_unavailable',
+                'A separately provisioned private restore evidence key is required.',503);
+        $expectedRestore=$restore['restore_id']??null;
+        $inventory=$restore['inventory_hash']??null;
+        $fingerprint=$restore['source_fingerprint']??null;
+        foreach(['restore_id','inventory_hash','source_fingerprint',
+                 'database_snapshot_sha256','object_snapshot_sha256',
+                 'key_snapshot_sha256','issued_at','expires_at','restored_at',
+                 'executed','rights_reapplied','tombstones_verified',
+                 'owner_reconciliation','signature'] as $field)
+            if(!array_key_exists($field,$proof))
+                throw new Error('restore_attestation_incomplete',
+                    'Independent restore execution proof is incomplete.',503);
+        foreach(['inventory_hash','source_fingerprint',
+                 'database_snapshot_sha256','object_snapshot_sha256',
+                 'key_snapshot_sha256','signature'] as $field)
+            if(!is_string($proof[$field])||
+               !preg_match('/^[a-f0-9]{64}$/D',$proof[$field])||
+               $proof[$field]===str_repeat('0',64))
+                throw new Error('restore_attestation_invalid',
+                    'Restore proof contains a noncanonical evidence hash.',409);
+        if(!is_string($proof['restore_id'])||$proof['restore_id']===''||
+           !is_string($expectedRestore)||$expectedRestore===''||
+           !is_string($inventory)||!preg_match('/^[a-f0-9]{64}$/D',$inventory)||
+           !is_string($fingerprint)||!preg_match('/^[a-f0-9]{64}$/D',$fingerprint)||
+           !hash_equals($expectedRestore,$proof['restore_id'])||
+           !hash_equals($inventory,$proof['inventory_hash'])||
+           !hash_equals($fingerprint,$proof['source_fingerprint']))
+            throw new Error('restore_attestation_mismatch',
+                'Restore proof is not bound to the current run and inventory.',409);
+        if($proof['executed']!==true||
+           $proof['rights_reapplied']!==true||
+           $proof['tombstones_verified']!==true||
+           $proof['owner_reconciliation']!=='complete')
+            throw new Error('restore_attestation_incomplete',
+                'A required independent restoration/rights proof is absent.',503);
+        $issued=Utils::integer($proof['issued_at'],'restore_attestation_invalid',1,PHP_INT_MAX);
+        $expires=Utils::integer($proof['expires_at'],'restore_attestation_invalid',1,PHP_INT_MAX);
+        $restored=Utils::integer($proof['restored_at'],'restore_attestation_invalid',1,PHP_INT_MAX);
+        $now=Utils::now();
+        if($issued>$now+60||$issued<$now-300||
+           $expires<=$now||$expires<=$issued||$expires-$issued>600||
+           $restored>$issued||$restored<$issued-86400)
+            throw new Error('restore_attestation_expired',
+                'Restore execution proof is stale, premature or outside its validity window.',409);
+        $signed=$proof;$sig=$signed['signature'];unset($signed['signature']);
+        $expected=hash_hmac('sha256',Utils::canonicalJson($signed),$key);
+        if(!hash_equals($expected,$sig))
+            throw new Error('restore_attestation_signature_invalid',
+                'Independent restore execution signature is invalid.',403);
+        return ['restore_id'=>$expectedRestore,
+            'inventory_hash'=>$inventory,'source_fingerprint'=>$fingerprint,
+            'status'=>'independently_attested_source_only',
+            'verified_at'=>$now,'signature_verified'=>true];
+    }
+    public static function requireForServe(array $restore): void {
+        // Existing mock/unit fixtures do not claim production restore. The
+        // verifier itself is tested with adversarial signed fixtures (R317).
+        if(defined('SCM_TEST_MODE')&&SCM_TEST_MODE===true&&
+           !defined('SCM_TEST_REQUIRE_SIGNED_RESTORE'))return;
+        $key=defined('SCM_RESTORE_ATTESTATION_KEY')?
+            SCM_RESTORE_ATTESTATION_KEY:null;
+        if(!is_string($key)||strlen($key)<32)
+            throw new Error('restore_attestation_key_unavailable',
+                'Independent restore attestation is not provisioned.',503);
+        $proof=function_exists('apply_filters')?
+            apply_filters('scm_restore_execution_proof',null,$restore):null;
+        if(!is_array($proof))
+            throw new Error('restore_attestation_incomplete',
+                'Independent restore execution proof has not been supplied.',503);
+        self::validate($restore,$proof,$key);
+    }
+}
+
 final class RestoreService {
     public static function start(int $actor,array $inventory): array {
     Auth::capability('media_manage_providers');Auth::assertActor($actor,'manage_options');
@@ -1466,6 +1548,10 @@ final class RestoreService {
     $gate=RecordStore::get('restore_gate','current');
     if(($restore['status']??null)!=='reconciled'||!$gate||($gate['restore_id']??null)!==$restoreId||($gate['status']??null)!=='reconciled')
         throw new Error('restore_gate_blocked','Restore inventory changed or failed revalidation before serving.',503);
+    // The current DB/rights/manifest checks are necessary but do not prove
+    // an independent DB+object+key snapshot was actually executed and restored.
+    // Production serving stays blocked until a signed external executor agrees.
+    RestoreExecutionAttestation::requireForServe($restore);
     $restoreStatus=(string)$restore['status'];
     if($restoreStatus!=='serve_authorized'){$restore['status']='serve_authorized';$restore['serve_authorized_at']=Utils::now();$restore=RecordStore::put('restore',$restoreId,$restore,(int)$restore['version']);}
     $gate=RecordStore::get('restore_gate','current')??$gate;if(($gate['restore_id']??'')!==$restoreId||!in_array(($gate['status']??''),['reconciled','serve_authorized'],true))throw new Error('restore_gate_mismatch','Restore gate changed during serve authorization.',409);
